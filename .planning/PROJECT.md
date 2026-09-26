@@ -75,6 +75,7 @@ Claude can serve as a trustworthy financial advisor for the household — answer
 - Prometheus as the store for financial data — scraping cannot backfill history, records values at scrape time instead of booking date, and stored samples are immutable, which breaks recategorising past transactions
 - Public internet access to dashboards, REST API or web page — only `/mcp` is public
 - Financial figures in email — email leaves the home network and persists at the mail provider
+- The app calling any LLM API itself (background categorisation, app-run reviews) — all Claude usage stays on the household's subscription; unclear transactions wait in the review queue for a Claude session or the scheduled task
 - A full custom frontend replacing Grafana — Grafana is the dashboard; the web page is only for review/editing
 - Multiple households / multi-tenancy — single-household app
 
@@ -111,6 +112,10 @@ Claude can serve as a trustworthy financial advisor for the household — answer
 ## Constraints
 
 - **Tech stack**: .NET 10 / C#; one ASP.NET Core host serving REST API, MCP endpoint and background sync — user's main language, one deployable unit
+- **Solution**: a single `.slnx` solution file
+- **Data access**: Entity Framework Core, code-first, with migrations; migrations are applied automatically during deployment using the migrator login (the runtime login has no schema rights) — keeps deployments hands-off
+- **LLM usage**: none from the app — no Anthropic (or other LLM) API key or billing; all Claude usage runs on the household's Claude subscription via Claude Desktop, Claude Code, claude.ai and Claude-side scheduled tasks connecting to the MCP server
+- **Local development**: tests that need SQL Server use the user's local SQL Server Docker container; connection strings live in `dotnet user-secrets`, never in committed config; CI uses a SQL Server service container
 - **Database**: existing network MS SQL Server — new dedicated database with least-privilege logins; never `sa`
 - **Code style**: no `//` comments — only `///` XML doc summaries
 - **No planning references outside `.planning/`**: never put requirement keys, decision IDs, phase/plan numbers or planning document names in documentation, READMEs, code, comments, XML docs, test names, dashboards, MCP tool descriptions or config — they go stale the moment a phase closes

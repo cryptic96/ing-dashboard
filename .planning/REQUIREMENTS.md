@@ -76,6 +76,7 @@ Requirements for initial release. Each maps to roadmap phases.
 - [ ] **OPS-04**: Finance database backups are encrypted, and a restore procedure is documented and tested
 - [ ] **OPS-05**: Data Protection keys are persisted, so encrypted bank credentials survive restarts and redeploys (verified by an actual restart)
 - [ ] **OPS-06**: All period bucketing (days, months, years) uses the Europe/Amsterdam time zone
+- [ ] **OPS-07**: Database schema changes ship as Entity Framework Core migrations and are applied automatically during deployment with the migrator login
 
 ### Security & deployment
 
@@ -129,7 +130,7 @@ Explicitly excluded. Documented to prevent scope creep.
 | Public internet access to dashboards, REST API or web page | Only `/mcp` is public |
 | Prometheus as the store for financial data | No backfill, scrape-time timestamps, immutable samples break recategorisation |
 | Committing Nibud reference figures to the repository | Paid commercial data; cannot be redistributed in a public repo |
-| App calling the Anthropic API itself for reviews | Household chose Claude-side scheduling; avoids a separately billed API key |
+| App calling any LLM API itself (reviews, background categorisation) | All Claude usage runs on the household's subscription; no separately billed API key |
 | Full custom frontend replacing Grafana | Grafana is the dashboard; any web page is only for review/editing |
 | Multiple households / multi-tenancy | Single-household app |
 
@@ -139,13 +140,77 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| (filled by roadmap) | | |
+| INGEST-01 | Phase 2 | Pending |
+| INGEST-02 | Phase 2 | Pending |
+| INGEST-03 | Phase 2 | Pending |
+| INGEST-04 | Phase 2 | Pending |
+| INGEST-05 | Phase 2 | Pending |
+| INGEST-06 | Phase 2 | Pending |
+| INGEST-07 | Phase 2 | Pending |
+| CAT-01 | Phase 4 | Pending |
+| CAT-02 | Phase 4 | Pending |
+| CAT-03 | Phase 4 | Pending |
+| CAT-04 | Phase 4 | Pending |
+| CAT-05 | Phase 4 | Pending |
+| CAT-06 | Phase 4 | Pending |
+| CAT-07 | Phase 4 | Pending |
+| CAT-08 | Phase 4 | Pending |
+| PLAN-01 | Phase 5 | Pending |
+| PLAN-02 | Phase 5 | Pending |
+| PLAN-03 | Phase 5 | Pending |
+| PLAN-04 | Phase 5 | Pending |
+| PLAN-05 | Phase 5 | Pending |
+| PLAN-06 | Phase 5 | Pending |
+| PLAN-07 | Phase 5 | Pending |
+| PLAN-08 | Phase 5 | Pending |
+| PLAN-09 | Phase 4 | Pending |
+| ADV-01 | Phase 3 | Pending |
+| ADV-02 | Phase 3 | Pending |
+| ADV-03 | Phase 3 | Pending |
+| ADV-04 | Phase 5 | Pending |
+| ADV-05 | Phase 6 | Pending |
+| ADV-06 | Phase 4 | Pending |
+| ADV-07 | Phase 4 | Pending |
+| ADV-08 | Phase 6 | Pending |
+| ADV-09 | Phase 6 | Pending |
+| ADV-10 | Phase 3 | Pending |
+| ADV-11 | Phase 6 | Pending |
+| ADV-12 | Phase 6 | Pending |
+| ADV-13 | Phase 6 | Pending |
+| DASH-01 | Phase 5 | Pending |
+| DASH-02 | Phase 4 | Pending |
+| DASH-03 | Phase 5 | Pending |
+| DASH-04 | Phase 6 | Pending |
+| DASH-05 | Phase 2 | Pending |
+| DASH-06 | Phase 1 | Pending |
+| DASH-07 | Phase 2 | Pending |
+| DASH-08 | Phase 1 | Pending |
+| DASH-09 | Phase 1 | Pending |
+| OPS-01 | Phase 2 | Pending |
+| OPS-02 | Phase 2 | Pending |
+| OPS-03 | Phase 1 | Pending |
+| OPS-04 | Phase 1 | Pending |
+| OPS-05 | Phase 1 | Pending |
+| OPS-06 | Phase 3 | Pending |
+| OPS-07 | Phase 1 | Pending |
+| SEC-01 | Phase 2 | Pending |
+| SEC-02 | Phase 1 | Pending |
+| SEC-03 | Phase 1 | Pending |
+| SEC-04 | Phase 3 | Pending |
+| SEC-05 | Phase 1 | Pending |
+| SEC-06 | Phase 1 | Pending |
+| SEC-07 | Phase 1 | Pending |
+| SEC-08 | Phase 1 | Pending |
+| SEC-09 | Phase 1 | Pending |
+| SEC-10 | Phase 1 | Pending |
+| API-01 | Phase 6 | Pending |
+| API-02 | Phase 1 | Pending |
 
 **Coverage:**
-- v1 requirements: 64 total
-- Mapped to phases: 0
-- Unmapped: 64 ⚠️
+- v1 requirements: 65 total
+- Mapped to phases: 65
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-09-26*
-*Last updated: 2026-09-26 after initial definition*
+*Last updated: 2026-09-26 after roadmap creation (traceability filled)*
