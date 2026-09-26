@@ -40,7 +40,7 @@ Branch from the current working branch, not from `main`, unless the work genuine
 
 ### Local database
 
-Tests and local runs that need SQL Server use the user's own local SQL Server Docker container on `localhost:1433`. Connection strings go in `dotnet user-secrets`, never in committed `appsettings*.json`. Do not provision a different database server, and do not tear the container down afterwards. CI uses a SQL Server service container.
+Tests and local runs that need a real database use the user's own long-running local PostgreSQL Docker container. Connection strings go in `dotnet user-secrets`, never in committed `appsettings*.json`. Do not provision a different database server (no Testcontainers), and do not tear the container down afterwards. CI uses a PostgreSQL service container.
 
 ### No LLM API calls from the app
 
@@ -52,7 +52,8 @@ This application holds a household's complete financial history. Treat security 
 
 - Bank access is read-only. Nothing in this application may ever initiate a payment or move money.
 - Only `/mcp` is internet-facing, behind OAuth 2.1. Dashboards, REST API and web pages are reachable on the home network and VPN only.
-- Least-privilege SQL logins per purpose; never `sa`.
+- Least-privilege database roles per purpose (runtime, migrator, Grafana reader); the app never uses the superuser. PostgreSQL listens only on its local Unix socket.
+- No self-hosted CI runner. The server pulls approved, attested releases; no GitHub-executed code runs on it.
 - Secrets never appear in logs, exceptions, metrics labels or MCP tool output.
 
 <!-- GSD:project-start source:PROJECT.md -->
@@ -69,21 +70,28 @@ A self-hosted personal-finance backend for a two-person household that banks wit
 
 - **Tech stack**: .NET 10 / C#; one ASP.NET Core host serving REST API, MCP endpoint and background sync — user's main language, one deployable unit
 - **Solution**: a single `.slnx` solution file
-- **Data access**: Entity Framework Core, code-first, with migrations; migrations are applied automatically during deployment using the migrator login (the runtime login has no schema rights) — keeps deployments hands-off
+- **Data access**: Entity Framework Core, code-first, with migrations; migrations are applied automatically during deployment using the migrator role (the runtime role has no schema rights) — keeps deployments hands-off
 - **LLM usage**: none from the app — no Anthropic (or other LLM) API key or billing; all Claude usage runs on the household's Claude subscription via Claude Desktop, Claude Code, claude.ai and Claude-side scheduled tasks connecting to the MCP server
-- **Local development**: tests that need SQL Server use the user's local SQL Server Docker container; connection strings live in `dotnet user-secrets`, never in committed config; CI uses a SQL Server service container
-- **Database**: existing network MS SQL Server — new dedicated database with least-privilege logins; never `sa`
+- **Local development**: tests that need a real database use the user's own local PostgreSQL Docker container; connection strings live in `dotnet user-secrets`, never in committed config; CI uses a PostgreSQL service container
+- **Database**: PostgreSQL inside the app LXC, reachable only over its Unix socket (no network listener), with least-privilege roles and peer authentication; the app never uses the superuser
 - **Code style**: no `//` comments — only `///` XML doc summaries
 - **No planning references outside `.planning/`**: never put requirement keys, decision IDs, phase/plan numbers or planning document names in documentation, READMEs, code, comments, XML docs, test names, dashboards, MCP tool descriptions or config — they go stale the moment a phase closes
 - **Public repository**: no personal details anywhere in code, commits, comments, docs, fixtures or dashboards — IBANs, names, domains, API keys and similar live only in the server-side env file; merchant/category rules live in the database; all test data is synthetic
-- **CI/CD**: GitHub Actions free tier (requires public repo); the self-hosted runner only deploys
-- **Hosting**: Proxmox LXC; app, Grafana and Prometheus in the same LXC; automated provisioning preferred, documented one-time setup acceptable
+- **CI/CD**: GitHub Actions free tier (requires public repo) on GitHub-hosted runners only; no self-hosted runner — the server pulls approved, attested releases
+- **Hosting**: Proxmox LXC; app, PostgreSQL, Grafana and Prometheus in the same LXC; automated provisioning preferred, documented one-time setup acceptable
 - **Network exposure**: only `/mcp` public (HTTPS via existing Traefik, OAuth 2.1); dashboards, REST and web page reachable on the home network and VPN only
 - **Bank access**: read-only, fully automatic sync
 - **Language**: application code and UI in English; dashboards (and web page) translatable English/Dutch
 - **Security posture**: this handles household finances — treat security as a first-class requirement, and flag weaknesses proactively
 
 <!-- GSD:project-end -->
+
+## Stack decisions that override the research below
+
+The technology research below predates these decisions. Where it disagrees, these win:
+
+- **Database:** PostgreSQL inside the app LXC replaces MS SQL Server. Use the Npgsql EF Core provider and Grafana's core PostgreSQL datasource. Access is over the Unix socket with peer authentication, and there are no database passwords. SQL Server temporal tables, `Microsoft.Data.SqlClient` and `Testcontainers.MsSql` do not apply.
+- **Deployment:** there is no self-hosted runner. Approving the deploy environment publishes the release. A timer on the LXC pulls it, and a root-owned installer verifies the attestation, migrates and restarts.
 
 <!-- GSD:stack-start source:research/STACK.md -->
 
@@ -92,7 +100,7 @@ A self-hosted personal-finance backend for a two-person household that banks wit
 ## 1. Bank data route for ING NL (individual, joint account + savings)
 
 - Enable Banking (Finland-based, eIDAS-licensed AISP, ~2,700 ASPSPs across 30 European countries) grants a **free production-mode application restricted to accounts the account holder links themself** — explicitly scoped by their Terms of Service to "evaluation purposes or... the personal use of private individuals," non-commercial. This is the only mainstream provider found that has a genuine no-cost, no-sales-call path for an individual in 2026; every other aggregator (Tink, Salt Edge business tier, Yapily, TrueLayer, Ponto/Isabel) is sales-led/business-oriented with no public individual pricing.
-- **ING NL coverage:** Enable Banking's Netherlands market page lists ING among the covered ASPSPs (alongside ABN AMRO, Rabobank, De Volksbank, Triodos, Van Lanschot Kempen), authenticating via the ING Bankieren app (QR/app-based SCA). The docs do not explicitly break out savings vs. current accounts, but Enable Banking's account listing endpoint returns *all* accounts the PSU consents to during the `/auth` flow — a joint current account and its linked savings accounts (spaarrekening) are exposed the same way any bank's multi-account consent works under PSD2 AISP scope. **Verify this specific detail (savings account inclusion for ING NL) during Phase 1 implementation against a real consent, since no source gives an explicit yes/no for ING's spaarrekening specifically — confidence here is LOW pending that concrete check.**
+- **ING NL coverage:** Enable Banking's Netherlands market page lists ING among the covered ASPSPs (alongside ABN AMRO, Rabobank, De Volksbank, Triodos, Van Lanschot Kempen), authenticating via the ING Bankieren app (QR/app-based SCA). The docs do not explicitly break out savings vs. current accounts, but Enable Banking's account listing endpoint returns *all* accounts the PSU consents to during the `/auth` flow — a joint current account and its linked savings accounts (spaarrekening) are exposed the same way any bank's multi-account consent works under PSD2 AISP scope. **Verify this specific detail (savings account inclusion for ING NL) during the bank-sync implementation against a real consent, since no source gives an explicit yes/no for ING's spaarrekening specifically — confidence here is LOW pending that concrete check.**
 - **Auth:** JWT signed with an RSA private key (4096-bit, self-signed cert registered via the Control Panel/API), `iss`/`aud`/`iat`/`exp` claims, max token TTL 24h, `Authorization: Bearer <jwt>`. This is a private-key-JWT client-credential pattern, not a shared secret — good practice, but means the app must manage a private key file (store it exactly like the DB connection string: server-side env/secret, never in the repo).
 - **Consent duration:** ASPSP-advertised `maximum_consent_validity` can be up to 180 days (the EU raised the SCA reauthentication ceiling from 90 to 180 days), but current community reports (a GitHub issue against an open-source finance app using this API) show Enable Banking's own session handling **still effectively caps renewal at ~90 days in practice** regardless of what the bank advertises — treat 90 days as the real-world renewal cadence to design the "consent expiring soon" alert and guided-renewal flow around, with 180 days as a best case.
 - **History depth on first sync:** use `strategy=longest` on the transactions endpoint — tells Enable Banking to walk back to the earliest transaction the ASPSP will return, which satisfies the "no manual backfill" requirement.

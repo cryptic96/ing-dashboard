@@ -57,6 +57,9 @@ Recent decisions affecting current work:
 - Roadmap: each security control ships in the phase that first needs it (platform hardening before real bank data; OAuth, audience validation and IP allowlist together with the public MCP endpoint; audit and undo together with the first write tools). Phase 6 adds only a final verification pass.
 - Roadmap: Grafana grows with each slice (lockdown in Phase 1, first data dashboard and reporting-view contract in Phase 2) instead of getting a separate dashboards phase.
 - Roadmap: categorisation (Phase 4) comes before any planning feature (Phase 5), so budgets and forecasts never rest on dirty data.
+- Phase 1 context: PostgreSQL inside the app LXC (Unix socket only, peer auth, runtime/migrator/reader roles) replaces the shared MS SQL Server; local tests use the user's own Postgres container.
+- Phase 1 context: pull-based deploys, no self-hosted runner. Approval publishes the release; a timer on the LXC pulls it and a root-owned installer verifies, migrates and restarts. Tags only on `main`.
+- Phase 1 context: backups local inside the LXC, encrypted to a public key (private key off-server); losing the SSD loses data and backups (accepted risk, offsite deferred).
 
 ### Pending Todos
 
