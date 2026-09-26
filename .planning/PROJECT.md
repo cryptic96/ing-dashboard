@@ -112,7 +112,8 @@ Claude can serve as a trustworthy financial advisor for the household — answer
 
 - **Tech stack**: .NET 10 / C#; one ASP.NET Core host serving REST API, MCP endpoint and background sync — user's main language, one deployable unit
 - **Database**: existing network MS SQL Server — new dedicated database with least-privilege logins; never `sa`
-- **Code style**: no `//` comments — only `///` XML doc summaries; no planning/requirement/phase IDs in code or comments
+- **Code style**: no `//` comments — only `///` XML doc summaries
+- **No planning references outside `.planning/`**: never put requirement keys, decision IDs, phase/plan numbers or planning document names in documentation, READMEs, code, comments, XML docs, test names, dashboards, MCP tool descriptions or config — they go stale the moment a phase closes
 - **Public repository**: no personal details anywhere in code, commits, comments, docs, fixtures or dashboards — IBANs, names, domains, API keys and similar live only in the server-side env file; merchant/category rules live in the database; all test data is synthetic
 - **CI/CD**: GitHub Actions free tier (requires public repo); the self-hosted runner only deploys
 - **Hosting**: Proxmox LXC; app, Grafana and Prometheus in the same LXC; automated provisioning preferred, documented one-time setup acceptable
