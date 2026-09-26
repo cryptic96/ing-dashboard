@@ -1,0 +1,162 @@
+# Household Ledger
+
+## What This Is
+
+A self-hosted personal-finance backend for a two-person household that banks with ING (Netherlands). It automatically syncs transactions from the household's ING joint account and savings accounts, categorises them against a Nibud-based category tree (rules plus Claude-assisted suggestions), and exposes the result three ways: **Grafana dashboards** (English and Dutch) so both partners can see where the money goes, an **MCP server** so Claude can serve as the household's financial advisor, and a **REST API** for anything MCP is not suited to. Written in .NET 10 and deployed to a Proxmox homelab LXC from a public GitHub repository.
+
+## Core Value
+
+Claude can serve as a trustworthy financial advisor for the household — answering any question about our money accurately and giving grounded, useful advice — because it has complete, correctly categorised transaction data, budgets, goals, and a shared advisor memory to reason over.
+
+## Requirements
+
+### Validated
+
+(None yet — ship to validate)
+
+### Active
+
+**Ingestion**
+- [ ] Transactions from the ING joint account and ING savings accounts sync automatically (daily) through a read-only mechanism — most likely a licensed PSD2 aggregator (choice to be settled by research)
+- [ ] Sync is idempotent: re-running never duplicates transactions; pending vs booked transactions are handled correctly
+- [ ] Bank consent renewal (PSD2 consents expire, typically every 90–180 days) is a guided flow, with advance warning before expiry
+- [ ] Initial history is whatever the bank link returns; no manual backfill required for v1
+- [ ] Ingestion sits behind an interface so another provider (or a CSV/CAMT import) can be added later without touching the rest of the app
+
+**Categorisation**
+- [ ] Category tree based on Nibud household budget categories, refined by Claude from the household's real data
+- [ ] Rule-based auto-categorisation (counterparty name, IBAN, description patterns) — rules live in the database, never in code
+- [ ] Claude reviews uncategorised / low-confidence transactions and proposes categories for the user to confirm
+- [ ] User can correct a category by telling Claude (e.g. "that Tikkie in January was concert tickets"); Claude can turn a correction into a rule
+- [ ] Dutch payment quirks handled: Tikkie / betaalverzoeken, iDEAL payments via payment service providers that hide the real merchant, SEPA description formats, internal transfers between own accounts (not spending), income detection
+
+**Planning**
+- [ ] Monthly budgets per category, with actual vs budget visible
+- [ ] Named savings goals (e.g. buffer, holiday) with target, progress, and projected completion date
+- [ ] Recurring costs view: detected subscriptions and fixed costs, with price increases flagged
+- [ ] End-of-month forecast from recurring costs and current spending pace
+
+**Advisor (MCP)**
+- [ ] MCP server (official C# MCP SDK) with read tools: search/query transactions, aggregates by category / period / merchant, budgets, goals, recurring costs, forecast
+- [ ] MCP write tools: recategorise transactions, create/edit rules, create/adjust budgets and goals, annotate transactions, update advisor memory, store reviews
+- [ ] Every Claude-initiated change is audit-logged (what, when, before/after, which client) and can be reverted
+- [ ] Advisor memory stored in the app: household profile (goals, fixed commitments, preferences) plus a log of past advice and decisions, so every Claude session — desktop, phone, scheduled — starts from the same context
+- [ ] Reachable from Claude Desktop / Claude Code (home network or VPN) and from claude.ai web/mobile (public `/mcp` endpoint over HTTPS with OAuth 2.1)
+- [ ] Scheduled proactive reviews (e.g. monthly): explain the past period, flag leaks, check budgets/goals — stored in the app, visible in Grafana, and readable as a Claude conversation
+- [ ] Review notification email contains no financial details — only "your review is ready" plus a link to the dashboard
+
+**Dashboards (Grafana)**
+- [ ] Dashboards for: where the money goes, category drill-down, trends over time, budget vs actual, savings goals, recurring costs
+- [ ] Dashboards, datasources and alert rules are provisioned as code from the repository — nothing clicked together by hand
+- [ ] Dashboards available in both English and Dutch
+- [ ] Both partners can open the dashboards without technical steps, at home and away (via the home VPN)
+- [ ] Grafana data-access approach chosen after research — the user explicitly asked for all options to be compared (read-only reporting views, the app's REST API via a JSON datasource, Prometheus, others)
+
+**Operations & observability**
+- [ ] App exposes `/metrics` for Prometheus: sync health, time of last successful sync, days until bank consent expires, error counts
+- [ ] Alerts for failing syncs and for bank consent nearing expiry
+- [ ] App, Grafana and Prometheus run in one LXC; provisioning is automated where possible and any one-time setup is documented step by step
+
+**REST API & web page**
+- [ ] REST endpoints for operations that MCP is not suited to, and to back the web page
+- [ ] (Nice to have) Small web page for reviewing and fixing transactions, translatable English/Dutch
+
+**Deployment & security**
+- [ ] Public GitHub repo; release on semver tag → build on GitHub-hosted runner → release artifact → self-hosted runner on the app LXC only deploys
+- [ ] Deployment pattern hardened versus the existing homelab reference (see Context → Security review)
+
+### Out of Scope
+
+- Moving money / payment initiation — bank access is read-only by design; neither the app nor Claude can ever move funds
+- Investment execution or investment-product advice — the advisor is about spending, budgeting and saving
+- Either partner's personal (non-joint) accounts — v1 covers the joint account and savings accounts only
+- Banks other than ING in v1 — ingestion is abstracted so this can be revisited
+- Manual CSV/CAMT backfill in v1 — user chose fully automatic ingestion; history starts from what the bank link returns
+- Prometheus as the store for financial data — scraping cannot backfill history, records values at scrape time instead of booking date, and stored samples are immutable, which breaks recategorising past transactions
+- Public internet access to dashboards, REST API or web page — only `/mcp` is public
+- Financial figures in email — email leaves the home network and persists at the mail provider
+- A full custom frontend replacing Grafana — Grafana is the dashboard; the web page is only for review/editing
+- Multiple households / multi-tenancy — single-household app
+
+## Context
+
+**Household and motivation**
+- Two-person household. Both incomes arrive in the ING joint account, which carries all shared spending, so the joint account is effectively the complete household picture; ING savings accounts sit alongside it.
+- The itch is a mix of all three classic problems: money seems to disappear each month, the household wants to save towards goals, and there are suspected cost leaks (subscriptions, groceries, eating out).
+- Both partners will look at the dashboards; the user is the primary operator and the one who talks to Claude most.
+- "Claude as financial advisor" means: explain the past ("where did our money go in August?"), plan ahead ("can we afford a €2k holiday in March?"), find leaks (subscriptions, price increases), and produce proactive scheduled reviews.
+
+**Banking domain**
+- ING's official open-banking (PSD2) APIs are generally only available to licensed third-party providers, not to individual customers. The realistic automatic route for personal use is a licensed aggregator (candidates to research: Enable Banking, GoCardless Bank Account Data, others — check new-signup availability, ING NL coverage including savings accounts, consent duration, personal-use terms, cost).
+- Nibud publishes reference budgets for Dutch households; basing the category tree on Nibud lets Claude compare the household's spending against reference figures.
+- Dutch payment specifics complicate categorisation: Tikkie and betaalverzoeken, iDEAL payments routed through payment service providers, and transfers between own accounts.
+
+**User and environment**
+- The user's main language is .NET; they use Prometheus and Grafana professionally.
+- Claude clients in use: Claude Desktop / Claude Code, claude.ai web and mobile, and scheduled/automated runs.
+- Homelab: Proxmox VE host running LXC containers, including an existing Traefik reverse proxy (Let's Encrypt, public ingress on 80/443), an existing MS SQL Server instance (shared with another app), and an existing Postfix container for outbound mail. The home network has a VPN (UniFi WireGuard/Teleport) for access when away.
+- Reference deployment (another of the user's public repos): semver tag → GitHub-hosted build → GitHub Release zip → self-hosted runner on the app LXC runs a deploy script → systemd unit; secrets in a server-side env file.
+
+**Security review of the reference deployment** — issues this project must not inherit:
+1. Self-hosted runner on a public repo, running as the same user that owns the secrets file → any job (e.g. from a fork PR) could read every secret. Fix: require approval for all outside-contributor workflow runs, run the runner as a separate deploy user that cannot read the app's secrets, gate deploy behind a GitHub Environment with required reviewer, restrict who can create release tags.
+2. App connects to the shared SQL Server as `sa` → a flaw in one app exposes every database on the instance. Fix: dedicated logins scoped to this app's database (runtime vs migration), plus a SELECT-only login for Grafana.
+3. Deploy script runs a downloaded artifact without integrity verification. Fix: build-provenance attestation in CI, verify before unpacking.
+4. Third-party GitHub Actions pinned by mutable tag. Fix: pin to commit SHAs, Dependabot for updates.
+5. Workflow interpolates tag/input values straight into shell. Fix: pass via env vars and validate against a strict semver pattern.
+6. Secrets at rest: env file root-owned with group read for the app only; bank consent tokens encrypted in the database (ASP.NET Data Protection); encrypted DB backups; SQL connections with proper TLS instead of `TrustServerCertificate=true`.
+7. Only `/mcp` is internet-facing, behind OAuth 2.1 (and an IP allowlist if Anthropic publishes egress ranges); everything else is LAN + VPN only.
+
+**Accepted data flows** — inherent to the design, not flaws: transaction data reaches Anthropic whenever Claude reads it through MCP, and the chosen aggregator sees all synced transactions.
+
+## Constraints
+
+- **Tech stack**: .NET 10 / C#; one ASP.NET Core host serving REST API, MCP endpoint and background sync — user's main language, one deployable unit
+- **Database**: existing network MS SQL Server — new dedicated database with least-privilege logins; never `sa`
+- **Code style**: no `//` comments — only `///` XML doc summaries; no planning/requirement/phase IDs in code or comments
+- **Public repository**: no personal details anywhere in code, commits, comments, docs, fixtures or dashboards — IBANs, names, domains, API keys and similar live only in the server-side env file; merchant/category rules live in the database; all test data is synthetic
+- **CI/CD**: GitHub Actions free tier (requires public repo); the self-hosted runner only deploys
+- **Hosting**: Proxmox LXC; app, Grafana and Prometheus in the same LXC; automated provisioning preferred, documented one-time setup acceptable
+- **Network exposure**: only `/mcp` public (HTTPS via existing Traefik, OAuth 2.1); dashboards, REST and web page reachable on the home network and VPN only
+- **Bank access**: read-only, fully automatic sync
+- **Language**: application code and UI in English; dashboards (and web page) translatable English/Dutch
+- **Security posture**: this handles household finances — treat security as a first-class requirement, and flag weaknesses proactively
+
+## Key Decisions
+
+| Decision | Rationale | Outcome |
+|----------|-----------|---------|
+| Name the app "Household Ledger" | Bank-agnostic, English throughout | — Pending |
+| .NET 10, single ASP.NET Core host for REST + MCP + BackgroundService sync | User's main language; one process to deploy and secure | — Pending |
+| Store data in a new database on the existing MS SQL Server, with dedicated least-privilege logins | Reuse existing infrastructure without sharing credentials | — Pending |
+| Grafana is the primary UI | User preference; partner-friendly; known stack | — Pending |
+| Prometheus only for operational metrics, not financial data | No backfill, scrape-time timestamps, immutable samples conflict with recategorisation | — Pending |
+| How Grafana reads financial data | User asked for all options to be researched and compared | — Pending (research) |
+| Which bank aggregator / ingestion route | Official ING API not available to individuals | — Pending (research) |
+| Only `/mcp` exposed publicly, behind OAuth 2.1 | claude.ai web/mobile and cloud-scheduled runs need a public endpoint; everything else stays private | — Pending |
+| Dashboards on home network + VPN only | Financial data sensitivity | — Pending |
+| Nibud-based category tree, refined by Claude | Enables comparison with Dutch reference budgets | — Pending |
+| Advisor memory stored in the app | All Claude sessions share one context | — Pending |
+| Claude may change categories, rules, budgets, goals, notes, memory — all audit-logged and reversible | Core value needs write access; audit + undo keeps it safe | — Pending |
+| Review emails are notification-only | Email leaves the network and persists at the provider | — Pending |
+| How scheduled reviews are triggered (Claude-side schedule vs app calling the Claude API) | Trade-off between cost, reliability and where the reasoning runs | — Pending (research) |
+| Harden the reference deployment pattern (runner isolation, scoped SQL logins, artifact verification, SHA-pinned actions) | Finance data demands more than a hobby app | — Pending |
+
+## Evolution
+
+This document evolves at phase transitions and milestone boundaries.
+
+**After each phase transition** (via `/gsd-transition`):
+1. Requirements invalidated? → Move to Out of Scope with reason
+2. Requirements validated? → Move to Validated with phase reference
+3. New requirements emerged? → Add to Active
+4. Decisions to log? → Add to Key Decisions
+5. "What This Is" still accurate? → Update if drifted
+
+**After each milestone** (via `/gsd-complete-milestone`):
+1. Full review of all sections
+2. Core Value check — still the right priority?
+3. Audit Out of Scope — reasons still valid?
+4. Update Context with current state
+
+---
+*Last updated: 2026-09-26 after initialization*
