@@ -50,7 +50,7 @@ Claude can serve as a trustworthy financial advisor for the household — answer
 - [ ] Dashboards, datasources and alert rules are provisioned as code from the repository — nothing clicked together by hand
 - [ ] Dashboards available in both English and Dutch
 - [ ] Both partners can open the dashboards without technical steps, at home and away (via the home VPN)
-- [ ] Grafana data-access approach chosen after research — the user explicitly asked for all options to be compared (read-only reporting views, the app's REST API via a JSON datasource, Prometheus, others)
+- [ ] Grafana reads financial data through a SELECT-only login on a reporting schema of views (chosen after comparing views, REST via a JSON datasource and Prometheus)
 
 **Operations & observability**
 - [ ] App exposes `/metrics` for Prometheus: sync health, time of last successful sync, days until bank consent expires, error counts
@@ -59,7 +59,7 @@ Claude can serve as a trustworthy financial advisor for the household — answer
 
 **REST API & web page**
 - [ ] REST endpoints for operations that MCP is not suited to, and to back the web page
-- [ ] (Nice to have) Small web page for reviewing and fixing transactions, translatable English/Dutch
+- [ ] (Deferred to v2) Small web page for reviewing and fixing transactions, translatable English/Dutch
 
 **Deployment & security**
 - [ ] Public GitHub repo; release on semver tag → build on GitHub-hosted runner → release artifact → self-hosted runner on the app LXC only deploys
@@ -131,15 +131,18 @@ Claude can serve as a trustworthy financial advisor for the household — answer
 | Store data in a new database on the existing MS SQL Server, with dedicated least-privilege logins | Reuse existing infrastructure without sharing credentials | — Pending |
 | Grafana is the primary UI | User preference; partner-friendly; known stack | — Pending |
 | Prometheus only for operational metrics, not financial data | No backfill, scrape-time timestamps, immutable samples conflict with recategorisation | — Pending |
-| How Grafana reads financial data | User asked for all options to be researched and compared | — Pending (research) |
-| Which bank aggregator / ingestion route | Official ING API not available to individuals | — Pending (research) |
+| Grafana reads financial data via a SELECT-only login on a `reporting` schema of views; a JSON datasource against the REST API only for computed panels | Research compared views, REST/Infinity and Prometheus; views are Grafana's own recommended least-privilege pattern and keep the app the owner of its tables | — Pending |
+| Bank link via Enable Banking's free personal-use tier; verify ING savings-account coverage early, Salt Edge as fallback | Official ING API not available to individuals; GoCardless Bank Account Data closed to new signups in 2025 | — Pending (early spike) |
+| OAuth authorization server: separate Authentik vs a lightweight embedded server | claude.ai client-registration requirements (DCR vs pre-registered client) decide it; single-LXC resource budget matters | — Pending (MCP/auth phase research) |
+| Spending compared with the household's own history, not Nibud reference figures, in v1 | Nibud figures are a paid product and cannot be committed to a public repo | — Pending |
+| Review/fix web page deferred to v2 | Corrections go through Claude in v1 | — Pending |
 | Only `/mcp` exposed publicly, behind OAuth 2.1 | claude.ai web/mobile and cloud-scheduled runs need a public endpoint; everything else stays private | — Pending |
 | Dashboards on home network + VPN only | Financial data sensitivity | — Pending |
 | Nibud-based category tree, refined by Claude | Enables comparison with Dutch reference budgets | — Pending |
 | Advisor memory stored in the app | All Claude sessions share one context | — Pending |
 | Claude may change categories, rules, budgets, goals, notes, memory — all audit-logged and reversible | Core value needs write access; audit + undo keeps it safe | — Pending |
 | Review emails are notification-only | Email leaves the network and persists at the provider | — Pending |
-| How scheduled reviews are triggered (Claude-side schedule vs app calling the Claude API) | Trade-off between cost, reliability and where the reasoning runs | — Pending (research) |
+| Scheduled reviews run from a Claude-side schedule (Claude Code / Desktop / cloud routine) through the MCP server; the app stores them and sends the notification | Uses the existing Claude subscription, no separately billed API key; reviews stay readable as a conversation | — Pending |
 | Harden the reference deployment pattern (runner isolation, scoped SQL logins, artifact verification, SHA-pinned actions) | Finance data demands more than a hobby app | — Pending |
 
 ## Evolution
