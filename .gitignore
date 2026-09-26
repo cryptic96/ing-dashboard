@@ -1,0 +1,7 @@
+# Research tool cache
+.planning/research/.cache/
+
+# Local secrets
+.env
+*.env
+!.env.example
