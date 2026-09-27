@@ -65,8 +65,8 @@ Requirements for initial release. Each maps to roadmap phases.
 - [ ] **DASH-05**: Every dashboard exists in English and Dutch, generated from a single source so the two languages cannot drift apart
 - [x] **DASH-06**: Dashboards, datasources and alert rules are provisioned as code from the repository
 - [ ] **DASH-07**: Grafana reads financial data through a read-only, least-privilege path (a SELECT-only database role on a reporting schema of views) and cannot write
-- [ ] **DASH-08**: Each partner has their own Grafana viewer login; anonymous access, public dashboards and snapshot sharing are disabled
-- [ ] **DASH-09**: Grafana is reachable from the home network and the VPN only
+- [x] **DASH-08**: Each partner has their own Grafana viewer login; anonymous access, public dashboards and snapshot sharing are disabled
+- [x] **DASH-09**: Grafana is reachable from the home network and the VPN only
 
 ### Operations
 
@@ -184,8 +184,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DASH-05 | Phase 2 | Pending |
 | DASH-06 | Phase 1 | Complete |
 | DASH-07 | Phase 2 | Pending |
-| DASH-08 | Phase 1 | Pending |
-| DASH-09 | Phase 1 | Pending |
+| DASH-08 | Phase 1 | Complete |
+| DASH-09 | Phase 1 | Complete |
 | OPS-01 | Phase 2 | Pending |
 | OPS-02 | Phase 2 | Pending |
 | OPS-03 | Phase 1 | Complete |

@@ -95,6 +95,7 @@ PROVISION_CONF_ALLOWED_KEYS=(
   LEDGER_GRAFANA_DOMAIN
   LEDGER_API_DOMAIN
   LEDGER_SMTP_RELAY
+  LEDGER_SMTP_STARTTLS
   LEDGER_MAIL_FROM
   LEDGER_ALERT_EMAIL
   LEDGER_GITHUB_REPO
@@ -197,6 +198,158 @@ provision_key_fingerprint() {
 }
 
 ###
+### Validates that VALUE is a syntactically valid IPv4 address (four
+### dot-separated octets, each 0-255).
+###
+provision_validate_ipv4() {
+  local value="$1" octet
+  [[ "$value" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]] || return 1
+  for octet in "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}" "${BASH_REMATCH[4]}"; do
+    (( 10#$octet <= 255 )) || return 1
+  done
+  return 0
+}
+
+###
+### Validates that VALUE is a single IPv4 CIDR ("a.b.c.d/nn") with a prefix
+### length of 0-32.
+###
+provision_validate_cidr() {
+  local value="$1" addr prefix
+  [[ "$value" == */* ]] || return 1
+  addr="${value%/*}"
+  prefix="${value#*/}"
+  provision_validate_ipv4 "$addr" || return 1
+  [[ "$prefix" =~ ^[0-9]{1,2}$ ]] || return 1
+  (( 10#$prefix <= 32 )) || return 1
+  return 0
+}
+
+###
+### Validates that VALUE is one or more comma-separated IPv4 CIDRs (no
+### surrounding whitespace around any entry).
+###
+provision_validate_cidr_list() {
+  local value="$1" entry
+  local -a entries
+  IFS=',' read -r -a entries <<< "$value"
+  [[ "${#entries[@]}" -ge 1 ]] || return 1
+  for entry in "${entries[@]}"; do
+    provision_validate_cidr "$entry" || return 1
+  done
+  return 0
+}
+
+###
+### Validates that VALUE is a "host:port" pair with a numeric port in
+### 1-65535 and a non-empty host part.
+###
+provision_validate_hostport() {
+  local value="$1" host port
+  [[ "$value" == *:* ]] || return 1
+  host="${value%:*}"
+  port="${value##*:}"
+  [[ -n "$host" ]] || return 1
+  [[ "$port" =~ ^[0-9]{1,5}$ ]] || return 1
+  (( 10#$port >= 1 && 10#$port <= 65535 )) || return 1
+  return 0
+}
+
+###
+### Validates that VALUE looks like a single email address (a pragmatic
+### shape check, not a full RFC 5322 parser).
+###
+provision_validate_email() {
+  local value="$1"
+  [[ "$value" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]
+}
+
+###
+### Validates that VALUE is a single age1... public key, and explicitly
+### rejects anything that looks like a private age identity
+### (AGE-SECRET-KEY-1...). Never accepts an identity.
+###
+provision_validate_age_public_key() {
+  local value="$1"
+  if [[ "${value^^}" =~ ^AGE-SECRET-KEY-1 ]]; then
+    return 1
+  fi
+  [[ "$value" =~ ^age1[0-9a-z]+$ ]]
+}
+
+###
+### Rejects a value containing a semicolon, a brace, or a newline —
+### characters that could break out of a rendered config file's line-based
+### syntax (nftables sets, msmtp/env key=value lines).
+###
+provision_validate_safe_value() {
+  local value="$1"
+  case "$value" in
+    *';'* | *'{'* | *'}'*) return 1 ;;
+  esac
+  [[ "$value" != *$'\n'* ]]
+}
+
+###
+### Renders TEMPLATE to OUTPUT by replacing every @NAME@ token with the
+### value from a same-named "NAME=VALUE" argument. Every value is checked
+### against provision_validate_safe_value; a value for a token with a
+### known stricter shape (LEDGER_TRAEFIK_IP: IPv4, LEDGER_ADMIN_SSH_SOURCES:
+### a comma-separated CIDR list, LEDGER_SMTP_RELAY: host:port,
+### LEDGER_MAIL_FROM/LEDGER_ALERT_EMAIL: an email address) is additionally
+### checked against that shape. Fails, and never writes OUTPUT, if any
+### value is invalid or if any @TOKEN@ remains unreplaced in the result.
+###
+provision_render_template() {
+  local template="$1" output="$2"
+  shift 2
+
+  [[ -f "$template" ]] || provision_die "template not found: ${template}"
+
+  local content
+  content="$(cat "$template")"
+
+  local pair name value
+  for pair in "$@"; do
+    name="${pair%%=*}"
+    value="${pair#*=}"
+
+    provision_validate_safe_value "$value" \
+      || provision_die "value for @${name}@ contains a disallowed character (semicolon, brace or newline)"
+
+    case "$name" in
+      LEDGER_TRAEFIK_IP)
+        provision_validate_ipv4 "$value" \
+          || provision_die "@${name}@ value is not a valid IPv4 address: ${value}"
+        ;;
+      LEDGER_ADMIN_SSH_SOURCES)
+        provision_validate_cidr_list "$value" \
+          || provision_die "@${name}@ value is not a valid comma-separated CIDR list: ${value}"
+        ;;
+      LEDGER_SMTP_RELAY)
+        provision_validate_hostport "$value" \
+          || provision_die "@${name}@ value is not a valid host:port: ${value}"
+        ;;
+      LEDGER_MAIL_FROM | LEDGER_ALERT_EMAIL)
+        provision_validate_email "$value" \
+          || provision_die "@${name}@ value is not a valid email address: ${value}"
+        ;;
+    esac
+
+    content="${content//@${name}@/$value}"
+  done
+
+  if grep -qE '@[A-Z][A-Z0-9_]*@' <<< "$content"; then
+    provision_die "template ${template} has an unreplaced @TOKEN@ after rendering"
+  fi
+
+  local tmp
+  tmp="$(mktemp)"
+  printf '%s\n' "$content" > "$tmp"
+  mv -f "$tmp" "$output"
+}
+
+###
 ### --- orchestrator (skipped entirely in library mode) --------------------
 ###
 
@@ -221,6 +374,11 @@ if [[ "${LEDGER_PROVISION_LIB_ONLY:-0}" != "1" ]]; then
         ;;
     esac
   done
+
+  # Lets a module (e.g. 60-grafana-accounts.sh) tell whether it was
+  # explicitly re-selected with --only, versus running as part of a full
+  # pass, without provision.sh having to know anything module-specific.
+  export PROVISION_ONLY_MODULE="$ONLY_MODULE"
 
   provision_load_versions "${SCRIPT_DIR}/versions.env"
 

@@ -1,0 +1,76 @@
+# Traefik v3 dynamic (file-provider) configuration for the household
+# ledger platform. This file is not read by anything in this repository —
+# copy it into the existing Traefik container's dynamic configuration
+# directory (the directory its file provider already watches) and replace
+# every placeholder below with the household's own values.
+#
+# Only the Grafana dashboard hostname and the REST API's /api/ path
+# prefix are routed here, both behind an IP allowlist restricted to the
+# home network and VPN. This file has no route at all for any
+# operational or loopback-only endpoint: none of those are reachable
+# through the reverse proxy, from the LAN, from the VPN, or from
+# anywhere outside this host's own loopback interface.
+#
+# The application trusts forwarded headers (X-Forwarded-For) only from
+# the address configured as ReverseProxy__KnownProxies__0 in the
+# server-side application environment file — that value must be this
+# Traefik container's own address.
+#
+# Every hostname and address below is a placeholder from the
+# documentation ranges (RFC 5737) or an example.* domain; replace all of
+# them, never commit a real value here.
+
+http:
+  middlewares:
+    ledger-lan-vpn-only:
+      ipAllowList:
+        sourceRange:
+          # Replace with the household's real LAN subnet.
+          - "192.0.2.0/24"
+          # Replace with the household's real VPN subnet.
+          - "198.51.100.0/24"
+
+    ledger-security-headers:
+      headers:
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        stsPreload: true
+        contentTypeNosniff: true
+        frameDeny: true
+        referrerPolicy: "strict-origin-when-cross-origin"
+
+  routers:
+    ledger-grafana:
+      rule: "Host(`grafana.example.com`)"
+      entryPoints:
+        - websecure
+      middlewares:
+        - ledger-lan-vpn-only
+        - ledger-security-headers
+      service: ledger-grafana
+      tls:
+        certResolver: letsencrypt
+
+    ledger-api:
+      rule: "Host(`ledger-api.example.com`) && PathPrefix(`/api/`)"
+      entryPoints:
+        - websecure
+      middlewares:
+        - ledger-lan-vpn-only
+        - ledger-security-headers
+      service: ledger-api
+      tls:
+        certResolver: letsencrypt
+
+  services:
+    ledger-grafana:
+      loadBalancer:
+        servers:
+          # Replace with the ledger host's real address, port 3000 (Grafana).
+          - url: "http://192.0.2.20:3000"
+
+    ledger-api:
+      loadBalancer:
+        servers:
+          # Replace with the ledger host's real address, port 5080 (REST API).
+          - url: "http://192.0.2.20:5080"
