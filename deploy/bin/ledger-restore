@@ -1,0 +1,220 @@
+#!/usr/bin/env bash
+# Restores an encrypted backup, either as a drill into a scratch database or
+# live over the running database. The identity supplied by the operator is
+# passed straight to age and is never copied, moved or kept by this script.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [ -f "${SCRIPT_DIR}/../lib/common.sh" ]; then
+  LIB_DIR="$(cd "${SCRIPT_DIR}/../lib" && pwd)"
+else
+  LIB_DIR="/usr/local/lib/ledger"
+fi
+
+# shellcheck source=deploy/lib/common.sh
+source "${LIB_DIR}/common.sh"
+# shellcheck source=deploy/lib/backup.sh
+source "${LIB_DIR}/backup.sh"
+
+BACKUP_ROOT="${LEDGER_BACKUP_ROOT:-/var/backups/ledger}"
+OPS_URL="${LEDGER_OPS_URL:-http://127.0.0.1:5081}"
+RELEASE_SQL_DIR="${LEDGER_RELEASE_SQL_DIR:-/opt/ledger/current/deploy/sql}"
+HEALTH_TIMEOUT_SECONDS="${LEDGER_HEALTH_TIMEOUT_SECONDS:-90}"
+SCRATCH_DB="ledger_restore_drill"
+
+MODE=""
+BACKUP_FILE=""
+IDENTITY_FILE=""
+
+usage() {
+  cat <<'EOF_USAGE' >&2
+Usage:
+  ledger-restore --drill --backup FILE --identity FILE
+  ledger-restore --live  --backup FILE --identity FILE
+EOF_USAGE
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --drill)
+      MODE="drill"
+      shift
+      ;;
+    --live)
+      MODE="live"
+      shift
+      ;;
+    --backup)
+      BACKUP_FILE="${2:-}"
+      shift 2
+      ;;
+    --identity)
+      IDENTITY_FILE="${2:-}"
+      shift 2
+      ;;
+    *)
+      usage
+      ledger_die "unrecognized argument: $1"
+      ;;
+  esac
+done
+
+if [ -z "$MODE" ] || [ -z "$BACKUP_FILE" ] || [ -z "$IDENTITY_FILE" ]; then
+  usage
+  ledger_die "--drill or --live, --backup and --identity are all required"
+fi
+
+if [ -z "${LEDGER_DEPLOY_ROOT:-}" ] && [ "$(id -u)" -ne 0 ]; then
+  ledger_die "ledger-restore must run as root"
+fi
+
+BACKUP_BASENAME="$(basename "$BACKUP_FILE")"
+if [[ ! "$BACKUP_BASENAME" =~ ^ledger-[0-9]{8}T[0-9]{6}Z-(nightly|pre-migration)\.dump\.age$ ]]; then
+  ledger_die "backup file name does not match the expected pattern: $BACKUP_BASENAME"
+fi
+
+if [ ! -f "$BACKUP_FILE" ]; then
+  ledger_die "backup file not found: $BACKUP_FILE"
+fi
+
+BACKUP_REAL_DIR="$(cd "$(dirname "$BACKUP_FILE")" && pwd)"
+BACKUP_ROOT_REAL="$(cd "$BACKUP_ROOT" && pwd)"
+if [ "$BACKUP_REAL_DIR" != "$BACKUP_ROOT_REAL" ]; then
+  ledger_die "backup file must live directly under ${BACKUP_ROOT}"
+fi
+
+if [ "$IDENTITY_FILE" != "/dev/stdin" ] && [ ! -f "$IDENTITY_FILE" ]; then
+  ledger_die "identity file not found: $IDENTITY_FILE"
+fi
+
+# Always drops the scratch drill database (harmless if it never existed)
+# and warns the operator if the identity was left on disk somewhere other
+# than a tmpfs, regardless of how the script exits.
+cleanup_on_exit() {
+  if [ "$MODE" = "drill" ]; then
+    runuser -u postgres -- psql -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS ${SCRATCH_DB}" >/dev/null 2>&1 || true
+  fi
+
+  if [ "$IDENTITY_FILE" != "/dev/stdin" ] && [ -f "$IDENTITY_FILE" ]; then
+    case "$IDENTITY_FILE" in
+      /dev/shm/*) ;;
+      *)
+        ledger_log "WARNING: the identity file at ${IDENTITY_FILE} is a regular file outside /dev/shm; remove it now"
+        ;;
+    esac
+  fi
+}
+trap cleanup_on_exit EXIT
+
+run_drill() {
+  runuser -u postgres -- psql -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS ${SCRATCH_DB}"
+  runuser -u postgres -- psql -v ON_ERROR_STOP=1 -c "CREATE DATABASE ${SCRATCH_DB}"
+
+  local pass=1
+
+  if ! age --decrypt --identity "$IDENTITY_FILE" "$BACKUP_FILE" \
+       | runuser -u postgres -- pg_restore --no-owner --no-privileges --exit-on-error --dbname="$SCRATCH_DB"; then
+    ledger_log "FAIL: pg_restore into ${SCRATCH_DB} did not complete cleanly"
+    pass=0
+  fi
+
+  if [ "$pass" -eq 1 ]; then
+    local live_history drill_history
+    live_history="$(runuser -u postgres -- psql -tA -c "SELECT string_agg(\"MigrationId\", ',' ORDER BY \"MigrationId\") FROM public.\"__EFMigrationsHistory\"" ledger)"
+    drill_history="$(runuser -u postgres -- psql -tA -c "SELECT string_agg(\"MigrationId\", ',' ORDER BY \"MigrationId\") FROM public.\"__EFMigrationsHistory\"" "$SCRATCH_DB")"
+
+    if [ "$drill_history" = "$live_history" ]; then
+      ledger_log "PASS: migration history matches the live database"
+    elif [ -n "$drill_history" ] && [[ "$live_history" == "$drill_history"* ]]; then
+      ledger_log "PASS: migration history is a prefix of the live database (backup predates a newer migration)"
+    else
+      ledger_log "FAIL: migration history does not match and is not a prefix of the live database"
+      pass=0
+    fi
+
+    local canary_count
+    canary_count="$(runuser -u postgres -- psql -tA -c "SELECT count(*) FROM public.data_protection_canary" "$SCRATCH_DB")"
+    if [ "$canary_count" = "1" ]; then
+      ledger_log "PASS: data_protection_canary contains exactly one row"
+    else
+      ledger_log "FAIL: data_protection_canary row count is ${canary_count}, expected 1"
+      pass=0
+    fi
+
+    local live_counts drill_counts
+    live_counts="$(runuser -u postgres -- psql -tA -c "SELECT schemaname, relname, n_live_tup FROM pg_stat_user_tables ORDER BY 1, 2" ledger)"
+    drill_counts="$(runuser -u postgres -- psql -tA -c "SELECT schemaname, relname, n_live_tup FROM pg_stat_user_tables ORDER BY 1, 2" "$SCRATCH_DB")"
+    if [ "$live_counts" = "$drill_counts" ]; then
+      ledger_log "PASS: per-schema table counts match"
+    else
+      ledger_log "FAIL: per-schema table counts differ from the live database"
+      pass=0
+    fi
+  fi
+
+  if [ "$pass" -eq 1 ]; then
+    local ts content
+    ts="$(date -u +%s)"
+    content=$(cat <<EOF_METRICS
+# HELP ledger_restore_drill_last_success_timestamp_seconds Unix timestamp of the most recent successful restore drill.
+# TYPE ledger_restore_drill_last_success_timestamp_seconds gauge
+ledger_restore_drill_last_success_timestamp_seconds ${ts}
+EOF_METRICS
+)
+    ledger_write_textfile_metrics "ledger_restore_drill" "$content"
+    ledger_log "PASS: restore drill for ${BACKUP_BASENAME} succeeded"
+  else
+    ledger_log "FAIL: restore drill for ${BACKUP_BASENAME} failed, see the messages above"
+    return 1
+  fi
+}
+
+run_live() {
+  printf 'Type "ledger" to confirm restoring over the live database: ' >&2
+  local confirmation
+  read -r confirmation
+  if [ "$confirmation" != "ledger" ]; then
+    ledger_die "confirmation not given, aborting live restore"
+  fi
+
+  systemctl stop ledger.service
+
+  local renamed_db
+  renamed_db="ledger_pre_restore_$(date -u +%Y%m%dT%H%M%SZ)"
+  runuser -u postgres -- psql -v ON_ERROR_STOP=1 -c "ALTER DATABASE ledger RENAME TO ${renamed_db}"
+  runuser -u postgres -- psql -v ON_ERROR_STOP=1 -c "CREATE DATABASE ledger OWNER ledger_migrator"
+  runuser -u postgres -- psql -v ON_ERROR_STOP=1 -d ledger -f "${RELEASE_SQL_DIR}/bootstrap-database.sql"
+
+  age --decrypt --identity "$IDENTITY_FILE" "$BACKUP_FILE" \
+    | runuser -u postgres -- pg_restore --no-owner --role=ledger_migrator --exit-on-error --dbname=ledger
+
+  systemctl start ledger.service
+
+  local waited=0
+  local healthy=0
+  while [ "$waited" -lt "$HEALTH_TIMEOUT_SECONDS" ]; do
+    if curl --fail --silent --show-error "${OPS_URL}/health" 2>/dev/null | grep -qx 'Healthy'; then
+      healthy=1
+      break
+    fi
+    sleep 3
+    waited=$((waited + 3))
+  done
+
+  if [ "$healthy" -eq 1 ]; then
+    ledger_log "PASS: live restore of ${BACKUP_BASENAME} succeeded; the previous database is kept as ${renamed_db} for the operator to drop"
+  else
+    ledger_log "FAIL: the app did not report healthy after the live restore; the previous database is kept as ${renamed_db}"
+    return 1
+  fi
+}
+
+case "$MODE" in
+  drill)
+    run_drill
+    ;;
+  live)
+    run_live
+    ;;
+esac
