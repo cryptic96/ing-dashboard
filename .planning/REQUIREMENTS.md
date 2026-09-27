@@ -72,11 +72,11 @@ Requirements for initial release. Each maps to roadmap phases.
 
 - [ ] **OPS-01**: The app exposes `/metrics` for Prometheus: time of last successful sync, sync errors, days until bank consent expires, review-queue size
 - [ ] **OPS-02**: Alerts fire when syncs fail and when bank consent is 14 and 7 days from expiry
-- [ ] **OPS-03**: App, PostgreSQL, Grafana and Prometheus run in one LXC as systemd services; setup is automated where possible and any one-time steps are documented step by step
+- [x] **OPS-03**: App, PostgreSQL, Grafana and Prometheus run in one LXC as systemd services; setup is automated where possible and any one-time steps are documented step by step
 - [ ] **OPS-04**: Finance database backups are encrypted, and a restore procedure is documented and tested
 - [ ] **OPS-05**: Data Protection keys are persisted, so encrypted bank credentials survive restarts and redeploys (verified by an actual restart)
 - [ ] **OPS-06**: All period bucketing (days, months, years) uses the Europe/Amsterdam time zone
-- [ ] **OPS-07**: Database schema changes ship as Entity Framework Core migrations and are applied automatically during deployment with the migrator role
+- [x] **OPS-07**: Database schema changes ship as Entity Framework Core migrations and are applied automatically during deployment with the migrator role
 
 ### Security & deployment
 
@@ -85,9 +85,9 @@ Requirements for initial release. Each maps to roadmap phases.
 - [ ] **SEC-03**: Secrets live only in a server-side env file readable by the app alone; bank consent tokens and the aggregator key are encrypted at rest
 - [ ] **SEC-04**: Only `/mcp` and the OAuth endpoints it needs are internet-facing via Traefik, restricted to Anthropic's published IP ranges; access tokens are audience-validated on every request and never passed through to other services
 - [ ] **SEC-05**: The database is reachable only from inside the app's LXC over its local Unix socket (no network listener), with OS-user-to-role peer authentication
-- [ ] **SEC-06**: Secrets and financial details never appear in logs, exception messages or metric labels
-- [ ] **SEC-07**: A semver tag triggers a build on a GitHub-hosted runner that produces a release artifact with build-provenance attestation; the server verifies the attestation before deploying
-- [ ] **SEC-08**: Deploys are pull-based: no self-hosted runner exists, and no GitHub-executed code runs on the server; a release is published only after approval on a GitHub Environment with a required reviewer, and the server installs only published releases from `main`; workflow runs from outside contributors require approval; release-tag creation is restricted
+- [x] **SEC-06**: Secrets and financial details never appear in logs, exception messages or metric labels
+- [x] **SEC-07**: A semver tag triggers a build on a GitHub-hosted runner that produces a release artifact with build-provenance attestation; the server verifies the attestation before deploying
+- [x] **SEC-08**: Deploys are pull-based: no self-hosted runner exists, and no GitHub-executed code runs on the server; a release is published only after approval on a GitHub Environment with a required reviewer, and the server installs only published releases from `main`; workflow runs from outside contributors require approval; release-tag creation is restricted
 - [ ] **SEC-09**: All third-party GitHub Actions are pinned to commit SHAs and kept current by Dependabot; no workflow interpolates untrusted values directly into shell commands
 - [ ] **SEC-10**: The repository contains no personal data: secret scanning and push protection stay enabled, CI scans the full history for secrets, and all test data is synthetic
 
@@ -188,25 +188,26 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DASH-09 | Phase 1 | Pending |
 | OPS-01 | Phase 2 | Pending |
 | OPS-02 | Phase 2 | Pending |
-| OPS-03 | Phase 1 | Pending |
+| OPS-03 | Phase 1 | Complete |
 | OPS-04 | Phase 1 | Pending |
 | OPS-05 | Phase 1 | Pending |
 | OPS-06 | Phase 3 | Pending |
-| OPS-07 | Phase 1 | Pending |
+| OPS-07 | Phase 1 | Complete |
 | SEC-01 | Phase 2 | Pending |
 | SEC-02 | Phase 1 | Pending |
 | SEC-03 | Phase 1 | Pending |
 | SEC-04 | Phase 3 | Pending |
 | SEC-05 | Phase 1 | Pending |
-| SEC-06 | Phase 1 | Pending |
-| SEC-07 | Phase 1 | Pending |
-| SEC-08 | Phase 1 | Pending |
+| SEC-06 | Phase 1 | Complete |
+| SEC-07 | Phase 1 | Complete |
+| SEC-08 | Phase 1 | Complete |
 | SEC-09 | Phase 1 | Pending |
 | SEC-10 | Phase 1 | Pending |
 | API-01 | Phase 6 | Pending |
 | API-02 | Phase 1 | Pending |
 
 **Coverage:**
+
 - v1 requirements: 65 total
 - Mapped to phases: 65
 - Unmapped: 0
