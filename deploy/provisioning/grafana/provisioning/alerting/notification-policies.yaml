@@ -1,0 +1,10 @@
+# Every alert routes to the one contact point; there is no per-service
+# routing tree yet because there is only one operator to notify.
+apiVersion: 1
+
+policies:
+  - orgId: 1
+    receiver: operator-email
+    group_by:
+      - alertname
+    repeat_interval: 12h
