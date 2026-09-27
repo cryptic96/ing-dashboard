@@ -43,11 +43,15 @@ jobs:
         with:
           global-json-file: global.json
 
+      # build/package-release.sh runs `dotnet restore --locked-mode` against
+      # the committed packages.lock.json files before publishing, so the
+      # test run below reuses that same locked-mode restore instead of
+      # resolving packages again.
       - name: Package release
         run: build/package-release.sh --version 0.0.0 --commit "$GITHUB_SHA" --output artifacts/release
 
       - name: Run tests
-        run: dotnet test Ledger.slnx
+        run: dotnet test Ledger.slnx --no-restore
         env:
           ConnectionStrings__TestAdmin: Host=localhost;Port=5432;Username=postgres
           LEDGER_EFBUNDLE: ${{ github.workspace }}/artifacts/release/stage/efbundle
