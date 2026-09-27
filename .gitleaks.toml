@@ -35,6 +35,13 @@ regex = '''\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b'''
   ]
 
   [[rules.allowlists]]
+  description = "reserved and non-delegated placeholder top-level domains cannot receive mail"
+  regexTarget = "match"
+  regexes = [
+    '''(?i)@[A-Za-z0-9.-]+\.(test|example|invalid|localhost|tld)$''',
+  ]
+
+  [[rules.allowlists]]
   description = "systemd templated unit instance names (unit@instance.service) look like emails but are not"
   regexTarget = "match"
   regexes = [
@@ -50,8 +57,27 @@ id = "generic-api-key"
     '''\.plannin[g]/''',
   ]
 
+  [[rules.allowlists]]
+  description = "pinned OpenPGP key fingerprints of public package signing keys are public identifiers, not secrets"
+  condition = "AND"
+  regexTarget = "match"
+  paths = [
+    '''(^|/)deploy/versions\.env$''',
+  ]
+  regexes = [
+    '''^[A-Z0-9_]+_KEY_FINGERPRINT=[0-9A-F]{40}$''',
+  ]
+
 [[allowlists]]
 description = "public Sigstore bundle fixtures are intentionally not real secrets"
 paths = [
   '''deploy/tests/fixtures/''',
+]
+
+[[allowlists]]
+description = "gitignored build and test output cannot be committed; the history scan covers everything that can"
+paths = [
+  '''(^|/)Ledger\.[A-Za-z]+/(bin|obj)/''',
+  '''(^|/)artifacts/''',
+  '''(^|/)TestResults/''',
 ]
