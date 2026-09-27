@@ -5,3 +5,12 @@
 .env
 *.env
 !.env.example
+
+# Build output
+bin/
+obj/
+artifacts/
+TestResults/
+.vs/
+.idea/
+*.user
