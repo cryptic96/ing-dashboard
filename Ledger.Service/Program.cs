@@ -1,3 +1,4 @@
+using System.Reflection;
 using Ledger.Repository;
 using Ledger.Service.Health;
 using Ledger.Service.Hosting;
@@ -6,7 +7,10 @@ using Ledger.Domain.Security;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Prometheus;
+using LedgerMetrics = Ledger.Service.Metrics.LedgerMetrics;
+using HealthCheckMetricsPublisher = Ledger.Service.Metrics.HealthCheckMetricsPublisher;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -27,9 +31,18 @@ builder.Services
     .AddLedgerDatabaseCheck()
     .AddCheck<DataProtectionCanaryHealthCheck>("data_protection_canary");
 
+builder.Services.AddSingleton<IHealthCheckPublisher, HealthCheckMetricsPublisher>();
+builder.Services.Configure<HealthCheckPublisherOptions>(options =>
+{
+    options.Delay = TimeSpan.FromSeconds(5);
+    options.Period = TimeSpan.FromSeconds(30);
+});
+
 var app = builder.Build();
 
 var opsPort = OpsEndpoint.FromConfiguration(app.Configuration);
+
+LedgerMetrics.RecordBuildInfo(Assembly.GetExecutingAssembly());
 
 app.UseHealthChecks("/health", opsPort, new HealthCheckOptions
 {

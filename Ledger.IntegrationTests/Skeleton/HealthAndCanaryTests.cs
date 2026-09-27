@@ -28,6 +28,28 @@ public class HealthAndCanaryTests(DatabaseFixture fixture)
 
     [Fact]
     [Trait("Category", "Health")]
+    public async Task Metrics_endpoint_reports_build_info_and_health_check_status()
+    {
+        await using var factory = new LedgerWebApplicationFactory(fixture.ConnectionStringFor("ledger_runtime"));
+        using var opsClient = factory.CreateOpsClient();
+
+        using var readyResponse = await WaitForHealthyAsync(opsClient);
+        readyResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var metricsBody = await WaitForMetricsContainingAsync(
+            opsClient,
+            "ledger_health_check_status{check=\"database\"",
+            TimeSpan.FromSeconds(40));
+
+        metricsBody.Should().Contain("ledger_build_info{");
+        metricsBody.Should().Contain("version=");
+        metricsBody.Should().Contain("commit=");
+        metricsBody.Should().Contain("ledger_health_check_status{check=\"database\"");
+        metricsBody.Should().Contain("ledger_health_check_status{check=\"data_protection_canary\"");
+    }
+
+    [Fact]
+    [Trait("Category", "Health")]
     public async Task Api_port_does_not_serve_health_or_metrics()
     {
         await using var factory = new LedgerWebApplicationFactory(fixture.ConnectionStringFor("ledger_runtime"));
@@ -162,6 +184,35 @@ public class HealthAndCanaryTests(DatabaseFixture fixture)
 
     private static Task<HttpResponseMessage> WaitForHealthyAsync(HttpClient client, TimeSpan? timeout = null) =>
         WaitForStatusAsync(client, HttpStatusCode.OK, timeout);
+
+    private static async Task<string> WaitForMetricsContainingAsync(
+        HttpClient client,
+        string expectedSubstring,
+        TimeSpan? timeout = null)
+    {
+        var deadline = DateTimeOffset.UtcNow + (timeout ?? TimeSpan.FromSeconds(40));
+
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            try
+            {
+                using var response = await client.GetAsync("/metrics", TestContext.Current.CancellationToken);
+                var body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+
+                if (body.Contains(expectedSubstring, StringComparison.Ordinal))
+                {
+                    return body;
+                }
+            }
+            catch (HttpRequestException)
+            {
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(250), TestContext.Current.CancellationToken);
+        }
+
+        throw new TimeoutException($"/metrics never contained '{expectedSubstring}' within the timeout.");
+    }
 
     private static async Task<HttpResponseMessage> WaitForStatusAsync(
         HttpClient client,

@@ -2,6 +2,7 @@
 
   <PropertyGroup>
     <UserSecretsId>be62dc27-a005-434a-aa75-576b7b30ade6</UserSecretsId>
+    <RuntimeIdentifiers>linux-x64</RuntimeIdentifiers>
   </PropertyGroup>
 
   <ItemGroup>
