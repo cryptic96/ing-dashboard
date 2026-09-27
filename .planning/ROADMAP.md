@@ -32,7 +32,21 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. The app reaches its own database only through dedicated runtime and migrator roles over the local Unix socket (the database has no network listener), never as the superuser, and a SELECT-only Grafana reader role exists. A deploy that includes a new Entity Framework Core migration applies it automatically with the migrator role, with no manual database step. Secrets live only in the server-side env file. A value encrypted before a restart and redeploy still decrypts afterwards. Logs, exception messages and metric labels contain no secrets.
   4. An encrypted backup of the finance database has actually been restored by following the documented procedure. Every one-time setup step for the LXC is documented step by step.
   5. Each partner signs in to Grafana with their own viewer login from the home network or VPN. Anonymous access, public dashboards and snapshot sharing are disabled, and datasources are provisioned from the repository. Grafana, Prometheus and the REST API are unreachable from the internet, and REST calls without credentials are rejected even on the home network.
-**Plans**: TBD
+**Plans**: 12 plans
+
+Plans:
+- [ ] 01-01-PLAN.md — Walking skeleton tracer: solution, runtime-role canary row over PostgreSQL, loopback health/metrics, release package and database-boundary tests
+- [ ] 01-02-PLAN.md — Supply-chain gate: lint harness (actionlint, zizmor, shellcheck, gitleaks), CI with PostgreSQL service container, Dependabot
+- [ ] 01-03-PLAN.md — Release pipeline: strict tag gate, attested draft release, deploy-environment-gated publish, GitHub settings guide
+- [ ] 01-04-PLAN.md — LXC installer: unauthenticated poll, offline attestation verify before unpack, migrate, activate, health, rollback, reporting
+- [ ] 01-05-PLAN.md — Encrypted local backups with GFS retention and freshness metrics, restore drill and live restore
+- [ ] 01-06-PLAN.md — REST API keys: hashed named keys, CLI, X-Api-Key auth on every endpoint, status endpoint
+- [ ] 01-07-PLAN.md — Certificate-protected key ring, fail-fast production config, secret redaction proven with sentinels
+- [ ] 01-08-PLAN.md — Grafana hardening, datasources, platform alerts and Prometheus config as code, validated in a real Grafana
+- [ ] 01-09-PLAN.md — Provisioning I: verified install pins, packages, accounts, secrets, socket-only PostgreSQL with peer-mapped roles
+- [ ] 01-10-PLAN.md — Provisioning II: services, default-drop firewall, Grafana accounts, on-host selfcheck, Traefik template, setup guide
+- [ ] 01-11-PLAN.md — Go-live bring-up: GitHub protections (verified read-only) and the provisioned LXC
+- [ ] 01-12-PLAN.md — First real release and live acceptance: attested deploy, restart/redeploy, refusal, restore drill, reachability
 **UI hint**: no
 
 ### Phase 2: Automatic ING Sync
@@ -119,7 +133,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Secure Platform & Release Pipeline | 0/TBD | Not started | - |
+| 1. Secure Platform & Release Pipeline | 0/12 | Planned | - |
 | 2. Automatic ING Sync | 0/TBD | Not started | - |
 | 3. Claude Reads the Ledger | 0/TBD | Not started | - |
 | 4. Trustworthy Categorisation | 0/TBD | Not started | - |
