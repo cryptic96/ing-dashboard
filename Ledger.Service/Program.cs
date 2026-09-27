@@ -1,11 +1,18 @@
+using System.Net;
 using System.Reflection;
 using Ledger.Repository;
+using Ledger.Service.Auth;
+using Ledger.Service.Cli;
+using Ledger.Service.Endpoints;
 using Ledger.Service.Health;
 using Ledger.Service.Hosting;
 using Ledger.Service.Security;
 using Ledger.Domain.Security;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Prometheus;
@@ -13,6 +20,11 @@ using LedgerMetrics = Ledger.Service.Metrics.LedgerMetrics;
 using HealthCheckMetricsPublisher = Ledger.Service.Metrics.HealthCheckMetricsPublisher;
 
 var builder = WebApplication.CreateBuilder(args);
+
+if (args.Length > 0 && args[0] == "apikey")
+{
+    return await ApiKeyCommand.RunAsync(args[1..], builder.Configuration);
+}
 
 builder.Services.Configure<KestrelServerOptions>(options => options.AddServerHeader = false);
 
@@ -38,11 +50,39 @@ builder.Services.Configure<HealthCheckPublisherOptions>(options =>
     options.Period = TimeSpan.FromSeconds(30);
 });
 
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    options.ForwardLimit = 1;
+
+    var knownProxies = builder.Configuration.GetSection("ReverseProxy:KnownProxies").Get<string[]>() ?? [];
+    foreach (var proxy in knownProxies)
+    {
+        if (IPAddress.TryParse(proxy, out var address))
+        {
+            options.KnownProxies.Add(address);
+        }
+    }
+});
+
+builder.Services
+    .AddAuthentication(ApiKeyAuthenticationHandler.SchemeName)
+    .AddScheme<AuthenticationSchemeOptions, ApiKeyAuthenticationHandler>(ApiKeyAuthenticationHandler.SchemeName, _ => { });
+
+builder.Services.AddAuthorization(options =>
+{
+    options.FallbackPolicy = new AuthorizationPolicyBuilder()
+        .RequireAuthenticatedUser()
+        .Build();
+});
+
 var app = builder.Build();
 
 var opsPort = OpsEndpoint.FromConfiguration(app.Configuration);
 
 LedgerMetrics.RecordBuildInfo(Assembly.GetExecutingAssembly());
+
+app.UseForwardedHeaders();
 
 app.UseHealthChecks("/health", opsPort, new HealthCheckOptions
 {
@@ -51,7 +91,15 @@ app.UseHealthChecks("/health", opsPort, new HealthCheckOptions
 app.UseMetricServer(opsPort);
 app.UseHttpMetrics();
 
+app.UseRouting();
+app.UseAuthentication();
+app.UseAuthorization();
+
+app.MapStatusEndpoints();
+
 await app.RunAsync();
+
+return 0;
 
 /// <summary>Entry point for the ledger host, exposed as a partial class so the integration test factory can boot it in-process.</summary>
 public partial class Program;

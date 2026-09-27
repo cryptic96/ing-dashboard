@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly NAME_PATTERN='^[a-z][a-z0-9-]{1,31}$'
+
+usage() {
+  echo "Usage: ledger-apikey create NAME | list | revoke NAME" >&2
+  exit 2
+}
+
+require_root() {
+  if [ "$(id -u)" -ne 0 ]; then
+    echo "ledger-apikey must be run as root." >&2
+    exit 1
+  fi
+}
+
+run_apikey_command() {
+  exec systemd-run --quiet --pipe --wait --collect \
+    --uid=ledger --gid=ledger \
+    --property=EnvironmentFile=/etc/ledger/ledger.env \
+    --working-directory=/opt/ledger/current/app \
+    /usr/bin/dotnet /opt/ledger/current/app/Ledger.Service.dll apikey "$@"
+}
+
+require_root
+
+if [ "$#" -lt 1 ]; then
+  usage
+fi
+
+case "$1" in
+  create|revoke)
+    if [ "$#" -ne 2 ]; then
+      usage
+    fi
+    if ! [[ "$2" =~ $NAME_PATTERN ]]; then
+      echo "Invalid key name '$2'." >&2
+      exit 1
+    fi
+    run_apikey_command "$1" "$2"
+    ;;
+  list)
+    if [ "$#" -ne 1 ]; then
+      usage
+    fi
+    run_apikey_command list
+    ;;
+  *)
+    usage
+    ;;
+esac
