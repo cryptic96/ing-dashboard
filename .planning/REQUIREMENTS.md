@@ -87,9 +87,9 @@ Requirements for initial release. Each maps to roadmap phases.
 - [ ] **SEC-05**: The database is reachable only from inside the app's LXC over its local Unix socket (no network listener), with OS-user-to-role peer authentication
 - [ ] **SEC-06**: Secrets and financial details never appear in logs, exception messages or metric labels
 - [ ] **SEC-07**: A semver tag triggers a build on a GitHub-hosted runner that produces a release artifact with build-provenance attestation; the server verifies the attestation before deploying
-- [ ] **SEC-08**: Deploys are pull-based: no self-hosted runner exists, and no GitHub-executed code runs on the server; a release is published only after approval on a GitHub Environment with a required reviewer, and the server installs only published releases from `main`; workflow runs from outside contributors require approval; release-tag creation is restricted
-- [ ] **SEC-09**: All third-party GitHub Actions are pinned to commit SHAs and kept current by Dependabot; no workflow interpolates untrusted values directly into shell commands
-- [ ] **SEC-10**: The repository contains no personal data: secret scanning and push protection stay enabled, CI scans the full history for secrets, and all test data is synthetic
+- [x] **SEC-08**: Deploys are pull-based: no self-hosted runner exists, and no GitHub-executed code runs on the server; a release is published only after approval on a GitHub Environment with a required reviewer, and the server installs only published releases from `main`; workflow runs from outside contributors require approval; release-tag creation is restricted
+- [x] **SEC-09**: All third-party GitHub Actions are pinned to commit SHAs and kept current by Dependabot; no workflow interpolates untrusted values directly into shell commands
+- [x] **SEC-10**: The repository contains no personal data: secret scanning and push protection stay enabled, CI scans the full history for secrets, and all test data is synthetic
 
 ### REST API
 
@@ -200,13 +200,14 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SEC-05 | Phase 1 | Pending |
 | SEC-06 | Phase 1 | Pending |
 | SEC-07 | Phase 1 | Pending |
-| SEC-08 | Phase 1 | Pending |
-| SEC-09 | Phase 1 | Pending |
-| SEC-10 | Phase 1 | Pending |
+| SEC-08 | Phase 1 | Complete |
+| SEC-09 | Phase 1 | Complete |
+| SEC-10 | Phase 1 | Complete |
 | API-01 | Phase 6 | Pending |
 | API-02 | Phase 1 | Pending |
 
 **Coverage:**
+
 - v1 requirements: 65 total
 - Mapped to phases: 65
 - Unmapped: 0
