@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -17,16 +18,25 @@ public class LedgerWebApplicationFactory : WebApplicationFactory<Program>
 {
     private readonly string _ledgerConnectionString;
     private readonly string? _contentRootOverride;
+    private readonly Action<IServiceCollection>? _configureTestServices;
     private readonly CapturingLoggerProvider _loggerProvider = new();
     private IHost? _realHost;
 
     /// <summary>Creates the factory. Picks two free loopback ports immediately so callers can build clients before starting the host.</summary>
-    public LedgerWebApplicationFactory(string ledgerConnectionString, string? contentRootOverride = null)
+    public LedgerWebApplicationFactory(
+        string ledgerConnectionString,
+        string? contentRootOverride = null,
+        string? certificatePath = null,
+        string? certificatePassword = null,
+        Action<IServiceCollection>? configureTestServices = null)
     {
         _ledgerConnectionString = ledgerConnectionString;
         _contentRootOverride = contentRootOverride;
+        _configureTestServices = configureTestServices;
         ApiPort = GetFreeLoopbackPort();
         OpsPort = GetFreeLoopbackPort();
+
+        ApplyCertificateEnvironmentVariables(certificatePath, certificatePassword);
 
         EnsureHostStarted();
     }
@@ -67,6 +77,11 @@ public class LedgerWebApplicationFactory : WebApplicationFactory<Program>
         });
 
         builder.ConfigureLogging(logging => logging.AddProvider(_loggerProvider));
+
+        if (_configureTestServices is not null)
+        {
+            builder.ConfigureTestServices(_configureTestServices);
+        }
     }
 
     /// <inheritdoc />
@@ -123,6 +138,13 @@ public class LedgerWebApplicationFactory : WebApplicationFactory<Program>
     private void EnsureHostStarted()
     {
         _ = Server;
+    }
+
+    /// <summary>Sets or clears the process-level certificate environment variables Program.cs reads eagerly, before WebApplicationFactory's configuration overrides merge in.</summary>
+    private static void ApplyCertificateEnvironmentVariables(string? certificatePath, string? certificatePassword)
+    {
+        Environment.SetEnvironmentVariable("DataProtection__CertificatePath", certificatePath);
+        Environment.SetEnvironmentVariable("DataProtection__CertificatePassword", certificatePassword);
     }
 
     private static int GetFreeLoopbackPort()

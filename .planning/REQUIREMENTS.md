@@ -74,7 +74,7 @@ Requirements for initial release. Each maps to roadmap phases.
 - [ ] **OPS-02**: Alerts fire when syncs fail and when bank consent is 14 and 7 days from expiry
 - [x] **OPS-03**: App, PostgreSQL, Grafana and Prometheus run in one LXC as systemd services; setup is automated where possible and any one-time steps are documented step by step
 - [x] **OPS-04**: Finance database backups are encrypted, and a restore procedure is documented and tested
-- [ ] **OPS-05**: Data Protection keys are persisted, so encrypted bank credentials survive restarts and redeploys (verified by an actual restart)
+- [x] **OPS-05**: Data Protection keys are persisted, so encrypted bank credentials survive restarts and redeploys (verified by an actual restart)
 - [ ] **OPS-06**: All period bucketing (days, months, years) uses the Europe/Amsterdam time zone
 - [x] **OPS-07**: Database schema changes ship as Entity Framework Core migrations and are applied automatically during deployment with the migrator role
 
@@ -190,7 +190,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | OPS-02 | Phase 2 | Pending |
 | OPS-03 | Phase 1 | Complete |
 | OPS-04 | Phase 1 | Complete |
-| OPS-05 | Phase 1 | Pending |
+| OPS-05 | Phase 1 | Complete |
 | OPS-06 | Phase 3 | Pending |
 | OPS-07 | Phase 1 | Complete |
 | SEC-01 | Phase 2 | Pending |
