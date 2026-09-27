@@ -1,0 +1,42 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-09-27T22:19:13.584Z",
+  "phase": "01",
+  "phase_name": "secure-platform-release-pipeline",
+  "phase_dir": ".planning/phases/01-secure-platform-release-pipeline",
+  "plan": 11,
+  "task": 3,
+  "total_tasks": 3,
+  "status": "paused",
+  "completed_tasks": [
+    {"id": 1, "name": "Apply the GitHub repository protections", "status": "done", "commit": null, "note": "operator-applied; orchestrator created the deploy environment with explicit user approval"},
+    {"id": 2, "name": "Verify the GitHub protections read-only", "status": "done", "commit": "build/check-github-settings.sh (hash changed by the history rewrite)"},
+    {"id": 3, "name": "Build and provision the ledger LXC, then run the pre-deploy selfcheck", "status": "in_progress", "progress": "LXC provisioned after fix f410828; Traefik route and certificates live; Grafana verified through Traefik; selfcheck --pre-deploy at 10 FAIL (triaged in .continue-here.md)"}
+  ],
+  "remaining_tasks": [
+    {"id": 3, "name": "Fix selfcheck false positives, pre-deploy skips, node-exporter binding and local MTA; re-provision; selfcheck to 0 FAIL; operator runs --grafana-admin", "status": "in_progress"},
+    {"id": "summary", "name": "Write 01-11-SUMMARY.md with deviations and evidence; update tracking", "status": "not_started"},
+    {"id": "01-12", "name": "Wave 6: PR to main (user consent), tag v0.1.0, approve deploy, go-live verification", "status": "not_started"}
+  ],
+  "blockers": [
+    {"description": "ledger-selfcheck --pre-deploy reports 10 FAIL: check bugs, pre-deploy expectations, node exporter on *:9100, local MTA on loopback:25", "type": "technical", "workaround": "none needed for safety: firewall verified blocking; fix before go-live"}
+  ],
+  "async_jobs": [],
+  "human_actions_pending": [
+    {"action": "Copy /etc/ledger/dataprotection.pfx and the DataProtection__CertificatePassword line into the password manager", "context": "losing them makes encrypted data unrecoverable; Claude must not read them", "blocking": true},
+    {"action": "Run provision.sh --only 60-grafana-accounts from a terminal (pct enter) and store the logins in the password manager", "context": "passwords are typed at hidden prompts and must not pass through Claude", "blocking": true},
+    {"action": "Run ledger-selfcheck --pre-deploy --grafana-admin after the fixes and paste the output", "context": "the admin check prompts for the Grafana admin credentials", "blocking": true},
+    {"action": "Sign in with a Viewer account from a LAN browser and confirm the certificate", "context": "01-11 Task 3 verification", "blocking": true},
+    {"action": "Optionally delete the Cloudflare records for the two ledger hostnames", "context": "not needed: the router resolves them and certificates use the DNS challenge", "blocking": false}
+  ],
+  "decisions": [
+    {"decision": "Worktrees fork from HEAD (worktree.baseRef head, local settings)", "rationale": "the milestone branch has diverged from main", "phase": "01"},
+    {"decision": "Create the deploy environment instead of retargeting release.yml to production", "rationale": "keeps workflow, docs and check script consistent", "phase": "01"},
+    {"decision": "Rewrite all history to the GitHub noreply identity", "rationale": "user request; removes personal name and email from the public repository", "phase": "01"},
+    {"decision": "First provisioning from a milestone-branch clone", "rationale": "no release tag yet; main lacks the code until the 01-12 pull request", "phase": "01"},
+    {"decision": "Plaintext LAN mail relay (STARTTLS off)", "rationale": "the relay offers no STARTTLS; alert emails carry no financial details", "phase": "01"}
+  ],
+  "uncommitted_files": [],
+  "next_action": "Read .git/gsd-orch/infra-notes.md (local only), fix deploy/bin/ledger-selfcheck false positives and pre-deploy skips plus node-exporter loopback binding and the local MTA in the repo, push, git pull on the LXC, re-run provisioning and sudo ledger-selfcheck --pre-deploy until 0 FAIL",
+  "context_notes": "First real-host bring-up; every committed file must stay free of real addresses, hostnames and emails. Real values are only in the untracked .git/gsd-orch/infra-notes.md. Claude holds temporary SSH access to two containers that must be removed after go-live."
+}
