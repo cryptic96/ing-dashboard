@@ -1,0 +1,264 @@
+using System.Net;
+using System.Text;
+using FluentAssertions;
+using Ledger.IntegrationTests.Infrastructure;
+using Ledger.Repository;
+using Ledger.Repository.Stores;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.Extensions.DependencyInjection;
+
+namespace Ledger.IntegrationTests.Security;
+
+/// <summary>Proves secrets sent as headers, query strings, paths or configuration values never reach logs, responses or metrics.</summary>
+[Collection("Database")]
+public class LogRedactionTests(DatabaseFixture fixture)
+{
+    [Fact]
+    [Trait("Category", "LogRedaction")]
+    public async Task Sentinel_in_header_query_and_path_never_reaches_logs_responses_or_metrics()
+    {
+        var sentinel = $"LedgerSentinel{Guid.NewGuid():N}";
+        var urlEncodedSentinel = Uri.EscapeDataString(sentinel);
+        var base64Sentinel = Convert.ToBase64String(Encoding.UTF8.GetBytes(sentinel));
+        var base64UrlSafeSentinel = base64Sentinel.Replace('+', '-').Replace('/', '_').TrimEnd('=');
+
+        var (_, validToken, _) = await CreateActiveKeyAsync("log-redaction-test");
+
+        await using var factory = new LedgerWebApplicationFactory(fixture.ConnectionStringFor("ledger_runtime"));
+        using var client = factory.CreateApiClient();
+        await WaitUntilReadyAsync(factory);
+
+        var responseBodies = new List<string>();
+
+        using (var headerRequest = new HttpRequestMessage(HttpMethod.Get, "/api/v1/status"))
+        {
+            headerRequest.Headers.Add("X-Api-Key", sentinel);
+            using var headerResponse = await client.SendAsync(headerRequest, TestContext.Current.CancellationToken);
+            responseBodies.Add(await headerResponse.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+        }
+
+        using (var queryRequest = new HttpRequestMessage(HttpMethod.Get, $"/api/v1/status?probe={urlEncodedSentinel}"))
+        {
+            queryRequest.Headers.Add("X-Api-Key", validToken);
+            using var queryResponse = await client.SendAsync(queryRequest, TestContext.Current.CancellationToken);
+            responseBodies.Add(await queryResponse.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+        }
+
+        using (var pathRequest = new HttpRequestMessage(HttpMethod.Get, $"/api/v1/{base64UrlSafeSentinel}"))
+        {
+            pathRequest.Headers.Add("X-Api-Key", validToken);
+            using var pathResponse = await client.SendAsync(pathRequest, TestContext.Current.CancellationToken);
+            responseBodies.Add(await pathResponse.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+        }
+
+        using var opsClient = factory.CreateOpsClient();
+        using var metricsResponse = await opsClient.GetAsync("/metrics", TestContext.Current.CancellationToken);
+        var metricsBody = await metricsResponse.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+
+        var logText = string.Join('\n', factory.CapturedLogMessages);
+
+        foreach (var marker in new[] { sentinel, urlEncodedSentinel, base64Sentinel, base64UrlSafeSentinel })
+        {
+            logText.Should().NotContain(marker);
+            metricsBody.Should().NotContain(marker);
+            responseBodies.Should().OnlyContain(body => !body.Contains(marker, StringComparison.Ordinal));
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "LogRedaction")]
+    public async Task Sentinel_connection_string_password_never_reaches_logs_or_the_health_response()
+    {
+        var sentinel = $"LedgerSentinelDbPass{Guid.NewGuid():N}";
+        var badConnectionString = $"Host=/nonexistent;Database=ledger;Username=ledger_runtime;Password={sentinel}";
+
+        await using var factory = new LedgerWebApplicationFactory(badConnectionString);
+        using var opsClient = factory.CreateOpsClient();
+
+        using var response = await WaitForStatusAsync(opsClient, HttpStatusCode.ServiceUnavailable);
+        var body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+
+        response.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
+        body.Should().NotContain(sentinel);
+
+        var logText = string.Join('\n', factory.CapturedLogMessages);
+        logText.Should().NotContain(sentinel);
+    }
+
+    [Fact]
+    [Trait("Category", "LogRedaction")]
+    public void Sentinel_certificate_password_never_reaches_the_startup_exception_chain()
+    {
+        var sentinel = $"LedgerSentinelCertPass{Guid.NewGuid():N}";
+
+        var act = () => new LedgerWebApplicationFactory(
+            fixture.ConnectionStringFor("ledger_runtime"),
+            certificatePath: "/nonexistent/ledger-sentinel-cert.pfx",
+            certificatePassword: sentinel);
+
+        var exception = act.Should().Throw<Exception>().Which;
+        var messages = AllMessages(exception).ToList();
+
+        messages.Should().NotContain(message => message.Contains(sentinel));
+    }
+
+    [Fact]
+    [Trait("Category", "LogRedaction")]
+    public async Task Unhandled_exception_returns_problem_json_without_sentinel_stack_trace_or_exception_type()
+    {
+        var sentinel = $"LedgerSentinelException{Guid.NewGuid():N}";
+        var (_, token, _) = await CreateActiveKeyAsync("throwing-endpoint-test");
+
+        await using var factory = new LedgerWebApplicationFactory(
+            fixture.ConnectionStringFor("ledger_runtime"),
+            configureTestServices: services =>
+                services.AddSingleton<IStartupFilter>(new ThrowingEndpointStartupFilter(sentinel)));
+        using var client = factory.CreateApiClient();
+        await WaitUntilReadyAsync(factory);
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/v1/__test-throw");
+        request.Headers.Add("X-Api-Key", token);
+        using var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+
+        response.StatusCode.Should().Be(HttpStatusCode.InternalServerError);
+        response.Content.Headers.ContentType?.MediaType.Should().Be("application/problem+json");
+
+        var body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        body.Should().NotContain(sentinel);
+        body.Should().NotContain("StackTrace");
+        body.Should().NotContain(nameof(InvalidOperationException));
+    }
+
+    [Fact]
+    [Trait("Category", "LogRedaction")]
+    public async Task Empty_api_key_header_returns_401_not_500_and_is_never_logged()
+    {
+        await using var factory = new LedgerWebApplicationFactory(fixture.ConnectionStringFor("ledger_runtime"));
+        using var client = factory.CreateApiClient();
+        await WaitUntilReadyAsync(factory);
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/v1/status");
+        request.Headers.Add("X-Api-Key", "");
+        using var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+
+        var logText = string.Join('\n', factory.CapturedLogMessages);
+        logText.Should().NotContain("X-Api-Key: ");
+    }
+
+    [Fact]
+    [Trait("Category", "LogRedaction")]
+    public async Task Resolved_db_context_options_report_sensitive_data_logging_disabled()
+    {
+        await using var factory = new LedgerWebApplicationFactory(fixture.ConnectionStringFor("ledger_runtime"));
+        using var opsClient = factory.CreateOpsClient();
+        using var readyResponse = await WaitForStatusAsync(opsClient, HttpStatusCode.OK);
+        readyResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var options = factory.Services.GetRequiredService<DbContextOptions<LedgerDbContext>>();
+        var coreOptionsExtension = options.FindExtension<CoreOptionsExtension>();
+
+        coreOptionsExtension.Should().NotBeNull();
+        coreOptionsExtension!.IsSensitiveDataLoggingEnabled.Should().BeFalse();
+    }
+
+    private static IEnumerable<string> AllMessages(Exception? exception)
+    {
+        while (exception is not null)
+        {
+            yield return exception.Message;
+            exception = exception.InnerException;
+        }
+    }
+
+    private async Task<(string Name, string Token, string KeyId)> CreateActiveKeyAsync(string name)
+    {
+        await using var context = CreateRuntimeContext();
+        var store = new ApiKeyStore(context);
+        var created = await store.CreateAsync(name, TestContext.Current.CancellationToken);
+        return (created.Name, created.Token, created.KeyId);
+    }
+
+    private LedgerDbContext CreateRuntimeContext()
+    {
+        var optionsBuilder = new DbContextOptionsBuilder<LedgerDbContext>();
+        optionsBuilder.UseNpgsql(fixture.ConnectionStringFor("ledger_runtime"));
+        return new LedgerDbContext(optionsBuilder.Options);
+    }
+
+    private static async Task WaitUntilReadyAsync(LedgerWebApplicationFactory factory)
+    {
+        using var opsClient = factory.CreateOpsClient();
+        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(30);
+
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            try
+            {
+                using var response = await opsClient.GetAsync("/health", TestContext.Current.CancellationToken);
+                if (response.StatusCode == HttpStatusCode.OK)
+                {
+                    return;
+                }
+            }
+            catch (HttpRequestException)
+            {
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(250), TestContext.Current.CancellationToken);
+        }
+
+        throw new TimeoutException("The ops endpoint never became healthy within the timeout.");
+    }
+
+    private static async Task<HttpResponseMessage> WaitForStatusAsync(
+        HttpClient client,
+        HttpStatusCode expectedStatus,
+        TimeSpan? timeout = null)
+    {
+        var deadline = DateTimeOffset.UtcNow + (timeout ?? TimeSpan.FromSeconds(30));
+        HttpResponseMessage? last = null;
+
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            try
+            {
+                last?.Dispose();
+                last = await client.GetAsync("/health", TestContext.Current.CancellationToken);
+
+                if (last.StatusCode == expectedStatus)
+                {
+                    return last;
+                }
+            }
+            catch (HttpRequestException)
+            {
+                last = null;
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(250), TestContext.Current.CancellationToken);
+        }
+
+        return last ?? throw new TimeoutException(
+            $"The ops endpoint never reached status {expectedStatus} within the timeout.");
+    }
+
+    /// <summary>Test-only middleware adding an authenticated endpoint that always throws, proving unhandled exceptions never leak to callers.</summary>
+    private sealed class ThrowingEndpointStartupFilter(string sentinel) : IStartupFilter
+    {
+        public Action<IApplicationBuilder> Configure(Action<IApplicationBuilder> next)
+        {
+            return app =>
+            {
+                next(app);
+
+                app.Map("/api/v1/__test-throw", branch => branch.Run(_ =>
+                    throw new InvalidOperationException($"boom-{sentinel}")));
+            };
+        }
+    }
+}

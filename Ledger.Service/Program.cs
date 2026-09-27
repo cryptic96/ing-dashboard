@@ -28,9 +28,14 @@ if (args.Length > 0 && args[0] == "apikey")
 if (builder.Environment.IsProduction())
 {
     ProductionConfigurationValidator.ThrowIfInvalid(builder.Configuration);
+
+    builder.Logging.ClearProviders();
+    builder.Logging.AddSystemdConsole();
 }
 
 builder.Services.Configure<KestrelServerOptions>(options => options.AddServerHeader = false);
+
+builder.Services.AddProblemDetails();
 
 builder.Services.AddLedgerRepository(builder.Configuration);
 
@@ -84,6 +89,15 @@ var opsPort = OpsEndpoint.FromConfiguration(app.Configuration);
 LedgerMetrics.RecordBuildInfo(Assembly.GetExecutingAssembly());
 
 app.UseForwardedHeaders();
+
+if (app.Environment.IsDevelopment())
+{
+    app.UseDeveloperExceptionPage();
+}
+else
+{
+    app.UseExceptionHandler();
+}
 
 app.UseHealthChecks("/health", opsPort, new HealthCheckOptions
 {
