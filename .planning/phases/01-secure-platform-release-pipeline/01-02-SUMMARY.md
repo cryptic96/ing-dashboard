@@ -242,3 +242,10 @@ None.
 ---
 *Phase: 01-secure-platform-release-pipeline*
 *Completed: 2026-09-27*
+
+## Orchestrator Follow-up (post-merge, wave 2)
+
+- Remote CI verification (deferred above) completed after merging wave 2 and pushing `milestone/v1-household-ledger`: run 36346235513 concluded **success** (`lint` and `build-test` both green).
+- Post-merge fixes required before CI passed on the combined tree:
+  - `fix: resolve post-merge secret-scan false positives from wave 2` (3f602b4) — `.gitleaks.toml` allowlists for pinned public OpenPGP key fingerprints in `deploy/versions.env` (exact `*_KEY_FINGERPRINT=<40 hex>` match, AND-ed with the path), reserved placeholder TLDs in email matches, and gitignored build output in the working-tree scan. Verified a planted token in `deploy/versions.env` is still caught.
+  - `fix: prove the attestation verifier strips ambient GitHub tokens` — the installer network test (plan 01-04) asserted its own environment had no token, which failed on CI where the lint job exports `GH_TOKEN`. It now verifies with sentinel tokens exported and records via a gh wrapper that none reach `gh`; a mutation removing the `env -u` scrub is caught.
