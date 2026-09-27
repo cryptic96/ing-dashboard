@@ -1,0 +1,530 @@
+#!/usr/bin/env bash
+###
+### On-host acceptance checks proving the running platform is locked down.
+### Every check prints PASS or FAIL with a short reason; the script exits 1
+### if any check failed. Run as root on the ledger host.
+###
+### Usage: ledger-selfcheck [--pre-deploy] [--restart-check] [--grafana-admin]
+###
+###   --pre-deploy     skip the app, deploy and backup-age checks (used by
+###                    the installer before activating a new release)
+###   --restart-check  restart the app and require the health canary to
+###                    stay healthy afterward (proves the Data Protection
+###                    key ring survives a restart)
+###   --grafana-admin  prompt for the Grafana admin credentials (hidden,
+###                    never on the command line) to verify account roles
+###                    and datasource health
+###
+set -uo pipefail
+
+COMMON_SH="/usr/local/lib/ledger/common.sh"
+if [[ -f "$COMMON_SH" ]]; then
+  # shellcheck source=/dev/null
+  source "$COMMON_SH"
+else
+  ledger_log() { printf '%s %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*" >&2; }
+fi
+
+FAILURES=0
+
+pass() {
+  echo "PASS - $*"
+}
+
+fail() {
+  echo "FAIL - $*"
+  FAILURES=$((FAILURES + 1))
+}
+
+PRE_DEPLOY=0
+RESTART_CHECK=0
+GRAFANA_ADMIN=0
+
+for arg in "$@"; do
+  case "$arg" in
+    --pre-deploy) PRE_DEPLOY=1 ;;
+    --restart-check) RESTART_CHECK=1 ;;
+    --grafana-admin) GRAFANA_ADMIN=1 ;;
+    *)
+      echo "Unknown argument: $arg" >&2
+      echo "Usage: ledger-selfcheck [--pre-deploy] [--restart-check] [--grafana-admin]" >&2
+      exit 2
+      ;;
+  esac
+done
+
+check_service_active() {
+  local unit="$1"
+  if systemctl is-active --quiet "$unit"; then
+    pass "service active: ${unit}"
+  else
+    fail "service not active: ${unit}"
+  fi
+}
+
+check_timer_enabled() {
+  local unit="$1"
+  if systemctl is-enabled --quiet "$unit"; then
+    pass "timer enabled: ${unit}"
+  else
+    fail "timer not enabled: ${unit}"
+  fi
+}
+
+check_services() {
+  local pg_service
+  pg_service="$(systemctl list-units --type=service --no-legend --all 'postgresql@*-main.service' 2> /dev/null \
+    | awk '{print $1}' | head -n1)"
+  if [[ -n "$pg_service" ]]; then
+    check_service_active "$pg_service"
+  else
+    fail "no postgresql@*-main.service unit found"
+  fi
+
+  check_service_active prometheus
+  check_service_active prometheus-node-exporter
+  check_service_active grafana-server
+
+  if [[ "$PRE_DEPLOY" -eq 0 ]]; then
+    check_service_active ledger
+  fi
+
+  check_timer_enabled ledger-deploy-poll.timer
+  check_timer_enabled ledger-backup.timer
+}
+
+check_postgres() {
+  local listen_addresses
+  listen_addresses="$(runuser -u postgres -- psql -Atc 'SHOW listen_addresses' 2> /dev/null || true)"
+  if [[ -z "$listen_addresses" ]]; then
+    pass "PostgreSQL listen_addresses is empty"
+  else
+    fail "PostgreSQL listen_addresses is '${listen_addresses}', expected empty"
+  fi
+
+  if ss -Hltnp 2> /dev/null | grep -q 'postgres'; then
+    fail "a TCP socket is owned by postgres; PostgreSQL must be socket-only"
+  else
+    pass "no TCP socket is owned by postgres"
+  fi
+
+  local non_local_rules
+  non_local_rules="$(runuser -u postgres -- psql -Atc \
+    "SELECT count(*) FROM pg_hba_file_rules WHERE type <> 'local'" 2> /dev/null || echo -1)"
+  if [[ "$non_local_rules" == "0" ]]; then
+    pass "pg_hba_file_rules has only local rules"
+  else
+    fail "pg_hba_file_rules reports ${non_local_rules} non-local rule(s)"
+  fi
+
+  local role rolsuper
+  for role in ledger_runtime ledger_migrator grafana_reader ledger_backup; do
+    rolsuper="$(runuser -u postgres -- psql -Atc \
+      "SELECT rolsuper FROM pg_roles WHERE rolname = '${role}'" 2> /dev/null || echo '?')"
+    if [[ "$rolsuper" == "f" ]]; then
+      pass "role ${role} is not a superuser"
+    else
+      fail "role ${role} rolsuper is '${rolsuper}', expected f"
+    fi
+  done
+
+  local create_table_error
+  create_table_error="$(runuser -u ledger -- psql -d ledger -U ledger_runtime -Atc \
+    'BEGIN; CREATE TABLE ledger_selfcheck_probe(x int); ROLLBACK;' 2>&1 || true)"
+  if printf '%s' "$create_table_error" | grep -q '42501'; then
+    pass "ledger_runtime cannot CREATE TABLE (42501 insufficient_privilege)"
+  else
+    fail "ledger_runtime CREATE TABLE did not fail with 42501: ${create_table_error}"
+  fi
+
+  # The Grafana OS user is pinned to "grafana" in deploy/versions.env
+  # (GRAFANA_SERVICE_USER), confirmed against the real packaged service.
+  local select_error
+  select_error="$(runuser -u grafana -- psql -d ledger -U grafana_reader -Atc \
+    'SELECT * FROM data_protection_keys LIMIT 1' 2>&1 || true)"
+  if printf '%s' "$select_error" | grep -q '42501'; then
+    pass "grafana_reader cannot read data_protection_keys (42501 insufficient_privilege), proving the ledger-reporting peer mapping"
+  else
+    fail "grafana_reader SELECT on data_protection_keys did not fail with 42501: ${select_error}"
+  fi
+
+  if runuser -u ledger -- psql -d ledger -U ledger_migrator -Atc 'select 1' > /dev/null 2>&1; then
+    fail "OS user ledger was able to reach role ledger_migrator; peer auth is not isolating roles"
+  else
+    pass "OS user ledger cannot log in as ledger_migrator"
+  fi
+}
+
+check_mode_owner() {
+  local path="$1" expected_mode="$2" expected_owner="$3"
+  if [[ ! -e "$path" ]]; then
+    fail "${path}: not found"
+    return
+  fi
+  local actual_mode actual_owner
+  actual_mode="$(stat -c '%a' "$path")"
+  actual_owner="$(stat -c '%U:%G' "$path")"
+  if [[ "$actual_mode" == "$expected_mode" && "$actual_owner" == "$expected_owner" ]]; then
+    pass "${path}: mode ${expected_mode}, owner ${expected_owner}"
+  else
+    fail "${path}: expected mode ${expected_mode} owner ${expected_owner}, got mode ${actual_mode} owner ${actual_owner}"
+  fi
+}
+
+check_files() {
+  check_mode_owner /etc/ledger 750 root:ledger
+  check_mode_owner /etc/ledger/ledger.env 640 root:ledger
+  check_mode_owner /etc/ledger/dataprotection.pfx 640 root:ledger
+  check_mode_owner /etc/ledger/deploy.conf 600 root:root
+  check_mode_owner /etc/ledger/provision.conf 600 root:root
+  check_mode_owner /var/backups/ledger 700 ledger_backup:ledger_backup
+
+  if [[ -f /etc/ledger/backup-recipients.txt ]]; then
+    if grep -vqE '^age1[0-9a-z]+$|^$' /etc/ledger/backup-recipients.txt; then
+      fail "backup-recipients.txt contains a line that is not an age1 public key"
+    else
+      pass "backup-recipients.txt contains only age1 public keys"
+    fi
+  else
+    fail "backup-recipients.txt not found"
+  fi
+}
+
+check_secrets_hygiene() {
+  # Built from two fragments so this script never contains the whole
+  # private-identity marker as a single literal string.
+  local frag1="AGE-SECRET-KEY-" frag2="1"
+  local needle="${frag1}${frag2}"
+  local hit
+  hit="$(grep -rlIE "$needle" /etc /root /home /opt /var/backups /var/lib/ledger /var/lib/ledger-deploy /tmp \
+    2> /dev/null | head -n1 || true)"
+  if [[ -z "$hit" ]]; then
+    pass "no age private identity text found under any checked path"
+  else
+    fail "an age private identity was found: ${hit}"
+  fi
+
+  if runuser -u root -- gh auth status > /dev/null 2>&1; then
+    fail "root's gh has a stored login"
+  else
+    pass "root's gh has no stored login"
+  fi
+
+  if grep -rlE 'GH_TOKEN=|GITHUB_TOKEN=' /etc/ledger 2> /dev/null | grep -q .; then
+    fail "a GH_TOKEN or GITHUB_TOKEN value was found under /etc/ledger"
+  else
+    pass "no GH_TOKEN or GITHUB_TOKEN under /etc/ledger"
+  fi
+
+  local runner_found=0
+  if compgen -G "/opt/actions-runner*" > /dev/null 2>&1; then
+    runner_found=1
+  fi
+  if compgen -G "/etc/systemd/system/actions.runner*" > /dev/null 2>&1; then
+    runner_found=1
+  fi
+  if pgrep -f 'Runner\.Listener' > /dev/null 2>&1; then
+    runner_found=1
+  fi
+  if [[ "$runner_found" -eq 0 ]]; then
+    pass "no GitHub Actions runner directory, process or unit found"
+  else
+    fail "a GitHub Actions runner directory, process or unit was found"
+  fi
+}
+
+check_loopback_only_port() {
+  local port="$1" ss_output="$2"
+  local lines
+  lines="$(printf '%s\n' "$ss_output" | awk -v p=":${port}\$" '$4 ~ p')"
+  if [[ -z "$lines" ]]; then
+    fail "nothing is listening on port ${port}"
+    return
+  fi
+  if printf '%s\n' "$lines" | grep -qvE "127\.0\.0\.1:${port}[[:space:]]"; then
+    fail "port ${port} is bound beyond loopback: ${lines}"
+  else
+    pass "port ${port} is bound to loopback only"
+  fi
+}
+
+check_listeners() {
+  local ss_output
+  ss_output="$(ss -Hltnp 2> /dev/null || true)"
+
+  check_loopback_only_port 5081 "$ss_output"
+  check_loopback_only_port 9090 "$ss_output"
+  check_loopback_only_port 9100 "$ss_output"
+
+  if printf '%s\n' "$ss_output" | grep -qE ':5080[[:space:]]'; then
+    pass "port 5080 is listening"
+  else
+    fail "port 5080 is not listening"
+  fi
+  if printf '%s\n' "$ss_output" | grep -qE ':3000[[:space:]]'; then
+    pass "port 3000 is listening"
+  else
+    fail "port 3000 is not listening"
+  fi
+  if printf '%s\n' "$ss_output" | grep -qE ':5432[[:space:]]'; then
+    fail "something is listening on port 5432; PostgreSQL must be socket-only"
+  else
+    pass "nothing is listening on port 5432"
+  fi
+
+  local other
+  other="$(printf '%s\n' "$ss_output" \
+    | grep -viE 'sshd|:5081[[:space:]]|:9090[[:space:]]|:9100[[:space:]]|:5080[[:space:]]|:3000[[:space:]]' \
+    | sed '/^[[:space:]]*$/d' || true)"
+  if [[ -z "$other" ]]; then
+    pass "no unexpected listeners besides sshd"
+  else
+    fail "unexpected listener(s) found: ${other}"
+  fi
+}
+
+check_firewall() {
+  if nft list tables 2> /dev/null | grep -q 'inet ledger_filter'; then
+    pass "nftables table inet ledger_filter exists"
+  else
+    fail "nftables table inet ledger_filter not found"
+    return
+  fi
+
+  if nft list chain inet ledger_filter input 2> /dev/null | grep -q 'policy drop'; then
+    pass "input chain policy is drop"
+  else
+    fail "input chain policy is not drop"
+  fi
+
+  local traefik_ip=""
+  if [[ -f /etc/ledger/provision.conf ]]; then
+    traefik_ip="$(grep -E '^LEDGER_TRAEFIK_IP=' /etc/ledger/provision.conf | head -n1 | cut -d= -f2-)"
+  fi
+  if [[ -n "$traefik_ip" ]] && nft list chain inet ledger_filter input 2> /dev/null | grep -q "$traefik_ip"; then
+    pass "a rule admits 5080/3000 only from the configured reverse proxy address"
+  else
+    fail "no rule found admitting 5080/3000 from the configured reverse proxy address"
+  fi
+}
+
+check_app() {
+  local health
+  health="$(curl --fail --silent --show-error --max-time 5 http://127.0.0.1:5081/health 2> /dev/null || true)"
+  if [[ "$health" == "Healthy" ]]; then
+    pass "/health reports Healthy"
+  else
+    fail "/health did not report Healthy (got: ${health})"
+  fi
+
+  local metrics_version current_version
+  metrics_version="$(curl --fail --silent --show-error --max-time 5 http://127.0.0.1:5081/metrics 2> /dev/null \
+    | awk -F'"' '/ledger_build_info/{print $2; exit}')"
+  current_version="$(basename "$(readlink -f /opt/ledger/current 2> /dev/null)" 2> /dev/null || true)"
+  if [[ -n "$metrics_version" && "$metrics_version" == "$current_version" ]]; then
+    pass "ledger_build_info version matches the current release (${current_version})"
+  else
+    fail "ledger_build_info version (${metrics_version}) does not match the current release (${current_version})"
+  fi
+
+  local status_code
+  status_code="$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 5 \
+    http://127.0.0.1:5080/api/v1/status 2> /dev/null || true)"
+  if [[ "$status_code" == "401" ]]; then
+    pass "GET /api/v1/status without a key returns 401"
+  else
+    fail "GET /api/v1/status without a key returned ${status_code}, expected 401"
+  fi
+
+  local deploy_metrics
+  deploy_metrics="$(cat /var/lib/prometheus/node-exporter/ledger_deploy.prom 2> /dev/null || true)"
+  if printf '%s\n' "$deploy_metrics" | grep -qE 'ledger_deploy_last_run_success 1'; then
+    pass "the last deploy run reported success"
+  else
+    fail "ledger_deploy_last_run_success is not 1"
+  fi
+}
+
+check_backups() {
+  local newest
+  newest="$(find /var/backups/ledger -maxdepth 1 -type f -name '*.dump.age' -printf '%T@ %p\n' 2> /dev/null \
+    | sort -rn | head -n1 | cut -d' ' -f2-)"
+  if [[ -z "$newest" ]]; then
+    fail "no backup file found in /var/backups/ledger"
+    return
+  fi
+  pass "at least one backup file exists: $(basename "$newest")"
+
+  local newest_epoch now_epoch age_hours
+  newest_epoch="$(stat -c '%Y' "$newest")"
+  now_epoch="$(date +%s)"
+  age_hours=$(((now_epoch - newest_epoch) / 3600))
+  if [[ "$age_hours" -lt 26 ]]; then
+    pass "newest backup is ${age_hours}h old, under 26h"
+  else
+    fail "newest backup is ${age_hours}h old, expected under 26h"
+  fi
+
+  if head -c 40 "$newest" | grep -q 'age-encryption.org'; then
+    pass "newest backup starts with the age header"
+  else
+    fail "newest backup does not start with the age header"
+  fi
+}
+
+check_grafana_public() {
+  local status_code
+  status_code="$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 5 \
+    http://127.0.0.1:3000/api/search 2> /dev/null || true)"
+  if [[ "$status_code" == "401" ]]; then
+    pass "anonymous GET /api/search returns 401"
+  else
+    fail "anonymous GET /api/search returned ${status_code}, expected 401"
+  fi
+}
+
+grafana_admin_get() {
+  local path="$1" user="$2" password="$3"
+  local escaped_user escaped_password rc=0
+  escaped_user="${user//\\/\\\\}"
+  escaped_user="${escaped_user//\"/\\\"}"
+  escaped_password="${password//\\/\\\\}"
+  escaped_password="${escaped_password//\"/\\\"}"
+  {
+    printf 'request = "GET"\n'
+    printf 'user = "%s:%s"\n' "$escaped_user" "$escaped_password"
+    printf 'silent\n'
+    printf 'show-error\n'
+    printf 'fail\n'
+    printf 'url = "http://127.0.0.1:3000%s"\n' "$path"
+  } | curl --config - || rc=$?
+  return "$rc"
+}
+
+check_grafana_admin() {
+  local admin_user admin_password
+  read -r -p "Grafana admin login: " admin_user
+  read -r -s -p "Grafana admin password: " admin_password
+  echo
+
+  if [[ "$admin_user" == "admin" ]]; then
+    fail "Grafana admin login is still the default 'admin'"
+  else
+    pass "Grafana admin login is not the default 'admin'"
+  fi
+
+  local org_users
+  if ! org_users="$(grafana_admin_get "/api/org/users" "$admin_user" "$admin_password")"; then
+    fail "could not authenticate to Grafana as ${admin_user}"
+    unset admin_password
+    return
+  fi
+
+  if printf '%s' "$org_users" | jq -e --arg admin "$admin_user" \
+    '[.[] | select(.login != $admin) | select(.role != "Viewer")] | length > 0' > /dev/null; then
+    fail "at least one non-admin Grafana user does not have the Viewer role"
+  else
+    pass "every non-admin Grafana user has the Viewer role"
+  fi
+
+  local settings
+  if settings="$(grafana_admin_get "/api/admin/settings" "$admin_user" "$admin_password")"; then
+    if printf '%s' "$settings" | jq -e '(.auth_anonymous.enabled // .["auth.anonymous"].enabled) == "false"' \
+      > /dev/null 2>&1; then
+      pass "anonymous access is disabled"
+    else
+      fail "could not confirm anonymous access is disabled"
+    fi
+    if printf '%s' "$settings" | jq -e '(.snapshots.enabled // .["snapshots"].enabled) == "false"' \
+      > /dev/null 2>&1; then
+      pass "snapshots are disabled"
+    else
+      fail "could not confirm snapshots are disabled"
+    fi
+  else
+    fail "could not read Grafana admin settings"
+  fi
+
+  local ds
+  for ds in ledger-reporting prometheus; do
+    local ds_health
+    if ds_health="$(grafana_admin_get "/api/datasources/uid/${ds}/health" "$admin_user" "$admin_password")" \
+      && printf '%s' "$ds_health" | jq -e '.status == "OK"' > /dev/null 2>&1; then
+      pass "datasource ${ds} reports OK"
+    else
+      fail "datasource ${ds} did not report OK"
+    fi
+  done
+
+  unset admin_password
+}
+
+check_prometheus_targets() {
+  local targets down_count
+  targets="$(curl --fail --silent --show-error --max-time 5 http://127.0.0.1:9090/api/v1/targets 2> /dev/null || true)"
+  if [[ -z "$targets" ]]; then
+    fail "could not query Prometheus targets"
+    return
+  fi
+  down_count="$(printf '%s' "$targets" | jq '[.data.activeTargets[] | select(.health != "up")] | length' 2> /dev/null \
+    || echo -1)"
+  if [[ "$down_count" == "0" ]]; then
+    pass "every Prometheus target is up"
+  else
+    fail "${down_count} Prometheus target(s) are not up"
+  fi
+}
+
+check_restart() {
+  ledger_log "ledger-selfcheck --restart-check: restarting ledger.service"
+  systemctl restart ledger
+
+  local i healthy=0
+  for ((i = 0; i < 30; i++)); do
+    if [[ "$(curl --fail --silent --show-error --max-time 3 http://127.0.0.1:5081/health 2> /dev/null || true)" \
+      == "Healthy" ]]; then
+      healthy=1
+      break
+    fi
+    sleep 2
+  done
+
+  if [[ "$healthy" -eq 1 ]]; then
+    pass "ledger.service restarted and became Healthy (--restart-check)"
+  else
+    fail "ledger.service did not become Healthy after --restart-check"
+  fi
+}
+
+ledger_log "Running ledger-selfcheck"
+
+check_services
+check_postgres
+check_files
+check_secrets_hygiene
+check_listeners
+check_firewall
+
+if [[ "$PRE_DEPLOY" -eq 0 ]]; then
+  check_app
+  check_backups
+fi
+
+check_grafana_public
+
+if [[ "$GRAFANA_ADMIN" -eq 1 ]]; then
+  check_grafana_admin
+fi
+
+check_prometheus_targets
+
+if [[ "$RESTART_CHECK" -eq 1 ]]; then
+  check_restart
+fi
+
+echo "----"
+echo "ledger-selfcheck: ${FAILURES} failure(s)"
+if [[ "$FAILURES" -gt 0 ]]; then
+  exit 1
+fi
+exit 0
