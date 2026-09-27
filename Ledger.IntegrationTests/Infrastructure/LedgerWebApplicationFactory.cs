@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
 using Microsoft.AspNetCore.Hosting;
@@ -7,6 +8,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
 namespace Ledger.IntegrationTests.Infrastructure;
 
@@ -15,6 +17,7 @@ public class LedgerWebApplicationFactory : WebApplicationFactory<Program>
 {
     private readonly string _ledgerConnectionString;
     private readonly string? _contentRootOverride;
+    private readonly CapturingLoggerProvider _loggerProvider = new();
     private IHost? _realHost;
 
     /// <summary>Creates the factory. Picks two free loopback ports immediately so callers can build clients before starting the host.</summary>
@@ -33,6 +36,9 @@ public class LedgerWebApplicationFactory : WebApplicationFactory<Program>
 
     /// <summary>The real loopback port the ops endpoint listens on for this instance.</summary>
     public int OpsPort { get; }
+
+    /// <summary>Every log message written by the host so far, across every logging category.</summary>
+    public IReadOnlyList<string> CapturedLogMessages => _loggerProvider.Messages;
 
     /// <summary>An HttpClient bound to the real API port.</summary>
     public HttpClient CreateApiClient() => new() { BaseAddress = new Uri($"http://127.0.0.1:{ApiPort}") };
@@ -59,6 +65,8 @@ public class LedgerWebApplicationFactory : WebApplicationFactory<Program>
                 ["Kestrel:Endpoints:Ops:Url"] = $"http://127.0.0.1:{OpsPort}"
             });
         });
+
+        builder.ConfigureLogging(logging => logging.AddProvider(_loggerProvider));
     }
 
     /// <inheritdoc />
@@ -124,5 +132,44 @@ public class LedgerWebApplicationFactory : WebApplicationFactory<Program>
         var port = ((IPEndPoint)listener.LocalEndpoint).Port;
         listener.Stop();
         return port;
+    }
+}
+
+/// <summary>Captures every formatted log message written by the host, so tests can assert nothing sensitive was logged.</summary>
+public class CapturingLoggerProvider : ILoggerProvider
+{
+    private readonly ConcurrentQueue<string> _messages = new();
+
+    /// <summary>Every captured message so far, each prefixed with its logging category.</summary>
+    public IReadOnlyList<string> Messages => _messages.ToArray();
+
+    /// <inheritdoc />
+    public ILogger CreateLogger(string categoryName) => new CapturingLogger(categoryName, _messages);
+
+    /// <inheritdoc />
+    public void Dispose()
+    {
+    }
+
+    private sealed class CapturingLogger(string categoryName, ConcurrentQueue<string> messages) : ILogger
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            messages.Enqueue($"{categoryName}: {formatter(state, exception)}");
+
+            if (exception is not null)
+            {
+                messages.Enqueue(exception.ToString());
+            }
+        }
     }
 }
