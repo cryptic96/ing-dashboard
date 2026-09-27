@@ -54,13 +54,15 @@ if [[ "${LEDGER_PROVISION_LIB_ONLY:-0}" != "1" ]]; then
 
   provision_log "Bootstrapping roles and database"
 
-  runuser -u postgres -- psql -v ON_ERROR_STOP=1 -f "${DEPLOY_DIR}/sql/bootstrap-roles.sql"
+  # The SQL files are opened by root and fed on stdin: the checkout may sit
+  # under /root, which the postgres OS user cannot read.
+  runuser -u postgres -- psql -v ON_ERROR_STOP=1 -f - < "${DEPLOY_DIR}/sql/bootstrap-roles.sql"
 
   if [[ "$(runuser -u postgres -- psql -Atc "SELECT count(*) FROM pg_database WHERE datname = 'ledger'")" == "0" ]]; then
     runuser -u postgres -- psql -v ON_ERROR_STOP=1 -c "CREATE DATABASE ledger OWNER ledger_migrator"
   fi
 
-  runuser -u postgres -- psql -v ON_ERROR_STOP=1 -d ledger -f "${DEPLOY_DIR}/sql/bootstrap-database.sql"
+  runuser -u postgres -- psql -v ON_ERROR_STOP=1 -d ledger -f - < "${DEPLOY_DIR}/sql/bootstrap-database.sql"
 
   provision_log "Running self-checks"
 
