@@ -1,0 +1,9 @@
+name: lint-fixture-tag-pin
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    permissions: {}
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo "fixture"

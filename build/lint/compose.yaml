@@ -1,0 +1,43 @@
+services:
+  actionlint:
+    image: rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+    entrypoint: ["/usr/local/bin/actionlint"]
+    working_dir: /repo
+    volumes:
+      - ../..:/repo:ro
+
+  zizmor:
+    image: ghcr.io/zizmorcore/zizmor:1.30.1@sha256:a2eb396d886c053073405c7a980f2139ba2248ec172243cfa3841e57196e8101
+    entrypoint: ["/usr/bin/zizmor"]
+    working_dir: /repo
+    volumes:
+      - ../..:/repo:ro
+
+  shellcheck:
+    image: koalaman/shellcheck:v0.11.0@sha256:61862eba1fcf09a484ebcc6feea46f1782532571a34ed51fedf90dd25f925a8d
+    entrypoint: ["/bin/shellcheck"]
+    working_dir: /repo
+    volumes:
+      - ../..:/repo:ro
+
+  gitleaks:
+    image: ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+    entrypoint: ["/usr/bin/gitleaks"]
+    working_dir: /repo
+    volumes:
+      - ../..:/repo:ro
+    network_mode: none
+
+  promtool:
+    image: prom/prometheus:v3.13.3@sha256:6976aa8a60fec930796ce5772b8d12da7a318a5daa8d40d69c5c7819a05eeed7
+    entrypoint: ["/bin/promtool"]
+    working_dir: /repo
+    volumes:
+      - ../..:/repo:ro
+
+  grafana:
+    image: grafana/grafana:13.2.2@sha256:ac461fb352abc50da10a51c7d02462e9c05488f11f53f14b3ad79a8145f638a0
+    entrypoint: ["/usr/share/grafana/bin/grafana"]
+    working_dir: /repo
+    volumes:
+      - ../..:/repo:ro

@@ -1,0 +1,8 @@
+name: lint-fixture-run-interpolation
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    permissions: {}
+    steps:
+      - run: echo "${{ github.event.head_commit.message }}"
