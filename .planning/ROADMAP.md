@@ -36,7 +36,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   4. An encrypted backup of the finance database has actually been restored by following the documented procedure. Every one-time setup step for the LXC is documented step by step.
   5. Each partner signs in to Grafana with their own viewer login from the home network or VPN. Anonymous access, public dashboards and snapshot sharing are disabled, and datasources are provisioned from the repository. Grafana, Prometheus and the REST API are unreachable from the internet, and REST calls without credentials are rejected even on the home network.
 
-**Plans**: 5/12 plans executed
+**Plans**: 9/12 plans executed
 
 Plans:
 **Wave 1**
@@ -52,10 +52,10 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 01-03-PLAN.md — Release pipeline: strict tag gate, attested draft release, deploy-environment-gated publish, GitHub settings guide
-- [ ] 01-05-PLAN.md — Encrypted local backups with GFS retention and freshness metrics, restore drill and live restore
-- [ ] 01-07-PLAN.md — Certificate-protected key ring, fail-fast production config, secret redaction proven with sentinels
-- [ ] 01-08-PLAN.md — Grafana hardening, datasources, platform alerts and Prometheus config as code, validated in a real Grafana
+- [x] 01-03-PLAN.md — Release pipeline: strict tag gate, attested draft release, deploy-environment-gated publish, GitHub settings guide
+- [x] 01-05-PLAN.md — Encrypted local backups with GFS retention and freshness metrics, restore drill and live restore
+- [x] 01-07-PLAN.md — Certificate-protected key ring, fail-fast production config, secret redaction proven with sentinels
+- [x] 01-08-PLAN.md — Grafana hardening, datasources, platform alerts and Prometheus config as code, validated in a real Grafana
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
@@ -170,7 +170,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Secure Platform & Release Pipeline | 5/12 | In Progress|  |
+| 1. Secure Platform & Release Pipeline | 9/12 | In Progress|  |
 | 2. Automatic ING Sync | 0/TBD | Not started | - |
 | 3. Claude Reads the Ledger | 0/TBD | Not started | - |
 | 4. Trustworthy Categorisation | 0/TBD | Not started | - |
