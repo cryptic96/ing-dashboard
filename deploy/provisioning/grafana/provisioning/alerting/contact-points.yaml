@@ -1,0 +1,15 @@
+# The only contact point: email through the existing Postfix relay
+# configured by GF_SMTP_* in /etc/ledger/grafana.env. Alert titles and
+# annotations name the rule, service and state only — never a query result,
+# so nothing financial can ever reach this address.
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: operator-email
+    receivers:
+      - uid: operator-email
+        type: email
+        settings:
+          addresses: $LEDGER_ALERT_EMAIL
+          singleEmail: true
