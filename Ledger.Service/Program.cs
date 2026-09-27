@@ -10,7 +10,6 @@ using Ledger.Service.Security;
 using Ledger.Domain.Security;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
@@ -26,14 +25,16 @@ if (args.Length > 0 && args[0] == "apikey")
     return await ApiKeyCommand.RunAsync(args[1..], builder.Configuration);
 }
 
+if (builder.Environment.IsProduction())
+{
+    ProductionConfigurationValidator.ThrowIfInvalid(builder.Configuration);
+}
+
 builder.Services.Configure<KestrelServerOptions>(options => options.AddServerHeader = false);
 
 builder.Services.AddLedgerRepository(builder.Configuration);
 
-builder.Services
-    .AddDataProtection()
-    .SetApplicationName("HouseholdLedger")
-    .PersistKeysToLedgerDatabase();
+builder.Services.AddLedgerDataProtection(builder.Configuration, builder.Environment);
 
 builder.Services.AddSingleton<ISecretProtector, DataProtectionSecretProtector>();
 builder.Services.AddHostedService<DataProtectionCanaryInitializer>();
