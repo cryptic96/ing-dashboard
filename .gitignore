@@ -5,6 +5,7 @@
 .env
 *.env
 !.env.example
+!deploy/tests/fixtures/*.env
 
 # Build output
 bin/
@@ -14,3 +15,7 @@ TestResults/
 .vs/
 .idea/
 *.user
+
+# The deploy installer's own scripts (not build output)
+!deploy/bin/
+!deploy/bin/**
