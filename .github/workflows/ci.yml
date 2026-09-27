@@ -1,0 +1,73 @@
+name: ci
+
+on:
+  push: {}
+  pull_request:
+    branches:
+      - main
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+
+    services:
+      postgres:
+        image: postgres:18@sha256:5a5a84b19854a9ffaa54082c166ff4ec27473a361e496e5ea167f298f2da9722
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+
+      - name: Package release
+        run: build/package-release.sh --version 0.0.0 --commit "$GITHUB_SHA" --output artifacts/release
+
+      - name: Run tests
+        run: dotnet test Ledger.slnx
+        env:
+          ConnectionStrings__TestAdmin: Host=localhost;Port=5432;Username=postgres
+          LEDGER_EFBUNDLE: ${{ github.workspace }}/artifacts/release/stage/efbundle
+          CI: true
+
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Run lint
+        run: build/lint.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LEDGER_LINT_NETWORK: 1
