@@ -93,8 +93,27 @@ check "commit on branch succeeds for the attested digest" "0" \
 check "commit on branch fails for an unrelated commit" "1" \
   "$( ledger_commit_on_branch "$REPO" "0000000000000000000000000000000000000000" "trunk" >/dev/null 2>&1; echo $? )"
 
-check "no ambient token influenced verification" "" \
-  "${GH_TOKEN:-}${GITHUB_TOKEN:-}${GH_ENTERPRISE_TOKEN:-}"
+# Ambient credentials: verification runs with sentinel tokens exported, and a
+# gh wrapper records which of them actually reached gh. The verifier must
+# strip every one of them and still succeed on the genuine artifact.
+REAL_GH="$(command -v gh)"
+GH_STUB_DIR="${WORK_DIR}/gh-stub"
+GH_SEEN_TOKEN="${WORK_DIR}/gh-seen-token"
+mkdir -p "$GH_STUB_DIR"
+cat >"${GH_STUB_DIR}/gh" <<EOF_STUB
+#!/usr/bin/env bash
+printf '%s' "\${GH_TOKEN:-}\${GITHUB_TOKEN:-}\${GH_ENTERPRISE_TOKEN:-}" >"${GH_SEEN_TOKEN}"
+exec "${REAL_GH}" "\$@"
+EOF_STUB
+chmod +x "${GH_STUB_DIR}/gh"
+
+check "genuine artifact verifies with ambient tokens exported" "0" \
+  "$( PATH="${GH_STUB_DIR}:${PATH}" \
+      GH_TOKEN=ambient-sentinel GITHUB_TOKEN=ambient-sentinel GH_ENTERPRISE_TOKEN=ambient-sentinel \
+      ledger_verify_attestation "$ARTIFACT_PATH" "$BUNDLE_PATH" "$REPO" "$SIGNER_WORKFLOW" "$SOURCE_REF" \
+      >/dev/null 2>&1; echo $? )"
+
+check "no ambient token reached gh" "" "$(cat "$GH_SEEN_TOKEN" 2>/dev/null || echo missing)"
 
 # Installer level: a tampered artifact must be refused before anything is
 # unpacked, and must leave no releases directory and no staging directory
