@@ -81,10 +81,10 @@ Requirements for initial release. Each maps to roadmap phases.
 ### Security & deployment
 
 - [ ] **SEC-01**: Bank access is read-only; no code path exists that can initiate a payment or move money
-- [ ] **SEC-02**: The app uses separate database roles — runtime (data access to its own tables only, no schema changes), migrator (schema changes) and Grafana reader (SELECT on reporting views only); the database superuser is never used by the app
+- [x] **SEC-02**: The app uses separate database roles — runtime (data access to its own tables only, no schema changes), migrator (schema changes) and Grafana reader (SELECT on reporting views only); the database superuser is never used by the app
 - [x] **SEC-03**: Secrets live only in a server-side env file readable by the app alone; bank consent tokens and the aggregator key are encrypted at rest
 - [ ] **SEC-04**: Only `/mcp` and the OAuth endpoints it needs are internet-facing via Traefik, restricted to Anthropic's published IP ranges; access tokens are audience-validated on every request and never passed through to other services
-- [ ] **SEC-05**: The database is reachable only from inside the app's LXC over its local Unix socket (no network listener), with OS-user-to-role peer authentication
+- [x] **SEC-05**: The database is reachable only from inside the app's LXC over its local Unix socket (no network listener), with OS-user-to-role peer authentication
 - [x] **SEC-06**: Secrets and financial details never appear in logs, exception messages or metric labels
 - [x] **SEC-07**: A semver tag triggers a build on a GitHub-hosted runner that produces a release artifact with build-provenance attestation; the server verifies the attestation before deploying
 - [x] **SEC-08**: Deploys are pull-based: no self-hosted runner exists, and no GitHub-executed code runs on the server; a release is published only after approval on a GitHub Environment with a required reviewer, and the server installs only published releases from `main`; workflow runs from outside contributors require approval; release-tag creation is restricted
@@ -194,10 +194,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | OPS-06 | Phase 3 | Pending |
 | OPS-07 | Phase 1 | Complete |
 | SEC-01 | Phase 2 | Pending |
-| SEC-02 | Phase 1 | Pending |
+| SEC-02 | Phase 1 | Complete |
 | SEC-03 | Phase 1 | Complete |
 | SEC-04 | Phase 3 | Pending |
-| SEC-05 | Phase 1 | Pending |
+| SEC-05 | Phase 1 | Complete |
 | SEC-06 | Phase 1 | Complete |
 | SEC-07 | Phase 1 | Complete |
 | SEC-08 | Phase 1 | Complete |

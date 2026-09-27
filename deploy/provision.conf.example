@@ -1,0 +1,28 @@
+# Copy of this file provision.sh installs at /etc/ledger/provision.conf on
+# first run. Fill in every value below with the real server-side details,
+# then re-run provision.sh. This file itself must stay a placeholder-only
+# template — never commit real values here.
+
+# The Traefik container's address; the app trusts X-Forwarded-For only from it.
+LEDGER_TRAEFIK_IP=192.0.2.10
+
+# CIDR(s) allowed to reach admin-only routes (LAN + VPN subnets), comma-separated.
+LEDGER_ADMIN_SSH_SOURCES=192.0.2.0/24
+
+# Internal hostname Grafana is reached at, behind Traefik.
+LEDGER_GRAFANA_DOMAIN=grafana.example.com
+
+# Internal hostname the REST API is reached at, behind Traefik.
+LEDGER_API_DOMAIN=ledger-api.example.com
+
+# host:port of the existing SMTP relay used for alert and review emails.
+LEDGER_SMTP_RELAY=smtp-relay.example.com:25
+
+# From address alert and notification emails are sent as.
+LEDGER_MAIL_FROM=ledger-alerts@example.com
+
+# Address platform alerts (backup stale, service down, deploy failed) go to.
+LEDGER_ALERT_EMAIL=operator@example.com
+
+# owner/repo of the public GitHub repository releases are pulled from.
+LEDGER_GITHUB_REPO=example-owner/example-repo

@@ -6,6 +6,7 @@
 *.env
 !.env.example
 !deploy/tests/fixtures/*.env
+!deploy/versions.env
 
 # Build output
 bin/
