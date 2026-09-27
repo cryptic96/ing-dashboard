@@ -18,6 +18,10 @@ LEDGER_API_DOMAIN=ledger-api.example.com
 # host:port of the existing SMTP relay used for alert and review emails.
 LEDGER_SMTP_RELAY=smtp-relay.example.com:25
 
+# Whether the SMTP relay requires STARTTLS (on) or is a plaintext-only
+# relay reachable only on the local network (off). Almost always "on".
+LEDGER_SMTP_STARTTLS=on
+
 # From address alert and notification emails are sent as.
 LEDGER_MAIL_FROM=ledger-alerts@example.com
 

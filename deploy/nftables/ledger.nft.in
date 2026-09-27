@@ -1,0 +1,34 @@
+#!/usr/sbin/nft -f
+###
+### Rendered by deploy/provision.d/50-firewall.sh from provision.conf and
+### installed as /etc/nftables.conf. Default-drop input and forward:
+### nothing reaches this host except loopback traffic, already-established
+### connections, rate-limited ICMP/ICMPv6, SSH from the admin/VPN subnets,
+### and the app/Grafana ports from the reverse proxy. Every other inbound
+### connection is dropped before it reaches any service.
+###
+flush ruleset
+
+table inet ledger_filter {
+  chain input {
+    type filter hook input priority 0; policy drop;
+
+    iif lo accept
+    ct state established,related accept
+    ct state invalid drop
+
+    icmp type { echo-request, destination-unreachable, time-exceeded } limit rate 10/second accept
+    icmpv6 type { echo-request, destination-unreachable, time-exceeded, nd-neighbor-solicit, nd-neighbor-advert, nd-router-solicit, nd-router-advert } limit rate 10/second accept
+
+    tcp dport 22 ip saddr { @LEDGER_ADMIN_SSH_SOURCES@ } accept
+    tcp dport { 5080, 3000 } ip saddr @LEDGER_TRAEFIK_IP@ accept
+  }
+
+  chain forward {
+    type filter hook forward priority 0; policy drop;
+  }
+
+  chain output {
+    type filter hook output priority 0; policy accept;
+  }
+}

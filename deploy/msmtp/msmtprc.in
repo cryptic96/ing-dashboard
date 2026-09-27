@@ -1,0 +1,16 @@
+# Rendered by deploy/provision.d/40-services.sh from provision.conf.
+# Installed as /etc/msmtprc (644 root). The household's own mail relay
+# accepts mail from this host over the local network, so this file holds
+# no credentials at all — only where to connect and whether to use
+# STARTTLS.
+defaults
+logfile /var/log/msmtp.log
+
+account default
+host @LEDGER_SMTP_HOST@
+port @LEDGER_SMTP_PORT@
+from @LEDGER_MAIL_FROM@
+@LEDGER_SMTP_TLS_LINE1@
+@LEDGER_SMTP_TLS_LINE2@
+
+account default : default
