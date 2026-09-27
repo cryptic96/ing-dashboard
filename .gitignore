@@ -5,6 +5,7 @@
 .env
 *.env
 !.env.example
+!deploy/versions.env
 
 # Build output
 bin/
