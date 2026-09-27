@@ -36,7 +36,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   4. An encrypted backup of the finance database has actually been restored by following the documented procedure. Every one-time setup step for the LXC is documented step by step.
   5. Each partner signs in to Grafana with their own viewer login from the home network or VPN. Anonymous access, public dashboards and snapshot sharing are disabled, and datasources are provisioned from the repository. Grafana, Prometheus and the REST API are unreachable from the internet, and REST calls without credentials are rejected even on the home network.
 
-**Plans**: 1/12 plans executed
+**Plans**: 5/12 plans executed
 
 Plans:
 **Wave 1**
@@ -45,10 +45,10 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 01-02-PLAN.md — Supply-chain gate: lint harness (actionlint, zizmor, shellcheck, gitleaks), CI with PostgreSQL service container, Dependabot
-- [ ] 01-04-PLAN.md — LXC installer: unauthenticated poll, offline attestation verify before unpack, migrate, activate, health, rollback, reporting
-- [ ] 01-06-PLAN.md — REST API keys: hashed named keys, CLI, X-Api-Key auth on every endpoint, status endpoint
-- [ ] 01-09-PLAN.md — Provisioning I: verified install pins, packages, accounts, secrets, socket-only PostgreSQL with peer-mapped roles
+- [x] 01-02-PLAN.md — Supply-chain gate: lint harness (actionlint, zizmor, shellcheck, gitleaks), CI with PostgreSQL service container, Dependabot
+- [x] 01-04-PLAN.md — LXC installer: unauthenticated poll, offline attestation verify before unpack, migrate, activate, health, rollback, reporting
+- [x] 01-06-PLAN.md — REST API keys: hashed named keys, CLI, X-Api-Key auth on every endpoint, status endpoint
+- [x] 01-09-PLAN.md — Provisioning I: verified install pins, packages, accounts, secrets, socket-only PostgreSQL with peer-mapped roles
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
@@ -170,7 +170,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Secure Platform & Release Pipeline | 1/12 | In Progress|  |
+| 1. Secure Platform & Release Pipeline | 5/12 | In Progress|  |
 | 2. Automatic ING Sync | 0/TBD | Not started | - |
 | 3. Claude Reads the Ledger | 0/TBD | Not started | - |
 | 4. Trustworthy Categorisation | 0/TBD | Not started | - |
