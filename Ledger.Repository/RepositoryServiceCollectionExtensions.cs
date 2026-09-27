@@ -1,3 +1,4 @@
+using Ledger.Domain.Auth;
 using Ledger.Domain.Security;
 using Ledger.Repository.Health;
 using Ledger.Repository.Stores;
@@ -19,6 +20,7 @@ public static class RepositoryServiceCollectionExtensions
             options.UseNpgsql(configuration.GetConnectionString("Ledger")));
 
         services.AddScoped<IDataProtectionCanaryStore, DataProtectionCanaryStore>();
+        services.AddScoped<IApiKeyStore, ApiKeyStore>();
 
         return services;
     }

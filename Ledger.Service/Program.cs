@@ -1,5 +1,6 @@
 using System.Reflection;
 using Ledger.Repository;
+using Ledger.Service.Cli;
 using Ledger.Service.Health;
 using Ledger.Service.Hosting;
 using Ledger.Service.Security;
@@ -13,6 +14,11 @@ using LedgerMetrics = Ledger.Service.Metrics.LedgerMetrics;
 using HealthCheckMetricsPublisher = Ledger.Service.Metrics.HealthCheckMetricsPublisher;
 
 var builder = WebApplication.CreateBuilder(args);
+
+if (args.Length > 0 && args[0] == "apikey")
+{
+    return await ApiKeyCommand.RunAsync(args[1..], builder.Configuration);
+}
 
 builder.Services.Configure<KestrelServerOptions>(options => options.AddServerHeader = false);
 
@@ -52,6 +58,8 @@ app.UseMetricServer(opsPort);
 app.UseHttpMetrics();
 
 await app.RunAsync();
+
+return 0;
 
 /// <summary>Entry point for the ledger host, exposed as a partial class so the integration test factory can boot it in-process.</summary>
 public partial class Program;
