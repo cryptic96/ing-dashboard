@@ -63,6 +63,15 @@ if [[ "${LEDGER_PROVISION_LIB_ONLY:-0}" != "1" ]]; then
     prometheus-node-exporter unattended-upgrades \
     "$DOTNET_RUNTIME_PACKAGE"
 
+  # Some container templates ship a local MTA. Mail leaves this host only
+  # through msmtp and Grafana's own SMTP client, so a listening MTA is
+  # unused attack surface.
+  postfix_status="$(dpkg-query -W -f='${Status}' postfix 2>/dev/null || true)"
+  if [[ "$postfix_status" == "install ok installed" ]]; then
+    provision_log "Removing the unused local MTA (postfix)"
+    DEBIAN_FRONTEND=noninteractive apt-get purge -y -qq postfix
+  fi
+
   install_apt_signing_key "PGDG" "$PGDG_KEY_URL" "$PGDG_KEY_FINGERPRINT" \
     "${KEYRING_DIR}/pgdg.gpg"
   install_apt_signing_key "Grafana" "$GRAFANA_KEY_URL" "$GRAFANA_KEY_FINGERPRINT" \

@@ -191,9 +191,13 @@ EOF
   fi
   systemctl enable --now "$pg_service"
 
-  systemctl enable --now prometheus
-  systemctl enable --now prometheus-node-exporter
-  systemctl enable --now grafana-server
+  # Restarted rather than just started: the node exporter package starts its
+  # service at install time, before the defaults file above exists, and a
+  # re-run must apply changed configuration to services already running.
+  for config_service in prometheus prometheus-node-exporter grafana-server; do
+    systemctl enable "$config_service"
+    systemctl restart "$config_service"
+  done
   systemctl enable --now ledger-deploy-poll.timer
   systemctl enable --now ledger-backup.timer
 
