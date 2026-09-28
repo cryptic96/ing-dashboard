@@ -1,10 +1,18 @@
 # Every alert routes to the one contact point; there is no per-service
 # routing tree yet because there is only one operator to notify.
+#
+# The mail relay has a daily sending limit shared with other services, so
+# the email volume is capped: all platform alerts form a single group (they
+# share one folder), a changed set of firing alerts is sent at most once an
+# hour, and a still-firing group is repeated every 12 hours. That bounds
+# alert mail to roughly 24 messages a day even while alerts flap.
 apiVersion: 1
 
 policies:
   - orgId: 1
     receiver: operator-email
     group_by:
-      - alertname
+      - grafana_folder
+    group_wait: 1m
+    group_interval: 1h
     repeat_interval: 12h
