@@ -118,12 +118,20 @@ if [[ "${LEDGER_PROVISION_LIB_ONLY:-0}" != "1" ]]; then
   install -m 600 -o root -g root "$deploy_conf_rendered" /etc/ledger/deploy.conf
   rm -f "$deploy_conf_rendered"
 
+  # Grafana follows the same STARTTLS choice as msmtp: required unless the
+  # relay is explicitly a plaintext-only one on the local network.
+  grafana_starttls_policy="MandatoryStartTLS"
+  if [[ "${LEDGER_SMTP_STARTTLS:-on}" == "off" ]]; then
+    grafana_starttls_policy="NoStartTLS"
+  fi
+
   grafana_env_rendered="$(mktemp)"
   services_render_example_overrides "${DEPLOY_DIR}/grafana.env.example" "$grafana_env_rendered" \
     "GF_SERVER_DOMAIN=${LEDGER_GRAFANA_DOMAIN:-}" \
     "GF_SERVER_ROOT_URL=https://${LEDGER_GRAFANA_DOMAIN:-}/" \
     "GF_SMTP_HOST=${LEDGER_SMTP_RELAY:-}" \
     "GF_SMTP_FROM_ADDRESS=${LEDGER_MAIL_FROM:-}" \
+    "GF_SMTP_STARTTLS_POLICY=${grafana_starttls_policy}" \
     "LEDGER_ALERT_EMAIL=${LEDGER_ALERT_EMAIL:-}"
   install -m 640 -o root -g "$GRAFANA_SERVICE_USER" "$grafana_env_rendered" /etc/ledger/grafana.env
   rm -f "$grafana_env_rendered"
