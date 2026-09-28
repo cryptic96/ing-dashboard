@@ -9,6 +9,7 @@ User=ledger_backup
 Group=ledger_backup
 SupplementaryGroups=ledger-metrics
 UMask=0077
+LoadCredential=backup-recipients:/etc/ledger/backup-recipients.txt
 ExecStart=/usr/local/sbin/ledger-backup %i
 
 NoNewPrivileges=yes

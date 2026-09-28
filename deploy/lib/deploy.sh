@@ -430,7 +430,20 @@ ledger_install_verified_release() {
   fi
 
   mkdir -p "$releases_dir"
-  mv -T "$staging_dir" "${releases_dir}/${version}"
+  # A directory for this version that is not the active release was left by
+  # an earlier attempt that failed before activating it (for example at the
+  # pre-migration backup). Releases are immutable, so the freshly verified
+  # copy replaces it; the active release itself is never replaced.
+  local target="${releases_dir}/${version}"
+  if [ -e "$target" ]; then
+    if [ "$(readlink -f "$target")" = "$(readlink -f "$current_link" 2>/dev/null || true)" ]; then
+      rm -rf "$staging_dir"
+      ledger_die "${tag} is already the active release"
+    fi
+    ledger_log "replacing ${target}, left by an earlier attempt that did not activate it"
+    rm -rf "$target"
+  fi
+  mv -T "$staging_dir" "$target"
 
   local applied_file
   applied_file="$(mktemp)"

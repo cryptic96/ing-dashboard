@@ -72,7 +72,7 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-None yet.
+- [minor] Migrate tests to Microsoft.Testing.Platform for xunit v4 (after go-live) — `.planning/todos/pending/2026-09-28-migrate-tests-to-microsoft-testing-platform-for-xunit-v4.md`
 
 ### Blockers/Concerns
 

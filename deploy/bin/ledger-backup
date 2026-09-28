@@ -24,7 +24,16 @@ source "${LIB_DIR}/common.sh"
 source "${LIB_DIR}/backup.sh"
 
 BACKUP_ROOT="${LEDGER_BACKUP_ROOT:-/var/backups/ledger}"
-RECIPIENTS_FILE="${LEDGER_BACKUP_RECIPIENTS:-/etc/ledger/backup-recipients.txt}"
+# Under systemd the recipients arrive as a service credential: /etc/ledger is
+# closed to the backup user, so the unit's LoadCredential hands over a private
+# copy. A run outside systemd (as root) reads the file directly.
+if [ -n "${LEDGER_BACKUP_RECIPIENTS:-}" ]; then
+  RECIPIENTS_FILE="$LEDGER_BACKUP_RECIPIENTS"
+elif [ -n "${CREDENTIALS_DIRECTORY:-}" ] && [ -f "${CREDENTIALS_DIRECTORY}/backup-recipients" ]; then
+  RECIPIENTS_FILE="${CREDENTIALS_DIRECTORY}/backup-recipients"
+else
+  RECIPIENTS_FILE="/etc/ledger/backup-recipients.txt"
+fi
 STATE_DIR="${BACKUP_ROOT}/.state"
 
 usage() {

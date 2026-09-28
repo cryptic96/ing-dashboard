@@ -14,3 +14,9 @@ updates:
     directory: "/build/lint"
     schedule:
       interval: "weekly"
+    ignore:
+      # The host runs the Prometheus LTS line pinned in deploy/versions.env;
+      # the lint image's promtool stays on the same line, so only patch
+      # releases are proposed.
+      - dependency-name: "prom/prometheus"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]

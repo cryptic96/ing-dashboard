@@ -6,11 +6,11 @@
 defaults
 logfile /var/log/msmtp.log
 
-account default
+account relay
 host @LEDGER_SMTP_HOST@
 port @LEDGER_SMTP_PORT@
 from @LEDGER_MAIL_FROM@
 @LEDGER_SMTP_TLS_LINE1@
 @LEDGER_SMTP_TLS_LINE2@
 
-account default : default
+account default : relay

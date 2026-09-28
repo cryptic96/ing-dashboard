@@ -20,8 +20,8 @@ public static class LedgerMetrics
     /// <summary>Sets ledger_build_info to 1 with the running assembly's version and commit labels.</summary>
     public static void RecordBuildInfo(Assembly assembly)
     {
-        var version = InformationalVersionWithoutSuffix(assembly);
-        var commit = SourceRevisionId(assembly);
+        var (version, commit) = ParseInformationalVersion(
+            assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion);
 
         BuildInfo.WithLabels(version, commit).Set(1);
     }
@@ -32,31 +32,26 @@ public static class LedgerMetrics
         HealthCheckStatus.WithLabels(checkName).Set(isHealthy ? 1 : 0);
     }
 
-    private static string InformationalVersionWithoutSuffix(Assembly assembly)
+    /// <summary>
+    /// Splits an informational version such as "1.2.3+{commit}" into its version and commit.
+    /// MSBuild appends the SourceRevisionId property after a '+'; either part is "unknown" when absent.
+    /// </summary>
+    public static (string Version, string Commit) ParseInformationalVersion(string? informationalVersion)
     {
-        var informationalVersion = assembly
-            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
-
         if (string.IsNullOrWhiteSpace(informationalVersion))
         {
-            return "unknown";
+            return ("unknown", "unknown");
         }
 
         var plusIndex = informationalVersion.IndexOf('+');
-        return plusIndex >= 0 ? informationalVersion[..plusIndex] : informationalVersion;
-    }
-
-    private static string SourceRevisionId(Assembly assembly)
-    {
-        foreach (var attribute in assembly.GetCustomAttributes<AssemblyMetadataAttribute>())
+        if (plusIndex < 0)
         {
-            if (attribute.Key == "SourceRevisionId" && !string.IsNullOrWhiteSpace(attribute.Value))
-            {
-                return attribute.Value;
-            }
+            return (informationalVersion, "unknown");
         }
 
-        return "unknown";
+        var version = plusIndex == 0 ? "unknown" : informationalVersion[..plusIndex];
+        var commit = plusIndex == informationalVersion.Length - 1 ? "unknown" : informationalVersion[(plusIndex + 1)..];
+        return (version, commit);
     }
 }
 
