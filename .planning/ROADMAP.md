@@ -36,7 +36,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   4. An encrypted backup of the finance database has actually been restored by following the documented procedure. Every one-time setup step for the LXC is documented step by step.
   5. Each partner signs in to Grafana with their own viewer login from the home network or VPN. Anonymous access, public dashboards and snapshot sharing are disabled, and datasources are provisioned from the repository. Grafana, Prometheus and the REST API are unreachable from the internet, and REST calls without credentials are rejected even on the home network.
 
-**Plans**: 10/12 plans executed
+**Plans**: 11/12 plans executed
 
 Plans:
 **Wave 1**
@@ -63,7 +63,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 01-11-PLAN.md — Go-live bring-up: GitHub protections (verified read-only) and the provisioned LXC
+- [x] 01-11-PLAN.md — Go-live bring-up: GitHub protections (verified read-only) and the provisioned LXC
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
@@ -170,7 +170,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Secure Platform & Release Pipeline | 10/12 | In Progress|  |
+| 1. Secure Platform & Release Pipeline | 11/12 | In Progress|  |
 | 2. Automatic ING Sync | 0/TBD | Not started | - |
 | 3. Claude Reads the Ledger | 0/TBD | Not started | - |
 | 4. Trustworthy Categorisation | 0/TBD | Not started | - |
