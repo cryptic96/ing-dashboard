@@ -63,37 +63,38 @@ Requirements for initial release. Each maps to roadmap phases.
 - [ ] **DASH-03**: Dashboards cover budget vs actual, savings goals, recurring costs with price increases, and true monthly cost of annual expenses
 - [ ] **DASH-04**: The latest scheduled review is shown as a dashboard panel
 - [ ] **DASH-05**: Every dashboard exists in English and Dutch, generated from a single source so the two languages cannot drift apart
-- [ ] **DASH-06**: Dashboards, datasources and alert rules are provisioned as code from the repository
-- [ ] **DASH-07**: Grafana reads financial data through a read-only, least-privilege path (a SELECT-only login on a reporting schema of views) and cannot write
-- [ ] **DASH-08**: Each partner has their own Grafana viewer login; anonymous access, public dashboards and snapshot sharing are disabled
-- [ ] **DASH-09**: Grafana is reachable from the home network and the VPN only
+- [x] **DASH-06**: Dashboards, datasources and alert rules are provisioned as code from the repository
+- [ ] **DASH-07**: Grafana reads financial data through a read-only, least-privilege path (a SELECT-only database role on a reporting schema of views) and cannot write
+- [x] **DASH-08**: Each partner has their own Grafana viewer login; anonymous access, public dashboards and snapshot sharing are disabled
+- [x] **DASH-09**: Grafana is reachable from the home network and the VPN only
 
 ### Operations
 
 - [ ] **OPS-01**: The app exposes `/metrics` for Prometheus: time of last successful sync, sync errors, days until bank consent expires, review-queue size
 - [ ] **OPS-02**: Alerts fire when syncs fail and when bank consent is 14 and 7 days from expiry
-- [ ] **OPS-03**: App, Grafana and Prometheus run in one LXC as systemd services; setup is automated where possible and any one-time steps are documented step by step
-- [ ] **OPS-04**: Finance database backups are encrypted, and a restore procedure is documented and tested
-- [ ] **OPS-05**: Data Protection keys are persisted, so encrypted bank credentials survive restarts and redeploys (verified by an actual restart)
+- [x] **OPS-03**: App, PostgreSQL, Grafana and Prometheus run in one LXC as systemd services; setup is automated where possible and any one-time steps are documented step by step
+- [x] **OPS-04**: Finance database backups are encrypted, and a restore procedure is documented and tested
+- [x] **OPS-05**: Data Protection keys are persisted, so encrypted bank credentials survive restarts and redeploys (verified by an actual restart)
 - [ ] **OPS-06**: All period bucketing (days, months, years) uses the Europe/Amsterdam time zone
+- [x] **OPS-07**: Database schema changes ship as Entity Framework Core migrations and are applied automatically during deployment with the migrator role
 
 ### Security & deployment
 
 - [ ] **SEC-01**: Bank access is read-only; no code path exists that can initiate a payment or move money
-- [ ] **SEC-02**: The app uses separate SQL logins — runtime (data access to its own database only), migrator (schema changes) and Grafana reader (SELECT on reporting views only); `sa` is never used
-- [ ] **SEC-03**: Secrets live only in a server-side env file readable by the app alone; bank consent tokens and the aggregator key are encrypted at rest
+- [x] **SEC-02**: The app uses separate database roles — runtime (data access to its own tables only, no schema changes), migrator (schema changes) and Grafana reader (SELECT on reporting views only); the database superuser is never used by the app
+- [x] **SEC-03**: Secrets live only in a server-side env file readable by the app alone; bank consent tokens and the aggregator key are encrypted at rest
 - [ ] **SEC-04**: Only `/mcp` and the OAuth endpoints it needs are internet-facing via Traefik, restricted to Anthropic's published IP ranges; access tokens are audience-validated on every request and never passed through to other services
-- [ ] **SEC-05**: SQL Server connections use verified TLS (no `TrustServerCertificate=true`)
-- [ ] **SEC-06**: Secrets and financial details never appear in logs, exception messages or metric labels
-- [ ] **SEC-07**: A semver tag triggers a build on a GitHub-hosted runner that produces a release artifact with build-provenance attestation; the server verifies the attestation before deploying
-- [ ] **SEC-08**: The self-hosted runner runs as a separate deploy user that cannot read app secrets; the deploy job is gated by a GitHub Environment with a required reviewer; workflow runs from outside contributors require approval; release-tag creation is restricted
-- [ ] **SEC-09**: All third-party GitHub Actions are pinned to commit SHAs and kept current by Dependabot; no workflow interpolates untrusted values directly into shell commands
-- [ ] **SEC-10**: The repository contains no personal data: secret scanning and push protection stay enabled, CI scans the full history for secrets, and all test data is synthetic
+- [x] **SEC-05**: The database is reachable only from inside the app's LXC over its local Unix socket (no network listener), with OS-user-to-role peer authentication
+- [x] **SEC-06**: Secrets and financial details never appear in logs, exception messages or metric labels
+- [x] **SEC-07**: A semver tag triggers a build on a GitHub-hosted runner that produces a release artifact with build-provenance attestation; the server verifies the attestation before deploying
+- [x] **SEC-08**: Deploys are pull-based: no self-hosted runner exists, and no GitHub-executed code runs on the server; a release is published only after approval on a GitHub Environment with a required reviewer, and the server installs only published releases from `main`; workflow runs from outside contributors require approval; release-tag creation is restricted
+- [x] **SEC-09**: All third-party GitHub Actions are pinned to commit SHAs and kept current by Dependabot; no workflow interpolates untrusted values directly into shell commands
+- [x] **SEC-10**: The repository contains no personal data: secret scanning and push protection stay enabled, CI scans the full history for secrets, and all test data is synthetic
 
 ### REST API
 
 - [ ] **API-01**: REST endpoints cover what MCP is not suited to (bank consent linking and renewal callback, health, computed data for Grafana, administration) and go through the same application layer and audit log as MCP
-- [ ] **API-02**: The REST API requires authentication even on the home network
+- [x] **API-02**: The REST API requires authentication even on the home network
 
 ## v2 Requirements
 
@@ -129,7 +130,7 @@ Explicitly excluded. Documented to prevent scope creep.
 | Public internet access to dashboards, REST API or web page | Only `/mcp` is public |
 | Prometheus as the store for financial data | No backfill, scrape-time timestamps, immutable samples break recategorisation |
 | Committing Nibud reference figures to the repository | Paid commercial data; cannot be redistributed in a public repo |
-| App calling the Anthropic API itself for reviews | Household chose Claude-side scheduling; avoids a separately billed API key |
+| App calling any LLM API itself (reviews, background categorisation) | All Claude usage runs on the household's subscription; no separately billed API key |
 | Full custom frontend replacing Grafana | Grafana is the dashboard; any web page is only for review/editing |
 | Multiple households / multi-tenancy | Single-household app |
 
@@ -139,13 +140,78 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| (filled by roadmap) | | |
+| INGEST-01 | Phase 2 | Pending |
+| INGEST-02 | Phase 2 | Pending |
+| INGEST-03 | Phase 2 | Pending |
+| INGEST-04 | Phase 2 | Pending |
+| INGEST-05 | Phase 2 | Pending |
+| INGEST-06 | Phase 2 | Pending |
+| INGEST-07 | Phase 2 | Pending |
+| CAT-01 | Phase 4 | Pending |
+| CAT-02 | Phase 4 | Pending |
+| CAT-03 | Phase 4 | Pending |
+| CAT-04 | Phase 4 | Pending |
+| CAT-05 | Phase 4 | Pending |
+| CAT-06 | Phase 4 | Pending |
+| CAT-07 | Phase 4 | Pending |
+| CAT-08 | Phase 4 | Pending |
+| PLAN-01 | Phase 5 | Pending |
+| PLAN-02 | Phase 5 | Pending |
+| PLAN-03 | Phase 5 | Pending |
+| PLAN-04 | Phase 5 | Pending |
+| PLAN-05 | Phase 5 | Pending |
+| PLAN-06 | Phase 5 | Pending |
+| PLAN-07 | Phase 5 | Pending |
+| PLAN-08 | Phase 5 | Pending |
+| PLAN-09 | Phase 4 | Pending |
+| ADV-01 | Phase 3 | Pending |
+| ADV-02 | Phase 3 | Pending |
+| ADV-03 | Phase 3 | Pending |
+| ADV-04 | Phase 5 | Pending |
+| ADV-05 | Phase 6 | Pending |
+| ADV-06 | Phase 4 | Pending |
+| ADV-07 | Phase 4 | Pending |
+| ADV-08 | Phase 6 | Pending |
+| ADV-09 | Phase 6 | Pending |
+| ADV-10 | Phase 3 | Pending |
+| ADV-11 | Phase 6 | Pending |
+| ADV-12 | Phase 6 | Pending |
+| ADV-13 | Phase 6 | Pending |
+| DASH-01 | Phase 5 | Pending |
+| DASH-02 | Phase 4 | Pending |
+| DASH-03 | Phase 5 | Pending |
+| DASH-04 | Phase 6 | Pending |
+| DASH-05 | Phase 2 | Pending |
+| DASH-06 | Phase 1 | Complete |
+| DASH-07 | Phase 2 | Pending |
+| DASH-08 | Phase 1 | Complete |
+| DASH-09 | Phase 1 | Complete |
+| OPS-01 | Phase 2 | Pending |
+| OPS-02 | Phase 2 | Pending |
+| OPS-03 | Phase 1 | Complete |
+| OPS-04 | Phase 1 | Complete |
+| OPS-05 | Phase 1 | Complete |
+| OPS-06 | Phase 3 | Pending |
+| OPS-07 | Phase 1 | Complete |
+| SEC-01 | Phase 2 | Pending |
+| SEC-02 | Phase 1 | Complete |
+| SEC-03 | Phase 1 | Complete |
+| SEC-04 | Phase 3 | Pending |
+| SEC-05 | Phase 1 | Complete |
+| SEC-06 | Phase 1 | Complete |
+| SEC-07 | Phase 1 | Complete |
+| SEC-08 | Phase 1 | Complete |
+| SEC-09 | Phase 1 | Complete |
+| SEC-10 | Phase 1 | Complete |
+| API-01 | Phase 6 | Pending |
+| API-02 | Phase 1 | Complete |
 
 **Coverage:**
-- v1 requirements: 64 total
-- Mapped to phases: 0
-- Unmapped: 64 ⚠️
+
+- v1 requirements: 65 total
+- Mapped to phases: 65
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-09-26*
-*Last updated: 2026-09-26 after initial definition*
+*Last updated: 2026-09-26 after roadmap creation (traceability filled)*

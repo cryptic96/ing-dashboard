@@ -1,0 +1,33 @@
+[Unit]
+Description=Household ledger application
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+User=ledger
+Group=ledger
+WorkingDirectory=/opt/ledger/current/app
+ExecStart=/usr/bin/dotnet /opt/ledger/current/app/Ledger.Service.dll
+EnvironmentFile=/etc/ledger/ledger.env
+Environment=DOTNET_NOLOGO=1
+Environment=HOME=/var/lib/ledger
+StateDirectory=ledger
+Restart=always
+RestartSec=10
+SyslogIdentifier=ledger
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

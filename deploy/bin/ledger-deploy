@@ -1,0 +1,252 @@
+#!/usr/bin/env bash
+# Root-owned installer: the only thing that ever changes the running
+# deployment. Downloads a release by tag, verifies its attestation fully
+# offline before unpacking anything, refuses downgrades, runs any pending
+# migration as the migrator OS user, activates the release atomically,
+# health-checks it, rolls back automatically unless a migration ran, and
+# reports the outcome by email and Prometheus textfile metrics.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [ -f "${SCRIPT_DIR}/../lib/common.sh" ]; then
+  LIB_DIR="$(cd "${SCRIPT_DIR}/../lib" && pwd)"
+else
+  LIB_DIR="/usr/local/lib/ledger"
+fi
+
+# shellcheck source=deploy/lib/common.sh
+source "${LIB_DIR}/common.sh"
+# shellcheck source=deploy/lib/deploy.sh
+source "${LIB_DIR}/deploy.sh"
+
+DEPLOY_ROOT="${LEDGER_DEPLOY_ROOT:-}"
+LOCK_PATH="${DEPLOY_ROOT}/run/ledger-deploy.lock"
+DOWNLOAD_DIR="${DEPLOY_ROOT}/var/lib/ledger-deploy/downloads"
+STATE_DIR="${DEPLOY_ROOT}/var/lib/ledger-deploy/state"
+RELEASES_DIR="${DEPLOY_ROOT}/opt/ledger/releases"
+CURRENT_LINK="${DEPLOY_ROOT}/opt/ledger/current"
+CONF_PATH="${LEDGER_DEPLOY_CONF:-${DEPLOY_ROOT}/etc/ledger/deploy.conf}"
+
+STRICT_SEMVER_TAG_REGEX='^v[0-9]+\.[0-9]+\.[0-9]+$'
+
+usage() {
+  cat <<'EOF_USAGE'
+Usage:
+  ledger-deploy poll
+  ledger-deploy install v<version> [--from-dir DIR]
+  ledger-deploy rollback <version>
+  ledger-deploy verify --artifact FILE --bundle FILE --tag v<version>
+EOF_USAGE
+}
+
+require_root() {
+  if [ -z "$DEPLOY_ROOT" ] && [ "$(id -u)" -ne 0 ]; then
+    ledger_die "ledger-deploy must run as root"
+  fi
+}
+
+load_configuration() {
+  # Defaults; a value present in the configuration file overrides these.
+  LEDGER_SIGNER_WORKFLOW="${LEDGER_SIGNER_WORKFLOW:-.github/workflows/release.yml}"
+  LEDGER_KEEP_RELEASES="${LEDGER_KEEP_RELEASES:-5}"
+  LEDGER_HEALTH_TIMEOUT_SECONDS="${LEDGER_HEALTH_TIMEOUT_SECONDS:-90}"
+  LEDGER_OPS_URL="${LEDGER_OPS_URL:-http://127.0.0.1:5081}"
+  LEDGER_TEXTFILE_DIR="${LEDGER_TEXTFILE_DIR:-/var/lib/prometheus/node-exporter}"
+  LEDGER_NOTIFY_EMAIL="${LEDGER_NOTIFY_EMAIL:-}"
+  LEDGER_GITHUB_REPO="${LEDGER_GITHUB_REPO:-}"
+
+  ledger_load_conf "$CONF_PATH"
+
+  [ -n "$LEDGER_GITHUB_REPO" ] || ledger_die "LEDGER_GITHUB_REPO is not configured"
+}
+
+acquire_lock() {
+  mkdir -p "$(dirname "$LOCK_PATH")"
+  exec 9>"$LOCK_PATH"
+  if ! flock -n 9; then
+    ledger_die "another ledger-deploy invocation is already running"
+  fi
+}
+
+active_release_version() {
+  if [ -L "$CURRENT_LINK" ]; then
+    basename "$(readlink -f "$CURRENT_LINK")"
+  fi
+}
+
+download_release_asset() {
+  local repo="$1" tag="$2" asset_name="$3" destination="$4"
+  curl --fail --silent --show-error --location --max-time 120 \
+    -o "$destination" \
+    "https://github.com/${repo}/releases/download/${tag}/${asset_name}"
+}
+
+cmd_verify() {
+  local artifact="" bundle="" tag=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --artifact) artifact="$2"; shift 2 ;;
+      --bundle) bundle="$2"; shift 2 ;;
+      --tag) tag="$2"; shift 2 ;;
+      *) ledger_die "verify: unknown argument $1" ;;
+    esac
+  done
+
+  if [ -z "$artifact" ] || [ -z "$bundle" ] || [ -z "$tag" ]; then
+    usage
+    ledger_die "verify requires --artifact, --bundle and --tag"
+  fi
+  [[ "$tag" =~ $STRICT_SEMVER_TAG_REGEX ]] || ledger_die "tag '$tag' is not a strict semver tag"
+
+  local digest
+  digest="$(ledger_verify_attestation "$artifact" "$bundle" "$LEDGER_GITHUB_REPO" "$LEDGER_SIGNER_WORKFLOW" "refs/tags/${tag}")"
+  ledger_log "attestation verified for $artifact (source digest: $digest)"
+
+  ledger_commit_on_branch "$LEDGER_GITHUB_REPO" "$digest" "main" \
+    || ledger_die "attested commit $digest is not on main"
+
+  printf '%s\n' "$digest"
+}
+
+cmd_install() {
+  local version="" from_dir=""
+
+  if [ $# -gt 0 ] && [[ "$1" != --* ]]; then
+    version="$1"
+    shift
+  fi
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --from-dir) from_dir="$2"; shift 2 ;;
+      *) ledger_die "install: unknown argument $1" ;;
+    esac
+  done
+
+  [ -n "$version" ] || { usage; ledger_die "install requires a version, e.g. v1.2.3"; }
+  [[ "$version" =~ $STRICT_SEMVER_TAG_REGEX ]] || ledger_die "tag '$version' is not a strict semver tag"
+  local numeric_version="${version#v}"
+
+  local active_version
+  active_version="$(active_release_version)"
+
+  if [ -n "$active_version" ]; then
+    if [ "$numeric_version" = "$active_version" ] || ! ledger_semver_gt "$numeric_version" "$active_version"; then
+      ledger_die "refusing to install ${version}: not newer than the active release ${active_version} (use rollback for downgrades)"
+    fi
+  fi
+
+  local artifact bundle
+  if [ -n "$from_dir" ]; then
+    artifact="${from_dir}/ledger-${numeric_version}.zip"
+    bundle="${from_dir}/ledger-${numeric_version}.zip.sigstore.json"
+  else
+    local download_dir="${DOWNLOAD_DIR}/${numeric_version}"
+    mkdir -p "$download_dir"
+    artifact="${download_dir}/ledger-${numeric_version}.zip"
+    bundle="${download_dir}/ledger-${numeric_version}.zip.sigstore.json"
+    download_release_asset "$LEDGER_GITHUB_REPO" "$version" "ledger-${numeric_version}.zip" "$artifact" \
+      || ledger_die "failed to download ledger-${numeric_version}.zip"
+    download_release_asset "$LEDGER_GITHUB_REPO" "$version" "ledger-${numeric_version}.zip.sigstore.json" "$bundle" \
+      || ledger_die "failed to download ledger-${numeric_version}.zip.sigstore.json"
+  fi
+
+  [ -f "$artifact" ] || ledger_die "artifact not found: $artifact"
+  [ -f "$bundle" ] || ledger_die "attestation bundle not found: $bundle"
+
+  local digest
+  if ! digest="$(ledger_verify_attestation "$artifact" "$bundle" "$LEDGER_GITHUB_REPO" "$LEDGER_SIGNER_WORKFLOW" "refs/tags/${version}")"; then
+    ledger_die "attestation verification failed for ${version}, refusing to unpack"
+  fi
+
+  if ! ledger_commit_on_branch "$LEDGER_GITHUB_REPO" "$digest" "main"; then
+    ledger_die "attested commit for ${version} is not on main, refusing to unpack"
+  fi
+
+  ledger_log "artifact and provenance verified for ${version} (commit ${digest})"
+
+  ledger_install_verified_release \
+    "$version" "$numeric_version" "$artifact" "$active_version" \
+    "$RELEASES_DIR" "$CURRENT_LINK" "$STATE_DIR" "$LEDGER_KEEP_RELEASES" \
+    "$LEDGER_OPS_URL" "$LEDGER_HEALTH_TIMEOUT_SECONDS"
+}
+
+cmd_rollback() {
+  local version="$1"
+  [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || ledger_die "rollback requires a plain version, e.g. 1.2.3"
+
+  ledger_rollback_release \
+    "$version" "$RELEASES_DIR" "$CURRENT_LINK" "$STATE_DIR" \
+    "$LEDGER_OPS_URL" "$LEDGER_HEALTH_TIMEOUT_SECONDS"
+}
+
+cmd_poll() {
+  local latest_url="${LEDGER_POLL_LATEST_URL:-https://api.github.com/repos/${LEDGER_GITHUB_REPO}/releases/latest}"
+
+  local tag=""
+  local poll_success=0
+  local response
+  if response=$(curl --fail --silent --show-error --max-time 30 "$latest_url" 2>&1); then
+    tag="$(printf '%s' "$response" | jq -r '.tag_name // empty')"
+    if [ -n "$tag" ] && [[ "$tag" =~ $STRICT_SEMVER_TAG_REGEX ]]; then
+      poll_success=1
+    else
+      ledger_log "latest release tag '$tag' from $latest_url is not a strict semver tag"
+      tag=""
+    fi
+  else
+    ledger_log "failed to poll $latest_url: $response"
+  fi
+
+  ledger_write_deploy_poll_metrics "$poll_success" "$(date -u +%s)"
+
+  [ -n "$tag" ] || ledger_die "unable to determine a valid latest published release"
+
+  local active_version
+  active_version="$(active_release_version)"
+  local numeric_tag="${tag#v}"
+
+  if [ -n "$active_version" ] && ! ledger_semver_gt "$numeric_tag" "$active_version"; then
+    ledger_log "latest published release ${tag} is not newer than the active release ${active_version}"
+    return 0
+  fi
+
+  ledger_log "newer release ${tag} found, installing"
+  cmd_install "$tag"
+}
+
+main() {
+  local subcommand="${1:-}"
+  [ -n "$subcommand" ] || { usage; ledger_die "a subcommand is required"; }
+  shift || true
+
+  require_root
+  load_configuration
+
+  case "$subcommand" in
+    verify)
+      cmd_verify "$@"
+      ;;
+    poll)
+      acquire_lock
+      cmd_poll "$@"
+      ;;
+    install)
+      acquire_lock
+      cmd_install "$@"
+      ;;
+    rollback)
+      acquire_lock
+      cmd_rollback "$@"
+      ;;
+    -h|--help)
+      usage
+      ;;
+    *)
+      usage
+      ledger_die "unknown subcommand: $subcommand"
+      ;;
+  esac
+}
+
+main "$@"

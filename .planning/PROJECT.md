@@ -50,19 +50,19 @@ Claude can serve as a trustworthy financial advisor for the household — answer
 - [ ] Dashboards, datasources and alert rules are provisioned as code from the repository — nothing clicked together by hand
 - [ ] Dashboards available in both English and Dutch
 - [ ] Both partners can open the dashboards without technical steps, at home and away (via the home VPN)
-- [ ] Grafana reads financial data through a SELECT-only login on a reporting schema of views (chosen after comparing views, REST via a JSON datasource and Prometheus)
+- [ ] Grafana reads financial data through a SELECT-only database role on a reporting schema of views (chosen after comparing views, REST via a JSON datasource and Prometheus)
 
 **Operations & observability**
 - [ ] App exposes `/metrics` for Prometheus: sync health, time of last successful sync, days until bank consent expires, error counts
 - [ ] Alerts for failing syncs and for bank consent nearing expiry
-- [ ] App, Grafana and Prometheus run in one LXC; provisioning is automated where possible and any one-time setup is documented step by step
+- [ ] App, PostgreSQL, Grafana and Prometheus run in one LXC; provisioning is automated where possible and any one-time setup is documented step by step
 
 **REST API & web page**
 - [ ] REST endpoints for operations that MCP is not suited to, and to back the web page
 - [ ] (Deferred to v2) Small web page for reviewing and fixing transactions, translatable English/Dutch
 
 **Deployment & security**
-- [ ] Public GitHub repo; release on semver tag → build on GitHub-hosted runner → release artifact → self-hosted runner on the app LXC only deploys
+- [ ] Public GitHub repo; release on semver tag on `main` → build on GitHub-hosted runner → attested release artifact → published after approval → the app LXC pulls, verifies and installs it (no self-hosted runner)
 - [ ] Deployment pattern hardened versus the existing homelab reference (see Context → Security review)
 
 ### Out of Scope
@@ -75,6 +75,7 @@ Claude can serve as a trustworthy financial advisor for the household — answer
 - Prometheus as the store for financial data — scraping cannot backfill history, records values at scrape time instead of booking date, and stored samples are immutable, which breaks recategorising past transactions
 - Public internet access to dashboards, REST API or web page — only `/mcp` is public
 - Financial figures in email — email leaves the home network and persists at the mail provider
+- The app calling any LLM API itself (background categorisation, app-run reviews) — all Claude usage stays on the household's subscription; unclear transactions wait in the review queue for a Claude session or the scheduled task
 - A full custom frontend replacing Grafana — Grafana is the dashboard; the web page is only for review/editing
 - Multiple households / multi-tenancy — single-household app
 
@@ -98,12 +99,12 @@ Claude can serve as a trustworthy financial advisor for the household — answer
 - Reference deployment (another of the user's public repos): semver tag → GitHub-hosted build → GitHub Release zip → self-hosted runner on the app LXC runs a deploy script → systemd unit; secrets in a server-side env file.
 
 **Security review of the reference deployment** — issues this project must not inherit:
-1. Self-hosted runner on a public repo, running as the same user that owns the secrets file → any job (e.g. from a fork PR) could read every secret. Fix: require approval for all outside-contributor workflow runs, run the runner as a separate deploy user that cannot read the app's secrets, gate deploy behind a GitHub Environment with required reviewer, restrict who can create release tags.
-2. App connects to the shared SQL Server as `sa` → a flaw in one app exposes every database on the instance. Fix: dedicated logins scoped to this app's database (runtime vs migration), plus a SELECT-only login for Grafana.
+1. Self-hosted runner on a public repo, running as the same user that owns the secrets file → any job (e.g. from a fork PR) could read every secret. Fix: no self-hosted runner at all — the server pulls and verifies approved, attested releases, so no GitHub-executed code runs on it; require approval for all outside-contributor workflow runs, gate publishing a release behind a GitHub Environment with required reviewer, restrict who can create release tags.
+2. App connects to the shared SQL Server as `sa` → a flaw in one app exposes every database on the instance. Fix: this app gets its own PostgreSQL inside its own LXC, reachable only over the local Unix socket, with separate roles (runtime vs migration) plus a SELECT-only role for Grafana.
 3. Deploy script runs a downloaded artifact without integrity verification. Fix: build-provenance attestation in CI, verify before unpacking.
 4. Third-party GitHub Actions pinned by mutable tag. Fix: pin to commit SHAs, Dependabot for updates.
 5. Workflow interpolates tag/input values straight into shell. Fix: pass via env vars and validate against a strict semver pattern.
-6. Secrets at rest: env file root-owned with group read for the app only; bank consent tokens encrypted in the database (ASP.NET Data Protection); encrypted DB backups; SQL connections with proper TLS instead of `TrustServerCertificate=true`.
+6. Secrets at rest: env file root-owned with group read for the app only; bank consent tokens encrypted in the database (ASP.NET Data Protection); encrypted DB backups (encrypted to a public key; the private key stays off the server); the database has no network listener at all instead of a TLS connection with `TrustServerCertificate=true`.
 7. Only `/mcp` is internet-facing, behind OAuth 2.1 (and an IP allowlist if Anthropic publishes egress ranges); everything else is LAN + VPN only.
 
 **Accepted data flows** — inherent to the design, not flaws: transaction data reaches Anthropic whenever Claude reads it through MCP, and the chosen aggregator sees all synced transactions.
@@ -111,12 +112,16 @@ Claude can serve as a trustworthy financial advisor for the household — answer
 ## Constraints
 
 - **Tech stack**: .NET 10 / C#; one ASP.NET Core host serving REST API, MCP endpoint and background sync — user's main language, one deployable unit
-- **Database**: existing network MS SQL Server — new dedicated database with least-privilege logins; never `sa`
+- **Solution**: a single `.slnx` solution file
+- **Data access**: Entity Framework Core, code-first, with migrations; migrations are applied automatically during deployment using the migrator role (the runtime role has no schema rights) — keeps deployments hands-off
+- **LLM usage**: none from the app — no Anthropic (or other LLM) API key or billing; all Claude usage runs on the household's Claude subscription via Claude Desktop, Claude Code, claude.ai and Claude-side scheduled tasks connecting to the MCP server
+- **Local development**: tests that need a real database use the user's own local PostgreSQL Docker container; connection strings live in `dotnet user-secrets`, never in committed config; CI uses a PostgreSQL service container
+- **Database**: PostgreSQL inside the app LXC, reachable only over its Unix socket (no network listener), with least-privilege roles and peer authentication; the app never uses the superuser
 - **Code style**: no `//` comments — only `///` XML doc summaries
 - **No planning references outside `.planning/`**: never put requirement keys, decision IDs, phase/plan numbers or planning document names in documentation, READMEs, code, comments, XML docs, test names, dashboards, MCP tool descriptions or config — they go stale the moment a phase closes
 - **Public repository**: no personal details anywhere in code, commits, comments, docs, fixtures or dashboards — IBANs, names, domains, API keys and similar live only in the server-side env file; merchant/category rules live in the database; all test data is synthetic
-- **CI/CD**: GitHub Actions free tier (requires public repo); the self-hosted runner only deploys
-- **Hosting**: Proxmox LXC; app, Grafana and Prometheus in the same LXC; automated provisioning preferred, documented one-time setup acceptable
+- **CI/CD**: GitHub Actions free tier (requires public repo) on GitHub-hosted runners only; no self-hosted runner — the server pulls approved, attested releases
+- **Hosting**: Proxmox LXC; app, PostgreSQL, Grafana and Prometheus in the same LXC; automated provisioning preferred, documented one-time setup acceptable
 - **Network exposure**: only `/mcp` public (HTTPS via existing Traefik, OAuth 2.1); dashboards, REST and web page reachable on the home network and VPN only
 - **Bank access**: read-only, fully automatic sync
 - **Language**: application code and UI in English; dashboards (and web page) translatable English/Dutch
@@ -128,10 +133,10 @@ Claude can serve as a trustworthy financial advisor for the household — answer
 |----------|-----------|---------|
 | Name the app "Household Ledger" | Bank-agnostic, English throughout | — Pending |
 | .NET 10, single ASP.NET Core host for REST + MCP + BackgroundService sync | User's main language; one process to deploy and secure | — Pending |
-| Store data in a new database on the existing MS SQL Server, with dedicated least-privilege logins | Reuse existing infrastructure without sharing credentials | — Pending |
+| Store data in PostgreSQL inside the app LXC, Unix socket only, with separate runtime / migrator / Grafana reader roles (replaces the earlier plan to use the shared MS SQL Server) | Removes cross-container TLS and firewall work and the shared-instance risk (the other app on that server connects as `sa`); ~150 MB RAM instead of SQL Server's 2 GB minimum; peer auth means no database passwords; SQLite rejected (no logins, decimals stored as text) | — Pending |
 | Grafana is the primary UI | User preference; partner-friendly; known stack | — Pending |
 | Prometheus only for operational metrics, not financial data | No backfill, scrape-time timestamps, immutable samples conflict with recategorisation | — Pending |
-| Grafana reads financial data via a SELECT-only login on a `reporting` schema of views; a JSON datasource against the REST API only for computed panels | Research compared views, REST/Infinity and Prometheus; views are Grafana's own recommended least-privilege pattern and keep the app the owner of its tables | — Pending |
+| Grafana reads financial data via a SELECT-only role on a `reporting` schema of views; a JSON datasource against the REST API only for computed panels | Research compared views, REST/Infinity and Prometheus; views are Grafana's own recommended least-privilege pattern and keep the app the owner of its tables | — Pending |
 | Bank link via Enable Banking's free personal-use tier; verify ING savings-account coverage early, Salt Edge as fallback | Official ING API not available to individuals; GoCardless Bank Account Data closed to new signups in 2025 | — Pending (early spike) |
 | OAuth authorization server: separate Authentik vs a lightweight embedded server | claude.ai client-registration requirements (DCR vs pre-registered client) decide it; single-LXC resource budget matters | — Pending (MCP/auth phase research) |
 | Spending compared with the household's own history, not Nibud reference figures, in v1 | Nibud figures are a paid product and cannot be committed to a public repo | — Pending |
@@ -143,7 +148,9 @@ Claude can serve as a trustworthy financial advisor for the household — answer
 | Claude may change categories, rules, budgets, goals, notes, memory — all audit-logged and reversible | Core value needs write access; audit + undo keeps it safe | — Pending |
 | Review emails are notification-only | Email leaves the network and persists at the provider | — Pending |
 | Scheduled reviews run from a Claude-side schedule (Claude Code / Desktop / cloud routine) through the MCP server; the app stores them and sends the notification | Uses the existing Claude subscription, no separately billed API key; reviews stay readable as a conversation | — Pending |
-| Harden the reference deployment pattern (runner isolation, scoped SQL logins, artifact verification, SHA-pinned actions) | Finance data demands more than a hobby app | — Pending |
+| Harden the reference deployment pattern (pull-based deploys instead of a self-hosted runner, scoped database roles, artifact verification, SHA-pinned actions) | Finance data demands more than a hobby app | — Pending |
+| Pull-based deploys: approval publishes the release, a timer on the LXC pulls it and a root-owned installer verifies and installs it; no self-hosted runner | GitHub advises against self-hosted runners on public repos; a central SSH deploy box would become a hub reaching every app; no GitHub-executed code ever runs on the finance server | — Pending |
+| Backups stay local inside the LXC, encrypted to a public key whose private key lives in the operator's password manager | User decision; losing the SSD, theft or fire loses data and backups (accepted risk, offsite copies deferred) | — Pending |
 
 ## Evolution
 
@@ -163,4 +170,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-09-26 after initialization*
+*Last updated: 2026-09-27 after Phase 1 context discussion (PostgreSQL, pull-based deploys)*

@@ -1,0 +1,28 @@
+# Provisioned datasources. Neither of these is editable from the Grafana UI
+# (editable: false) — the repository is the only place either one changes.
+apiVersion: 1
+
+datasources:
+  - name: Ledger Reporting
+    uid: ledger-reporting
+    type: postgres
+    access: proxy
+    url: /var/run/postgresql
+    user: grafana_reader
+    database: ledger
+    editable: false
+    jsonData:
+      sslmode: disable
+      postgresVersion: 1800
+      # Nothing secret here: PostgreSQL listens on its Unix socket only,
+      # and peer authentication maps the grafana-server OS user straight to
+      # the grafana_reader role. There is no secret material to hold, so
+      # there is no further section below this comment.
+
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://127.0.0.1:9090
+    isDefault: true
+    editable: false

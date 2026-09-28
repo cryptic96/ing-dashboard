@@ -1,0 +1,16 @@
+# Dashboard provider. No dashboard JSON ships yet: every dashboard must
+# exist in both English and Dutch, generated from one source, before it is
+# committed here. This provider only reserves the folder and turns off
+# UI-side dashboard edits so that, once dashboards do land, they stay
+# generated rather than hand-tweaked in place.
+apiVersion: 1
+
+providers:
+  - name: ledger
+    orgId: 1
+    folder: Household Ledger
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards/ledger

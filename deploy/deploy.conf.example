@@ -1,0 +1,29 @@
+# Example configuration for the deploy installer.
+# Copy to /etc/ledger/deploy.conf, owned by root and not group- or
+# world-writable (e.g. `chmod 600`). Every value below is a placeholder.
+
+# GitHub owner/repo this installer polls, downloads from and verifies
+# attestations against.
+LEDGER_GITHUB_REPO=example-owner/example-repo
+
+# Path, relative to the repository root, of the workflow file that must have
+# produced the release's attestation.
+LEDGER_SIGNER_WORKFLOW=.github/workflows/release.yml
+
+# Recipient address for deploy outcome notification emails. Left empty to
+# disable email notifications.
+LEDGER_NOTIFY_EMAIL=operator@example.com
+
+# Number of past release directories to keep on disk in addition to the
+# active and previous releases.
+LEDGER_KEEP_RELEASES=5
+
+# Seconds to wait for the app (and, when touched by this deploy, Grafana and
+# Prometheus) to report healthy after a restart.
+LEDGER_HEALTH_TIMEOUT_SECONDS=90
+
+# Base URL of the app's loopback-only ops endpoint (health and metrics).
+LEDGER_OPS_URL=http://127.0.0.1:5081
+
+# Directory the node exporter textfile collector reads from.
+LEDGER_TEXTFILE_DIR=/var/lib/prometheus/node-exporter

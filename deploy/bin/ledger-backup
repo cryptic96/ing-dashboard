@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+# Takes an encrypted, nightly or pre-migration backup of the ledger
+# database. Streams a custom-format pg_dump straight through age encryption
+# to the public keys in the recipients file, checks the whole pipeline
+# actually succeeded before publishing anything, prunes old backups on a
+# grandfather-father-son schedule, and always reports the outcome as
+# Prometheus textfile metrics. Never reads the env file, the Data
+# Protection certificate or any age identity, and never logs anything but
+# file names, sizes and outcomes.
+set -euo pipefail
+umask 077
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [ -f "${SCRIPT_DIR}/../lib/common.sh" ]; then
+  LIB_DIR="$(cd "${SCRIPT_DIR}/../lib" && pwd)"
+else
+  LIB_DIR="/usr/local/lib/ledger"
+fi
+
+# shellcheck source=deploy/lib/common.sh
+source "${LIB_DIR}/common.sh"
+# shellcheck source=deploy/lib/backup.sh
+source "${LIB_DIR}/backup.sh"
+
+BACKUP_ROOT="${LEDGER_BACKUP_ROOT:-/var/backups/ledger}"
+RECIPIENTS_FILE="${LEDGER_BACKUP_RECIPIENTS:-/etc/ledger/backup-recipients.txt}"
+STATE_DIR="${BACKUP_ROOT}/.state"
+
+usage() {
+  printf 'Usage: ledger-backup {nightly|pre-migration}\n' >&2
+}
+
+if [ "$#" -ne 1 ]; then
+  usage
+  exit 1
+fi
+
+REASON="$1"
+case "$REASON" in
+  nightly | pre-migration) ;;
+  *)
+    usage
+    exit 1
+    ;;
+esac
+
+NOW_EPOCH="$(date -u +%s)"
+TARGET_NAME="$(ledger_backup_filename "$REASON" "$NOW_EPOCH")"
+STATE_FILE="${STATE_DIR}/last-success-${REASON}"
+
+# Writes the three ledger_backup_ gauges for this reason. On a failed run,
+# the previous success timestamp is kept rather than overwritten, so a
+# stale-backup alert can tell "never backed up" apart from "backed up a
+# while ago, now failing".
+write_metrics() {
+  local success="$1"
+  local size="${2:-0}"
+
+  mkdir -p "$STATE_DIR"
+
+  local last_success=0
+  if [ -f "$STATE_FILE" ]; then
+    last_success="$(cat "$STATE_FILE")"
+  fi
+
+  local timestamp="$last_success"
+  if [ "$success" -eq 1 ]; then
+    timestamp="$NOW_EPOCH"
+    printf '%s\n' "$timestamp" > "$STATE_FILE"
+  fi
+
+  local content
+  content=$(cat <<EOF_METRICS
+# HELP ledger_backup_last_success_timestamp_seconds Unix timestamp of the most recent successful backup for this reason.
+# TYPE ledger_backup_last_success_timestamp_seconds gauge
+ledger_backup_last_success_timestamp_seconds{reason="${REASON}"} ${timestamp}
+# HELP ledger_backup_last_run_success Whether the most recent backup run for this reason succeeded.
+# TYPE ledger_backup_last_run_success gauge
+ledger_backup_last_run_success{reason="${REASON}"} ${success}
+# HELP ledger_backup_last_size_bytes Size in bytes of the most recent successful backup for this reason.
+# TYPE ledger_backup_last_size_bytes gauge
+ledger_backup_last_size_bytes{reason="${REASON}"} ${size}
+EOF_METRICS
+)
+  ledger_write_textfile_metrics "ledger_backup_${REASON}" "$content"
+}
+
+fail() {
+  ledger_log "ERROR: $1"
+  write_metrics 0
+  exit 1
+}
+
+ledger_backup_validate_recipients "$RECIPIENTS_FILE"
+
+mkdir -p "$BACKUP_ROOT"
+
+TMP_FILE="$(mktemp "${BACKUP_ROOT}/.${TARGET_NAME}.XXXXXX")"
+trap 'rm -f "$TMP_FILE"' EXIT
+
+set +e
+pg_dump --format=custom --dbname=ledger \
+  | age --encrypt --recipients-file "$RECIPIENTS_FILE" > "$TMP_FILE"
+PIPE_STATUS=("${PIPESTATUS[@]}")
+set -e
+
+if [ "${PIPE_STATUS[0]}" -ne 0 ] || [ "${PIPE_STATUS[1]}" -ne 0 ]; then
+  fail "backup pipeline failed (pg_dump=${PIPE_STATUS[0]}, age=${PIPE_STATUS[1]})"
+fi
+
+BACKUP_SIZE="$(stat -c '%s' "$TMP_FILE")"
+if [ "$BACKUP_SIZE" -eq 0 ]; then
+  fail "backup output for ${TARGET_NAME} is empty"
+fi
+
+FIRST_LINE="$(head -n1 "$TMP_FILE" 2>/dev/null || true)"
+if [ "$FIRST_LINE" != "age-encryption.org/v1" ]; then
+  fail "backup output for ${TARGET_NAME} does not start with an age header"
+fi
+
+FINAL_PATH="${BACKUP_ROOT}/${TARGET_NAME}"
+mv -f "$TMP_FILE" "$FINAL_PATH"
+trap - EXIT
+
+mapfile -t EXISTING_NAMES < <(find "$BACKUP_ROOT" -maxdepth 1 -type f -name 'ledger-*.dump.age' -printf '%f\n')
+mapfile -t TO_DELETE < <(printf '%s\n' "${EXISTING_NAMES[@]}" | ledger_backup_select_deletions)
+for name in "${TO_DELETE[@]}"; do
+  [ -n "$name" ] || continue
+  rm -f "${BACKUP_ROOT:?}/${name}"
+  ledger_log "removed old backup ${name}"
+done
+
+ledger_log "backup ${TARGET_NAME} succeeded (${BACKUP_SIZE} bytes)"
+write_metrics 1 "$BACKUP_SIZE"

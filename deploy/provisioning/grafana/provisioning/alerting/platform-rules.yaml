@@ -1,0 +1,323 @@
+# Platform alert rules. Every rule queries the Prometheus datasource (uid
+# prometheus) and evaluates a threshold expression node; titles and
+# summaries name only the rule, service and state, never a query result, so
+# nothing financial or otherwise sensitive can ever reach an alert email.
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: platform
+    folder: Platform
+    interval: 1m
+    rules:
+      - uid: ledger-app-down
+        title: Ledger app is down
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: up{job="ledger"}
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [1]
+                  operator:
+                    type: and
+                  query:
+                    params: [A]
+                  reducer:
+                    type: last
+                    params: []
+              refId: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        annotations:
+          summary: Ledger app is down.
+        labels: {}
+
+      - uid: ledger-service-down
+        title: A platform service is down
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: min by (name) (node_systemd_unit_state{state="active", name=~"^(ledger\\.service|postgresql@18-main\\.service|grafana-server\\.service|prometheus\\.service|prometheus-node-exporter\\.service)$"})
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [1]
+                  operator:
+                    type: and
+                  query:
+                    params: [A]
+                  reducer:
+                    type: last
+                    params: []
+              refId: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        annotations:
+          summary: A platform service is not active.
+        labels: {}
+
+      - uid: ledger-health-failing
+        title: Ledger health check is failing
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: min(ledger_health_check_status)
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [1]
+                  operator:
+                    type: and
+                  query:
+                    params: [A]
+                  reducer:
+                    type: last
+                    params: []
+              refId: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        annotations:
+          summary: A ledger application health check is failing.
+        labels: {}
+
+      - uid: ledger-backup-stale
+        title: Ledger backup is stale
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: time() - max(ledger_backup_last_success_timestamp_seconds)
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [93600]
+                  operator:
+                    type: and
+                  query:
+                    params: [A]
+                  reducer:
+                    type: last
+                    params: []
+              refId: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        annotations:
+          summary: Ledger backup is stale.
+        labels: {}
+
+      - uid: ledger-backup-failed
+        title: Ledger backup run failed
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: min(ledger_backup_last_run_success)
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [1]
+                  operator:
+                    type: and
+                  query:
+                    params: [A]
+                  reducer:
+                    type: last
+                    params: []
+              refId: C
+        for: 0m
+        noDataState: Alerting
+        execErrState: Alerting
+        annotations:
+          summary: The last ledger backup run failed.
+        labels: {}
+
+      - uid: ledger-deploy-failed
+        title: Ledger deploy failed
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: ledger_deploy_last_run_success
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [1]
+                  operator:
+                    type: and
+                  query:
+                    params: [A]
+                  reducer:
+                    type: last
+                    params: []
+              refId: C
+        for: 0m
+        noDataState: OK
+        execErrState: Alerting
+        annotations:
+          summary: The last ledger deploy failed.
+        labels: {}
+
+      - uid: ledger-deploy-rolled-back
+        title: Ledger deploy was rolled back
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: ledger_deploy_last_run_rolled_back
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+                  operator:
+                    type: and
+                  query:
+                    params: [A]
+                  reducer:
+                    type: last
+                    params: []
+              refId: C
+        for: 0m
+        noDataState: OK
+        execErrState: Alerting
+        annotations:
+          summary: The last ledger deploy was rolled back.
+        labels: {}
+
+      - uid: ledger-deploy-poll-stale
+        title: Ledger deploy poll is stale
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: time() - ledger_deploy_last_poll_timestamp_seconds
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [3600]
+                  operator:
+                    type: and
+                  query:
+                    params: [A]
+                  reducer:
+                    type: last
+                    params: []
+              refId: C
+        for: 10m
+        noDataState: Alerting
+        execErrState: Alerting
+        annotations:
+          summary: The ledger deploy poll timer has not run recently.
+        labels: {}
