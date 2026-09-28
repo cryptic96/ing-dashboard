@@ -149,8 +149,11 @@ check_postgres() {
   # The Grafana OS user is pinned to "grafana" in deploy/versions.env
   # (GRAFANA_SERVICE_USER), confirmed against the real packaged service.
   local select_error
+  # Schema-qualified: grafana_reader has no USAGE on public, so an unqualified
+  # name would be skipped during search_path resolution and report 42P01
+  # instead of the permission error this check is about.
   select_error="$(runuser -u grafana -- psql -v VERBOSITY=verbose -d ledger -U grafana_reader -Atc \
-    'SELECT * FROM data_protection_keys LIMIT 1' 2>&1 || true)"
+    'SELECT * FROM public.data_protection_keys LIMIT 1' 2>&1 || true)"
   if printf '%s' "$select_error" | grep -q '42501'; then
     pass "grafana_reader cannot read data_protection_keys (42501 insufficient_privilege), proving the ledger-reporting peer mapping"
   elif [[ "$PRE_DEPLOY" -eq 1 ]] && printf '%s' "$select_error" | grep -q '42P01'; then
@@ -349,13 +352,23 @@ check_app() {
   fi
 
   local metrics_version current_version
-  metrics_version="$(curl --fail --silent --show-error --max-time 5 http://127.0.0.1:5081/metrics 2> /dev/null \
-    | awk -F'"' '/ledger_build_info/{print $2; exit}')"
+  local metrics_body
+  metrics_body="$(curl --fail --silent --show-error --max-time 5 http://127.0.0.1:5081/metrics 2> /dev/null || true)"
+  metrics_version="$(sed -nE 's/^ledger_build_info\{.*version="([^"]*)".*/\1/p' <<< "$metrics_body" | head -n1)"
   current_version="$(basename "$(readlink -f /opt/ledger/current 2> /dev/null)" 2> /dev/null || true)"
   if [[ -n "$metrics_version" && "$metrics_version" == "$current_version" ]]; then
     pass "ledger_build_info version matches the current release (${current_version})"
   else
     fail "ledger_build_info version (${metrics_version}) does not match the current release (${current_version})"
+  fi
+
+  local metrics_commit manifest_commit
+  metrics_commit="$(sed -nE 's/^ledger_build_info\{.*commit="([^"]*)".*/\1/p' <<< "$metrics_body" | head -n1)"
+  manifest_commit="$(jq -r '.commit // empty' /opt/ledger/current/release-manifest.json 2> /dev/null || true)"
+  if [[ -n "$manifest_commit" && "$metrics_commit" == "$manifest_commit" ]]; then
+    pass "the running build's commit matches the release manifest (${manifest_commit:0:12})"
+  else
+    fail "the running build's commit (${metrics_commit}) does not match the release manifest (${manifest_commit})"
   fi
 
   local status_code
