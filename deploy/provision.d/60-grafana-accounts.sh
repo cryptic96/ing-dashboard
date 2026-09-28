@@ -113,7 +113,7 @@ if [[ "${LEDGER_PROVISION_LIB_ONLY:-0}" != "1" ]]; then
 
     read -r -p "New admin login (not 'admin'): " new_admin_login
     if [[ "$new_admin_login" == "admin" ]] || ! [[ "$new_admin_login" =~ $LOGIN_PATTERN ]]; then
-      provision_die "invalid admin login: ${new_admin_login}"
+      provision_die "invalid admin login: use 3 to 32 lowercase letters, digits, dots, dashes or underscores, starting with a letter, and not admin (the value is not repeated here in case a password was pasted)"
     fi
 
     new_admin_password=""
@@ -158,7 +158,7 @@ if [[ "${LEDGER_PROVISION_LIB_ONLY:-0}" != "1" ]]; then
     read -r -p "Viewer #${viewer_index} login: " viewer_login
     read -r -p "Viewer #${viewer_index} display name: " viewer_name
     if ! [[ "$viewer_login" =~ $LOGIN_PATTERN ]]; then
-      provision_die "invalid viewer login: ${viewer_login}"
+      provision_die "invalid viewer login: use 3 to 32 lowercase letters, digits, dots, dashes or underscores, starting with a letter (the value is not repeated here in case a password was pasted)"
     fi
 
     if printf '%s' "$existing_users" | jq -e --arg login "$viewer_login" \
