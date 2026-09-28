@@ -127,39 +127,47 @@ if [[ "${LEDGER_PROVISION_LIB_ONLY:-0}" != "1" ]]; then
   ADMIN_PASSWORD="admin"
 
   if grafana_api GET "/api/org" "$ADMIN_USER" "$ADMIN_PASSWORD" > /dev/null 2>&1; then
-    provision_log "The default admin credentials still work; renaming the built-in admin account."
-
-    read -r -p "New admin login (not 'admin'): " new_admin_login
-    if [[ "$new_admin_login" == "admin" ]] || ! [[ "$new_admin_login" =~ $LOGIN_PATTERN ]]; then
-      provision_die "invalid admin login: use 3 to 32 lowercase letters, digits, dots, dashes or underscores, starting with a letter, and not admin (the value is not repeated here in case a password was pasted)"
-    fi
-
-    new_admin_password=""
-    prompt_password "New admin password (at least 20 characters)" new_admin_password
-
-    rename_body="$(jq -nc --arg login "$new_admin_login" --arg email "${new_admin_login}@example.invalid" \
-      '{login: $login, email: $email}')"
-    grafana_api PUT "/api/users/1" "$ADMIN_USER" "$ADMIN_PASSWORD" "$rename_body" > /dev/null \
-      || provision_die "failed to rename the built-in admin account"
-
-    password_body="$(jq -nc --arg password "$new_admin_password" '{password: $password}')"
-    grafana_api PUT "/api/admin/users/1/password" "$new_admin_login" "$ADMIN_PASSWORD" "$password_body" > /dev/null \
-      || provision_die "failed to set the new admin password"
-
-    ADMIN_USER="$new_admin_login"
-    ADMIN_PASSWORD="$new_admin_password"
-    unset new_admin_password rename_body password_body
-
-    provision_log "Admin account renamed. Store the new admin login and password in the password manager now."
+    provision_log "The default admin credentials still work; replacing them."
   else
     provision_log "The default admin credentials no longer work; enter the current admin credentials to continue."
     read -r -p "Current admin login: " ADMIN_USER
     read -r -s -p "Current admin password: " ADMIN_PASSWORD
     echo
+    if ! grafana_api GET "/api/org" "$ADMIN_USER" "$ADMIN_PASSWORD" > /dev/null 2>&1; then
+      provision_die "could not authenticate to Grafana with the supplied admin credentials (after 5 failures Grafana blocks the login for 5 minutes)"
+    fi
+  fi
+
+  # The password is replaced before the login is renamed, and each step is
+  # also taken on a re-run whenever it is still at its default, so an
+  # interrupted run never leaves the default password in place.
+  if [[ "$ADMIN_PASSWORD" == "admin" ]]; then
+    new_admin_password=""
+    prompt_password "New admin password (at least 20 characters)" new_admin_password
+    password_body="$(jq -nc --arg password "$new_admin_password" '{password: $password}')"
+    grafana_api PUT "/api/admin/users/1/password" "$ADMIN_USER" "$ADMIN_PASSWORD" "$password_body" > /dev/null \
+      || provision_die "failed to set the new admin password"
+    ADMIN_PASSWORD="$new_admin_password"
+    unset new_admin_password password_body
+    provision_log "Admin password replaced. Store it in the password manager now."
+  fi
+
+  if [[ "$ADMIN_USER" == "admin" ]]; then
+    read -r -p "New admin login (not 'admin'): " new_admin_login
+    if [[ "$new_admin_login" == "admin" ]] || ! [[ "$new_admin_login" =~ $LOGIN_PATTERN ]]; then
+      provision_die "invalid admin login: use 3 to 32 lowercase letters, digits, dots, dashes or underscores, starting with a letter, and not admin (the value is not repeated here in case a password was pasted)"
+    fi
+    rename_body="$(jq -nc --arg login "$new_admin_login" --arg email "${new_admin_login}@example.invalid" \
+      '{login: $login, email: $email}')"
+    grafana_api PUT "/api/users/1" "$ADMIN_USER" "$ADMIN_PASSWORD" "$rename_body" > /dev/null \
+      || provision_die "failed to rename the built-in admin account"
+    ADMIN_USER="$new_admin_login"
+    unset rename_body
+    provision_log "Admin account renamed. Store the new admin login in the password manager now."
   fi
 
   if ! grafana_api GET "/api/org" "$ADMIN_USER" "$ADMIN_PASSWORD" > /dev/null 2>&1; then
-    provision_die "could not authenticate to Grafana with the supplied admin credentials"
+    provision_die "could not authenticate to Grafana with the new admin credentials"
   fi
 
   viewer_count_default=2

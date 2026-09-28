@@ -464,6 +464,12 @@ check_grafana_admin() {
     return
   fi
 
+  if grafana_admin_get "/api/org" "$admin_user" "admin" > /dev/null 2>&1; then
+    fail "the Grafana admin account still accepts the default password"
+  else
+    pass "the Grafana admin account does not accept the default password"
+  fi
+
   if printf '%s' "$org_users" | jq -e --arg admin "$admin_user" \
     '[.[] | select(.login != $admin) | select(.role != "Viewer")] | length > 0' > /dev/null; then
     fail "at least one non-admin Grafana user does not have the Viewer role"
