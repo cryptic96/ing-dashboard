@@ -1,0 +1,26 @@
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'ledger_runtime') THEN
+        CREATE ROLE ledger_runtime LOGIN;
+    END IF;
+
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'ledger_migrator') THEN
+        CREATE ROLE ledger_migrator LOGIN;
+    END IF;
+
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'grafana_reader') THEN
+        CREATE ROLE grafana_reader LOGIN;
+    END IF;
+
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'ledger_backup') THEN
+        CREATE ROLE ledger_backup LOGIN;
+    END IF;
+END
+$$;
+
+ALTER ROLE ledger_runtime NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+ALTER ROLE ledger_migrator NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+ALTER ROLE grafana_reader NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+ALTER ROLE ledger_backup NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+
+GRANT pg_read_all_data TO ledger_backup;

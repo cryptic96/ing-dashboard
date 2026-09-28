@@ -1,0 +1,11 @@
+[Unit]
+Description=Nightly encrypted backup of the ledger database
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+Persistent=true
+RandomizedDelaySec=15min
+Unit=ledger-backup@nightly.service
+
+[Install]
+WantedBy=timers.target

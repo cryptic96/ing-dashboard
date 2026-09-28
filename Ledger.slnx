@@ -1,0 +1,14 @@
+<Solution>
+  <Configurations>
+    <Platform Name="Any CPU" />
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Folder Name="/Tests/">
+    <Project Path="Ledger.IntegrationTests/Ledger.IntegrationTests.csproj" />
+    <Project Path="Ledger.UnitTests/Ledger.UnitTests.csproj" />
+  </Folder>
+  <Project Path="Ledger.Domain/Ledger.Domain.csproj" />
+  <Project Path="Ledger.Repository/Ledger.Repository.csproj" />
+  <Project Path="Ledger.Service/Ledger.Service.csproj" />
+</Solution>

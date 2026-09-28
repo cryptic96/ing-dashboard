@@ -1,0 +1,9 @@
+name: lint-fixture-short-sha-pin
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    permissions: {}
+    steps:
+      - uses: actions/checkout@8f4b7f8
+      - run: echo "fixture"

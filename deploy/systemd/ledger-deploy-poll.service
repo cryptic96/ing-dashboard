@@ -1,0 +1,10 @@
+[Unit]
+Description=Poll for a newer published release and hand it to the installer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ledger-deploy poll
+PrivateTmp=yes
+ProtectHome=read-only

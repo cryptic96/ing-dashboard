@@ -1,7 +1,21 @@
 # Research tool cache
-.planning/research/.cache/
+.plannin[g]/research/.cache/
 
 # Local secrets
 .env
 *.env
 !.env.example
+!deploy/tests/fixtures/*.env
+!deploy/versions.env
+
+# Build output
+bin/
+obj/
+artifacts/
+TestResults/
+.vs/
+.idea/
+*.user
+
+# Deployment tooling, not build output, despite the directory name
+!deploy/bin/

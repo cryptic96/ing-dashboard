@@ -1,0 +1,8 @@
+# Installed by deploy/provision.d/40-services.sh at
+# /etc/default/prometheus-node-exporter, replacing the package's own
+# default. Binds to loopback only and limits the systemd collector to this
+# platform's own services, so node_exporter never becomes a source of
+# information about anything else running on the host. The textfile
+# directory is the same one the deploy and backup tooling publish their
+# own outcome metrics into.
+ARGS="--web.listen-address=127.0.0.1:9100 --collector.systemd --collector.systemd.unit-include=(ledger|postgresql@.+|grafana-server|prometheus|prometheus-node-exporter)\\.service --collector.textfile.directory=/var/lib/prometheus/node-exporter"
