@@ -30,6 +30,9 @@ check() {
 
 WORKDIR="$(mktemp -d)"
 trap 'rm -rf "$WORKDIR"' EXIT
+# shellcheck source=deploy/tests/lib/host-guard.sh
+source "${SCRIPT_DIR}/lib/host-guard.sh"
+host_guard_install "$WORKDIR"
 
 # --- ledger_backup_validate_recipients -----------------------------------
 
