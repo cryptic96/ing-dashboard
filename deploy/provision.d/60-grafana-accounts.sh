@@ -14,6 +14,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LEDGER_PROVISION_LIB_ONLY=1 source "${SCRIPT_DIR}/../provision.sh"
 
 GRAFANA_URL="http://127.0.0.1:3000"
+GRAFANA_HOST="${LEDGER_GRAFANA_DOMAIN:-}"
 STATE_MARKER="/var/lib/ledger-deploy/state/grafana-accounts.done"
 LOGIN_PATTERN='^[a-z][a-z0-9._-]{2,31}$'
 
@@ -32,24 +33,37 @@ grafana_config_escape() {
 ### Runs one Grafana HTTP API call. Credentials and, when given, a JSON
 ### body travel to curl entirely through a config stream piped on standard
 ### input (curl --config -); neither ever appears on the command line, in
-### `ps`, or in any log this module writes.
+### `ps`, or in any log this module writes. Grafana enforces its domain, so
+### the request carries the configured Grafana hostname as its Host header;
+### any response other than 2xx (including a redirect) is a failure.
 ###
 grafana_api() {
   local method="$1" path="$2" user="$3" password="$4" body="${5:-}"
-  local rc=0
-  {
+  local response status rc=0
+  response="$({
     printf 'request = "%s"\n' "$method"
     printf 'user = "%s:%s"\n' "$(grafana_config_escape "$user")" "$(grafana_config_escape "$password")"
     printf 'header = "Content-Type: application/json"\n'
+    printf 'header = "Host: %s"\n' "$(grafana_config_escape "$GRAFANA_HOST")"
     printf 'silent\n'
     printf 'show-error\n'
     printf 'fail\n'
+    printf 'write-out = "\\n%%{http_code}"\n'
     if [[ -n "$body" ]]; then
       printf 'data = "%s"\n' "$(grafana_config_escape "$body")"
     fi
     printf 'url = "%s%s"\n' "$GRAFANA_URL" "$path"
-  } | curl --config - || rc=$?
-  return "$rc"
+  } | curl --config -)" || rc=$?
+  if [[ "$rc" -ne 0 ]]; then
+    return "$rc"
+  fi
+  status="${response##*$'\n'}"
+  response="${response%$'\n'*}"
+  if [[ ! "$status" =~ ^2[0-9][0-9]$ ]]; then
+    echo "Grafana answered HTTP ${status} for ${method} ${path}" >&2
+    return 22
+  fi
+  printf '%s' "$response"
 }
 
 ###
@@ -90,6 +104,10 @@ if [[ "${LEDGER_PROVISION_LIB_ONLY:-0}" != "1" ]]; then
   if [[ -f "$STATE_MARKER" && "${PROVISION_ONLY_MODULE:-}" != "60-grafana-accounts" ]]; then
     provision_log "Grafana accounts are already set up (${STATE_MARKER} exists); skipping. Re-run with --only 60-grafana-accounts to redo it."
     exit 0
+  fi
+
+  if [[ -z "$GRAFANA_HOST" ]]; then
+    provision_die "LEDGER_GRAFANA_DOMAIN is not set in provision.conf; Grafana answers only on its own hostname"
   fi
 
   provision_log "Waiting for Grafana to become ready"
