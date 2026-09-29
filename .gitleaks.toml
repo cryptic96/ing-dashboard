@@ -6,7 +6,8 @@ useDefault = true
 [[rules]]
 id = "dutch-iban"
 description = "Dutch IBAN account number"
-regex = '''\bNL[0-9]{2}[A-Z]{4}[0-9]{10}\b'''
+# Compact or written in the usual groups of four, in any letter case.
+regex = '''(?i)\bNL[0-9]{2} ?[A-Z]{4} ?[0-9]{4} ?[0-9]{4} ?[0-9]{2}\b'''
 keywords = ["nl"]
 
 [[rules]]
