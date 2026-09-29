@@ -22,7 +22,7 @@ public static class ProductionConfigurationValidator
         }
 
         var certificatePassword = configuration[CertificatePasswordKey];
-        if (string.IsNullOrEmpty(certificatePassword))
+        if (string.IsNullOrWhiteSpace(certificatePassword))
         {
             offendingKeys.Add(CertificatePasswordKey);
         }
