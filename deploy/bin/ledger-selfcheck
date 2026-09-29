@@ -216,8 +216,11 @@ check_secrets_hygiene() {
   local frag1="AGE-SECRET-KEY-" frag2="1"
   local needle="${frag1}${frag2}[0-9A-Z]{58}"
   local hits hit
-  hits="$(grep -rlIE "$needle" /etc /root /home /opt /var/backups /var/lib/ledger /var/lib/ledger-deploy /tmp \
-    2> /dev/null || true)"
+  # The host's own directories are scanned; offline tests narrow this to a
+  # fixture directory.
+  local -a scan_roots
+  read -r -a scan_roots <<< "${LEDGER_SELFCHECK_SCAN_ROOTS:-/etc /root /home /opt /var/backups /var/lib/ledger /var/lib/ledger-deploy /tmp}"
+  hits="$(grep -rlIE "$needle" "${scan_roots[@]}" 2> /dev/null || true)"
   hit="$(head -n1 <<< "$hits")"
   if [[ -z "$hit" ]]; then
     pass "no age private identity text found under any checked path"

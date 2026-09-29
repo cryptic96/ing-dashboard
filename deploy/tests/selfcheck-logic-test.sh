@@ -285,6 +285,13 @@ good_nft_chain() {
 }
 GOOD_NFT_CHAIN="$(good_nft_chain)"
 
+# The selfcheck's secret scan would otherwise walk this machine's /etc, /opt,
+# /home and /tmp on every run (gigabytes on a CI runner); point it at a
+# fixture directory instead.
+SCAN_ROOT="${WORKDIR}/scan-root"
+mkdir -p "$SCAN_ROOT"
+export LEDGER_SELFCHECK_SCAN_ROOTS="$SCAN_ROOT"
+
 setup_good_env() {
   unset STUB_LISTEN_ADDRESSES STUB_HBA_NONLOCAL STUB_CREATE_TABLE_OUTPUT \
     STUB_GRAFANA_READER_OUTPUT STUB_MIGRATOR_LOGIN_EXIT STUB_SS_OUTPUT \
@@ -380,6 +387,24 @@ export STUB_NFT_CHAIN
 OUT="$(run_selfcheck --pre-deploy)"
 assert_line "BAD host: a rule for a prefix-sharing address does not count" "$OUT" \
   "FAIL - no rule found admitting 5080/3000 from the configured reverse proxy address"
+
+# =====================================================================
+# Secrets hygiene: a complete age identity anywhere under the scanned roots
+# fails, a clean tree passes. The identity is assembled at run time so this
+# file never contains one.
+# =====================================================================
+setup_good_env
+OUT="$(run_selfcheck --pre-deploy)"
+assert_line "GOOD host: no age identity under the scanned roots" "$OUT" \
+  "PASS - no age private identity text found under any checked path"
+
+setup_good_env
+mkdir -p "${SCAN_ROOT}/leaked"
+printf 'AGE-SECRET-KEY-%s%s\n' "1" "$(LC_ALL=C tr -dc 'A-Z0-9' < /dev/urandom | head -c 58)" > "${SCAN_ROOT}/leaked/identity.txt"
+OUT="$(run_selfcheck --pre-deploy)"
+assert_line "BAD host: a planted age identity fails" "$OUT" \
+  "FAIL - an age private identity was found: ${SCAN_ROOT}/leaked/identity.txt"
+rm -rf "${SCAN_ROOT}/leaked"
 
 # =====================================================================
 # PostgreSQL
