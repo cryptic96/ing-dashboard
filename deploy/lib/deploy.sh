@@ -7,13 +7,13 @@ if [ -n "${LEDGER_DEPLOY_SH_LOADED:-}" ]; then
 fi
 LEDGER_DEPLOY_SH_LOADED=1
 
-# Verifies a downloaded release artifact against its Sigstore bundle, fully
-# offline: no GitHub API call is made and no GitHub credential is read or
-# used. Runs with GH_TOKEN, GITHUB_TOKEN and GH_ENTERPRISE_TOKEN unset and a
-# fresh, empty GH_CONFIG_DIR so no ambient credential can influence the
-# result. On success, prints the certificate's sourceRepositoryDigest.
-# Returns non-zero on any failure, including an unreachable Sigstore
-# instance.
+# Verifies a downloaded release artifact against the Sigstore bundle
+# published with it. No GitHub API call is made and no GitHub credential is
+# read or used: gh runs with GH_TOKEN, GITHUB_TOKEN and GH_ENTERPRISE_TOKEN
+# unset and a fresh, empty GH_CONFIG_DIR. gh does fetch Sigstore's public
+# trust root, so an unreachable Sigstore instance fails verification rather
+# than skipping it. On success, prints the certificate's
+# sourceRepositoryDigest; returns non-zero on any failure.
 ledger_verify_attestation() {
   local artifact="$1"
   local bundle="$2"
@@ -221,10 +221,25 @@ ledger_pending_migrations() {
 ledger_read_applied_migrations() {
   local destination="$1"
 
-  if ! runuser -u ledger_migrator -- psql -d ledger -AtX \
-      -c 'SELECT migration_id FROM "__EFMigrationsHistory" ORDER BY migration_id' \
-      > "$destination" 2>/dev/null; then
+  # A fresh database has no history table yet, which means nothing is
+  # applied. Any other failure to read it stops the deploy: treating an
+  # unreadable history as empty would mark every migration as pending.
+  local history_exists
+  if ! history_exists="$(runuser -u ledger_migrator -- psql -d ledger -AtX \
+      -c "SELECT to_regclass('public.\"__EFMigrationsHistory\"') IS NOT NULL" 2>/dev/null)"; then
+    ledger_die "could not query the database for its migration history"
+  fi
+  if [ "$history_exists" != "t" ]; then
     : > "$destination"
+    return 0
+  fi
+
+  # EF keeps its own column names on the history table; the snake_case
+  # naming convention does not apply to it.
+  if ! runuser -u ledger_migrator -- psql -d ledger -AtX \
+      -c 'SELECT "MigrationId" FROM public."__EFMigrationsHistory" ORDER BY "MigrationId"' \
+      > "$destination" 2>/dev/null; then
+    ledger_die "could not read the applied migrations from __EFMigrationsHistory"
   fi
 }
 

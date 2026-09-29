@@ -20,6 +20,11 @@ using HealthCheckMetricsPublisher = Ledger.Service.Metrics.HealthCheckMetricsPub
 
 var builder = WebApplication.CreateBuilder(args);
 
+if (builder.Environment.IsProduction())
+{
+    ProductionConfigurationValidator.ThrowIfInvalid(builder.Configuration);
+}
+
 if (args.Length > 0 && args[0] == "apikey")
 {
     return await ApiKeyCommand.RunAsync(args[1..], builder.Configuration);
@@ -27,8 +32,6 @@ if (args.Length > 0 && args[0] == "apikey")
 
 if (builder.Environment.IsProduction())
 {
-    ProductionConfigurationValidator.ThrowIfInvalid(builder.Configuration);
-
     builder.Logging.ClearProviders();
     builder.Logging.AddSystemdConsole();
 }

@@ -43,10 +43,12 @@ public class ProductionConfigurationValidatorTests : IDisposable
             .WithMessage("*DataProtection:CertificatePath*");
     }
 
-    [Fact]
-    public void ThrowIfInvalid_fails_when_certificate_password_is_empty()
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void ThrowIfInvalid_fails_when_certificate_password_is_empty_or_whitespace(string certificatePassword)
     {
-        var configuration = BuildConfiguration(_existingCertificatePath, "", ValidConnectionString);
+        var configuration = BuildConfiguration(_existingCertificatePath, certificatePassword, ValidConnectionString);
 
         var act = () => ProductionConfigurationValidator.ThrowIfInvalid(configuration);
 

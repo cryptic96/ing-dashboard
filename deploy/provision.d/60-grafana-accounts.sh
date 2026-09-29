@@ -15,7 +15,7 @@ LEDGER_PROVISION_LIB_ONLY=1 source "${SCRIPT_DIR}/../provision.sh"
 
 GRAFANA_URL="http://127.0.0.1:3000"
 GRAFANA_HOST="${LEDGER_GRAFANA_DOMAIN:-}"
-STATE_MARKER="/var/lib/ledger-deploy/state/grafana-accounts.done"
+STATE_MARKER="${LEDGER_GRAFANA_ACCOUNTS_STATE_MARKER:-/var/lib/ledger-deploy/state/grafana-accounts.done}"
 LOGIN_PATTERN='^[a-z][a-z0-9._-]{2,31}$'
 
 ###
@@ -144,7 +144,9 @@ if [[ "${LEDGER_PROVISION_LIB_ONLY:-0}" != "1" ]]; then
   if [[ "$ADMIN_PASSWORD" == "admin" ]]; then
     new_admin_password=""
     prompt_password "New admin password (at least 20 characters)" new_admin_password
-    password_body="$(jq -nc --arg password "$new_admin_password" '{password: $password}')"
+    # Passwords reach jq through its environment, never its argument list,
+    # which any local user could read from the process table.
+    password_body="$(LEDGER_GRAFANA_PASSWORD="$new_admin_password" jq -nc '{password: env.LEDGER_GRAFANA_PASSWORD}')"
     grafana_api PUT "/api/admin/users/1/password" "$ADMIN_USER" "$ADMIN_PASSWORD" "$password_body" > /dev/null \
       || provision_die "failed to set the new admin password"
     ADMIN_PASSWORD="$new_admin_password"
@@ -196,8 +198,8 @@ if [[ "${LEDGER_PROVISION_LIB_ONLY:-0}" != "1" ]]; then
     viewer_password=""
     prompt_password "Viewer #${viewer_index} password (at least 20 characters)" viewer_password
 
-    create_body="$(jq -nc --arg name "$viewer_name" --arg login "$viewer_login" --arg password "$viewer_password" \
-      '{name: $name, login: $login, password: $password, OrgId: 1}')"
+    create_body="$(LEDGER_GRAFANA_PASSWORD="$viewer_password" jq -nc --arg name "$viewer_name" --arg login "$viewer_login" \
+      '{name: $name, login: $login, password: env.LEDGER_GRAFANA_PASSWORD, OrgId: 1}')"
     grafana_api POST "/api/admin/users" "$ADMIN_USER" "$ADMIN_PASSWORD" "$create_body" > /dev/null \
       || provision_die "failed to create viewer account ${viewer_login}"
     unset viewer_password create_body

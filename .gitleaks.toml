@@ -6,7 +6,8 @@ useDefault = true
 [[rules]]
 id = "dutch-iban"
 description = "Dutch IBAN account number"
-regex = '''\bNL[0-9]{2}[A-Z]{4}[0-9]{10}\b'''
+# Compact or written in the usual groups of four, in any letter case.
+regex = '''(?i)\bNL[0-9]{2} ?[A-Z]{4} ?[0-9]{4} ?[0-9]{4} ?[0-9]{2}\b'''
 keywords = ["nl"]
 
 [[rules]]
@@ -52,9 +53,14 @@ regex = '''\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b'''
 id = "generic-api-key"
 
   [[rules.allowlists]]
-  description = "planning documentation discusses APIs in prose without embedding real keys"
+  description = "one line of architecture prose names the REST API next to Grafana and Prometheus; only that exact phrase in that file is allowed"
+  condition = "AND"
+  regexTarget = "match"
   paths = [
-    '''\.plannin[g]/''',
+    '''(^|/)\.plannin[g]/research/ARCHITECTURE\.md$''',
+  ]
+  regexes = [
+    '''^API, Grafana/Prometheus$''',
   ]
 
   [[rules.allowlists]]

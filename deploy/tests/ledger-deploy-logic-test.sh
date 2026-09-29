@@ -13,6 +13,9 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 export LEDGER_DEPLOY_ROOT
 LEDGER_DEPLOY_ROOT="$(mktemp -d)"
 trap 'rm -rf "${LEDGER_DEPLOY_ROOT}"' EXIT
+# shellcheck source=deploy/tests/lib/host-guard.sh
+source "${SCRIPT_DIR}/lib/host-guard.sh"
+host_guard_install "$LEDGER_DEPLOY_ROOT"
 
 # shellcheck source=deploy/lib/common.sh
 source "${REPO_ROOT}/deploy/lib/common.sh"
@@ -111,10 +114,13 @@ printf '{"version":"1.0.0","commit":"deadbeef","migrations":["a"]}' > "${ROLLBAC
 ln -s "${ROLLBACK_ROOT}/releases/1.0.0" "${ROLLBACK_ROOT}/current"
 
 runuser() {
-  # Stand in for the real runuser: writes an applied-migrations list that
-  # is NOT a subset of the target release's manifest, without needing root
-  # or a real database.
-  printf 'a\nb\n'
+  # Stand in for the real runuser: the history table exists, and its
+  # applied-migrations list is NOT a subset of the target release's
+  # manifest, without needing root or a real database.
+  case "$*" in
+    *to_regclass*) printf 't\n' ;;
+    *) printf 'a\nb\n' ;;
+  esac
 }
 
 ROLLBACK_EXIT=0
@@ -124,6 +130,9 @@ ROLLBACK_EXIT=0
   "http://127.0.0.1:0" "1" >/dev/null 2>&1 ) || ROLLBACK_EXIT=$?
 check "rollback refuses when applied migrations are not a subset of the target manifest" "1" \
   "$([ "$ROLLBACK_EXIT" -ne 0 ] && echo 1 || echo 0)"
+check "refused rollback leaves the current link untouched" "${ROLLBACK_ROOT}/releases/1.0.0" \
+  "$(readlink "${ROLLBACK_ROOT}/current")"
+check "refused rollback never reaches systemctl" "" "$(host_guard_calls)"
 
 unset -f runuser
 
@@ -136,6 +145,14 @@ ledger_write_deploy_poll_metrics "1" "1700000000"
 ledger_write_deploy_run_metrics "success" "1700000100" "1.2.3"
 
 METRICS_FILE="${METRICS_ROOT}/ledger_deploy.prom"
+
+# node_exporter reads textfile metrics as its own service user, so the file
+# must be world-readable even when the writer runs under a strict umask (the
+# backup unit uses UMask=0077).
+( umask 077; ledger_write_textfile_metrics "strict_umask" "ledger_test_metric 1" )
+check "textfile metrics are readable by node_exporter under a strict umask" "644" \
+  "$(stat -c '%a' "${METRICS_ROOT}/strict_umask.prom")"
+check "the deploy metrics file is readable by node_exporter" "644" "$(stat -c '%a' "$METRICS_FILE")"
 
 check "textfile has ledger_deploy_last_poll_timestamp_seconds" "1" \
   "$(grep -c '^ledger_deploy_last_poll_timestamp_seconds ' "$METRICS_FILE" || true)"
@@ -163,6 +180,8 @@ for result in success rolled_back failed; do
   check "email body for ${result} names the result" "1" \
     "$(printf '%s' "$BODY" | grep -c "result: ${result}" || true)"
 done
+
+check "no check in this file reached the real systemctl" "" "$(host_guard_calls)"
 
 if [ "$FAILURES" -ne 0 ]; then
   printf '%d check(s) failed\n' "$FAILURES" >&2

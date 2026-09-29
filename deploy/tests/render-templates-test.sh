@@ -8,6 +8,11 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=deploy/tests/lib/host-guard.sh
+source "${SCRIPT_DIR}/lib/host-guard.sh"
+HOST_GUARD_DIR="$(mktemp -d)"
+trap 'rm -rf "$HOST_GUARD_DIR"' EXIT
+host_guard_install "$HOST_GUARD_DIR"
 DEPLOY_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 # shellcheck source=deploy/provision.sh

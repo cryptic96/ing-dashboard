@@ -71,7 +71,8 @@ if [[ "${LEDGER_PROVISION_LIB_ONLY:-0}" != "1" ]]; then
     provision_die "listen_addresses is '${listen_addresses}', expected an empty string"
   fi
 
-  if ss -Hltnp 2>/dev/null | grep -q 'postgres'; then
+  tcp_listeners="$(ss -Hltnp 2>/dev/null || true)"
+  if grep -q 'postgres' <<< "$tcp_listeners"; then
     provision_die "a TCP socket is owned by postgres; PostgreSQL must be socket-only"
   fi
 

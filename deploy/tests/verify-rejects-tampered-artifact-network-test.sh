@@ -20,6 +20,9 @@ source "${FIXTURE_DIR}/public-attested-artifact.env"
 
 WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "${WORK_DIR}"' EXIT
+# shellcheck source=deploy/tests/lib/host-guard.sh
+source "${SCRIPT_DIR}/lib/host-guard.sh"
+host_guard_install "$WORK_DIR"
 
 FAILURES=0
 

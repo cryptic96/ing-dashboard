@@ -1,6 +1,7 @@
 using Ledger.Domain.Auth;
 using Ledger.Repository.Entities;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 namespace Ledger.Repository.Stores;
 
@@ -34,7 +35,15 @@ public class ApiKeyStore(LedgerDbContext dbContext) : IApiKeyStore
             CreatedAt = DateTimeOffset.UtcNow
         });
 
-        await dbContext.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException exception)
+            when (exception.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation })
+        {
+            throw new ApiKeyOperationException($"An active key named '{name}' already exists.");
+        }
 
         return new CreatedApiKey(name, keyId, token);
     }

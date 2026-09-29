@@ -15,7 +15,11 @@ PLANNING_DIR_PATTERN='\.plannin[g]/'
 CLAUDE_DIR_PATTERN='\.claud[e]/'
 EXCLUDE_PATH_PATTERN="^${PLANNING_DIR_PATTERN}|^${CLAUDE_DIR_PATTERN}"
 
-CS_LINE_COMMENT_PATTERN='^[[:space:]]*//([^/]|$)|[;{)][[:space:]]*//([^/]|$)'
+# A // that is not part of a /// doc comment and does not follow a colon
+# (URLs such as https://) is a line comment, wherever it sits on the line.
+CS_LINE_COMMENT_PATTERN='(^|[^/:])//([^/]|$)'
+# Generated EF Core migrations carry the generator's own marker comment.
+CS_GENERATED_PATH_PATTERN='/Migrations/'
 
 RUNS_ON_ALLOWED='ubuntu-24.04'
 
@@ -24,8 +28,12 @@ assert_clean_planning_references() {
   [ "${#files[@]}" -eq 0 ] && return 0
   local pattern
   local violations=0
-  for pattern in "$REQUIREMENT_KEY_PATTERN" "$DECISION_ID_PATTERN" "$PHASE_WORD_PATTERN" \
-    "$PLANNING_FILE_PATTERN" "$PLANNING_DIR_PATTERN"; do
+  for pattern in "$REQUIREMENT_KEY_PATTERN" "$DECISION_ID_PATTERN"; do
+    if grep -niE "$pattern" "${files[@]}" 2>/dev/null; then
+      violations=1
+    fi
+  done
+  for pattern in "$PHASE_WORD_PATTERN" "$PLANNING_FILE_PATTERN" "$PLANNING_DIR_PATTERN"; do
     if grep -nE "$pattern" "${files[@]}" 2>/dev/null; then
       violations=1
     fi
@@ -81,6 +89,12 @@ self_test() {
     failed=1
   fi
 
+  printf '%s%s\n' "sec" "-01 lowercase requirement key" >"$bad_file"
+  if assert_clean_planning_references "$bad_file"; then
+    echo "self-test failed: a lowercase requirement key was not detected" >&2
+    failed=1
+  fi
+
   printf '%s%s\n' "D" "-08 example decision id" >"$bad_file"
   if assert_clean_planning_references "$bad_file"; then
     echo "self-test failed: a synthetic decision id was not detected" >&2
@@ -120,6 +134,22 @@ self_test() {
     failed=1
   fi
 
+  local placement
+  for placement in '} %s trailing note' '    Call(a, %s argument note' 'var x = 1; %s value note' '[Fact] %s attribute note'; do
+    # shellcheck disable=SC2059
+    printf "namespace Example;\n${placement}\n" "//" >"$bad_cs"
+    if assert_clean_cs_comments "$bad_cs"; then
+      echo "self-test failed: a // comment was not detected in: ${placement}" >&2
+      failed=1
+    fi
+  done
+
+  printf 'namespace Example;\nvar url = "https://example.com/path";\n' >"$good_cs"
+  if ! assert_clean_cs_comments "$good_cs"; then
+    echo "self-test failed: a URL inside a string was incorrectly flagged" >&2
+    failed=1
+  fi
+
   mkdir -p "$tmp/workflows"
   printf 'jobs:\n  build:\n    runs-on: %s\n' "$RUNS_ON_ALLOWED" >"$tmp/workflows/good.yml"
   printf 'jobs:\n  build:\n    runs-on: self-hosted\n' >"$tmp/workflows/bad.yml"
@@ -145,7 +175,7 @@ if ! self_test; then
 fi
 
 mapfile -t tracked_files < <(git ls-files | grep -vE "$EXCLUDE_PATH_PATTERN" || true)
-mapfile -t cs_files < <(git ls-files '*.cs' | grep -vE "$EXCLUDE_PATH_PATTERN" || true)
+mapfile -t cs_files < <(git ls-files '*.cs' | grep -vE "$EXCLUDE_PATH_PATTERN" | grep -vE "$CS_GENERATED_PATH_PATTERN" || true)
 
 overall_ok=1
 

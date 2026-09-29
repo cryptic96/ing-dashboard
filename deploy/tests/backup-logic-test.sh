@@ -30,6 +30,9 @@ check() {
 
 WORKDIR="$(mktemp -d)"
 trap 'rm -rf "$WORKDIR"' EXIT
+# shellcheck source=deploy/tests/lib/host-guard.sh
+source "${SCRIPT_DIR}/lib/host-guard.sh"
+host_guard_install "$WORKDIR"
 
 # --- ledger_backup_validate_recipients -----------------------------------
 
@@ -55,6 +58,19 @@ printf 'AGE-SECRET-KEY-1QGKR9RCVQXFF2GVQ2G8XSA9GYQ2Z8Y3M0DGKM2XR2K0R2K0R2KQ2KR9R
 STATUS=0
 (ledger_backup_validate_recipients "$RECIPIENTS_IDENTITY" >/dev/null 2>&1) || STATUS=$?
 check "a recipients file containing an identity is refused" "1" "$STATUS"
+
+RECIPIENTS_PREFIXED_IDENTITY="${WORKDIR}/recipients-prefixed-identity.txt"
+printf ' AGE-SECRET-KEY-1QGKR9RCVQXFF2GVQ2G8XSA9GYQ2Z8Y3M0DGKM2XR2K0R2K0R2KQ2KR9RC\n' > "$RECIPIENTS_PREFIXED_IDENTITY"
+STATUS=0
+IDENTITY_ERROR="$( (ledger_backup_validate_recipients "$RECIPIENTS_PREFIXED_IDENTITY" 2>&1 >/dev/null) || echo "exit=$?")"
+check "an identity behind a stray leading character is refused" "1" \
+  "$([[ "$IDENTITY_ERROR" == *"exit=1"* ]] && echo 1 || echo 0)"
+check "the refusal never echoes the identity" "0" \
+  "$([[ "$IDENTITY_ERROR" == *QGKR9RCVQXFF2GVQ2G8X* ]] && echo 1 || echo 0)"
+
+JUNK_ERROR="$( (ledger_backup_validate_recipients "$RECIPIENTS_JUNK" 2>&1 >/dev/null) || true)"
+check "a rejected line is named by number, not echoed" "0" \
+  "$([[ "$JUNK_ERROR" == *not-a-key* ]] && echo 1 || echo 0)"
 
 # --- ledger_backup_filename -----------------------------------------------
 

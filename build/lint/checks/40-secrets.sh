@@ -32,6 +32,11 @@ fake_dutch_iban() {
   printf 'NL%s%s%s' "$(random_digits 2)" "$(random_upper_letters 4)" "$(random_digits 10)"
 }
 
+fake_dutch_iban_grouped() {
+  printf 'NL%s %s %s %s %s' "$(random_digits 2)" "$(random_upper_letters 4)" \
+    "$(random_digits 4)" "$(random_digits 4)" "$(random_digits 2)"
+}
+
 fake_private_ipv4() {
   printf '192.168.%d.%d' "$((RANDOM % 256))" "$((1 + RANDOM % 254))"
 }
@@ -132,17 +137,24 @@ self_test() {
   fi
   rm -rf "$shallow_dir" "$token_repo"
 
-  local iban_repo
-  iban_repo="$(mktemp -d)"
-  make_throwaway_repo "$iban_repo"
-  printf 'account: %s\n' "$(fake_dutch_iban)" >"$iban_repo/notes.txt"
-  git -C "$iban_repo" add notes.txt .gitleaks.toml
-  git -C "$iban_repo" commit -q -m "notes"
-  if gitleaks_git_mode "$iban_repo"; then
-    echo "self-test failed: a generated Dutch IBAN was not detected" >&2
-    failed=1
-  fi
-  rm -rf "$iban_repo"
+  local iban_repo iban_form iban_value
+  for iban_form in compact grouped lowercase; do
+    case "$iban_form" in
+      compact) iban_value="$(fake_dutch_iban)" ;;
+      grouped) iban_value="$(fake_dutch_iban_grouped)" ;;
+      lowercase) iban_value="$(fake_dutch_iban_grouped | tr '[:upper:]' '[:lower:]')" ;;
+    esac
+    iban_repo="$(mktemp -d)"
+    make_throwaway_repo "$iban_repo"
+    printf 'account: %s\n' "$iban_value" >"$iban_repo/notes.txt"
+    git -C "$iban_repo" add notes.txt .gitleaks.toml
+    git -C "$iban_repo" commit -q -m "notes"
+    if gitleaks_git_mode "$iban_repo"; then
+      echo "self-test failed: a generated Dutch IBAN (${iban_form} form) was not detected" >&2
+      failed=1
+    fi
+    rm -rf "$iban_repo"
+  done
 
   local ip_repo
   ip_repo="$(mktemp -d)"

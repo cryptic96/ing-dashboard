@@ -29,6 +29,10 @@ fi
 
 FAILURES=0
 
+# The provisioning config is read from its real path on the host; offline
+# tests point this at a fixture.
+PROVISION_CONF="${LEDGER_PROVISION_CONF:-/etc/ledger/provision.conf}"
+
 pass() {
   echo "PASS - $*"
 }
@@ -212,8 +216,11 @@ check_secrets_hygiene() {
   local frag1="AGE-SECRET-KEY-" frag2="1"
   local needle="${frag1}${frag2}[0-9A-Z]{58}"
   local hits hit
-  hits="$(grep -rlIE "$needle" /etc /root /home /opt /var/backups /var/lib/ledger /var/lib/ledger-deploy /tmp \
-    2> /dev/null || true)"
+  # The host's own directories are scanned; offline tests narrow this to a
+  # fixture directory.
+  local -a scan_roots
+  read -r -a scan_roots <<< "${LEDGER_SELFCHECK_SCAN_ROOTS:-/etc /root /home /opt /var/backups /var/lib/ledger /var/lib/ledger-deploy /tmp}"
+  hits="$(grep -rlIE "$needle" "${scan_roots[@]}" 2> /dev/null || true)"
   hit="$(head -n1 <<< "$hits")"
   if [[ -z "$hit" ]]; then
     pass "no age private identity text found under any checked path"
@@ -332,8 +339,8 @@ check_firewall() {
   fi
 
   local traefik_ip=""
-  if [[ -f /etc/ledger/provision.conf ]]; then
-    traefik_ip="$(grep -E '^LEDGER_TRAEFIK_IP=' /etc/ledger/provision.conf | head -n1 | cut -d= -f2-)"
+  if [[ -f "$PROVISION_CONF" ]]; then
+    traefik_ip="$(grep -E '^LEDGER_TRAEFIK_IP=' "$PROVISION_CONF" | head -n1 | cut -d= -f2-)"
   fi
   if [[ -n "$traefik_ip" ]] && grep -qE "(^|[^0-9.])${traefik_ip//./\\.}([^0-9.]|$)" <<< "$input_chain"; then
     pass "a rule admits 5080/3000 only from the configured reverse proxy address"
@@ -420,8 +427,8 @@ check_backups() {
 # its domain, so a request to the local port with any other Host header is
 # redirected instead of answered.
 grafana_domain() {
-  if [[ -f /etc/ledger/provision.conf ]]; then
-    grep -E '^LEDGER_GRAFANA_DOMAIN=' /etc/ledger/provision.conf | head -n1 | cut -d= -f2-
+  if [[ -f "$PROVISION_CONF" ]]; then
+    grep -E '^LEDGER_GRAFANA_DOMAIN=' "$PROVISION_CONF" | head -n1 | cut -d= -f2-
   fi
 }
 
@@ -446,13 +453,16 @@ grafana_admin_get() {
   escaped_user="${escaped_user//\"/\\\"}"
   escaped_password="${password//\\/\\\\}"
   escaped_password="${escaped_password//\"/\\\"}"
+  local escaped_domain="${domain:-127.0.0.1}"
+  escaped_domain="${escaped_domain//\\/\\\\}"
+  escaped_domain="${escaped_domain//\"/\\\"}"
   {
     printf 'request = "GET"\n'
     printf 'user = "%s:%s"\n' "$escaped_user" "$escaped_password"
     printf 'silent\n'
     printf 'show-error\n'
     printf 'fail\n'
-    printf 'header = "Host: %s"\n' "${domain:-127.0.0.1}"
+    printf 'header = "Host: %s"\n' "${escaped_domain}"
     printf 'url = "http://127.0.0.1:3000%s"\n' "$path"
   } | curl --config - || rc=$?
   return "$rc"

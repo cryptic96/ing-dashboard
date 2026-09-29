@@ -4,16 +4,16 @@ milestone: v1.0
 milestone_name: milestone
 current_phase: 01
 current_phase_name: secure-platform-release-pipeline
-status: executing
+status: verifying
 stopped_at: Phase 1 context gathered
-last_updated: "2026-09-28T16:25:18.401Z"
+last_updated: "2026-09-28T21:42:12.407Z"
 last_activity: 2026-09-27
 last_activity_desc: Phase 01 execution started
 progress:
   total_phases: 1
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 12
-  completed_plans: 11
+  completed_plans: 12
 ---
 
 # Project State
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-09-26)
 
 Phase: 01 (secure-platform-release-pipeline) — EXECUTING
 Plan: 12 of 12
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-09-27 — Phase 01 execution started
 
 Progress: [░░░░░░░░░░] 0%
@@ -72,6 +72,8 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
+- [minor] Harden privileged units and scan logs for secrets — `.planning/todos/pending/2026-09-29-harden-privileged-units-and-scan-logs-for-secrets.md`
+- [major] Remove temporary Claude SSH access before real bank data (before the automatic sync goes live) — `.planning/todos/pending/2026-09-28-remove-temporary-claude-ssh-access-before-real-bank-data.md`
 - [minor] Migrate tests to Microsoft.Testing.Platform for xunit v4 (after go-live) — `.planning/todos/pending/2026-09-28-migrate-tests-to-microsoft-testing-platform-for-xunit-v4.md`
 
 ### Blockers/Concerns
