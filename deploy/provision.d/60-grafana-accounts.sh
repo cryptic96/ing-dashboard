@@ -15,7 +15,7 @@ LEDGER_PROVISION_LIB_ONLY=1 source "${SCRIPT_DIR}/../provision.sh"
 
 GRAFANA_URL="http://127.0.0.1:3000"
 GRAFANA_HOST="${LEDGER_GRAFANA_DOMAIN:-}"
-STATE_MARKER="/var/lib/ledger-deploy/state/grafana-accounts.done"
+STATE_MARKER="${LEDGER_GRAFANA_ACCOUNTS_STATE_MARKER:-/var/lib/ledger-deploy/state/grafana-accounts.done}"
 LOGIN_PATTERN='^[a-z][a-z0-9._-]{2,31}$'
 
 ###
