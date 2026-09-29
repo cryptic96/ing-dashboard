@@ -52,9 +52,14 @@ regex = '''\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b'''
 id = "generic-api-key"
 
   [[rules.allowlists]]
-  description = "planning documentation discusses APIs in prose without embedding real keys"
+  description = "one line of architecture prose names the REST API next to Grafana and Prometheus; only that exact phrase in that file is allowed"
+  condition = "AND"
+  regexTarget = "match"
   paths = [
-    '''\.plannin[g]/''',
+    '''(^|/)\.plannin[g]/research/ARCHITECTURE\.md$''',
+  ]
+  regexes = [
+    '''^API, Grafana/Prometheus$''',
   ]
 
   [[rules.allowlists]]
