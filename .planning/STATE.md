@@ -72,6 +72,7 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
+- [minor] Harden privileged units and scan logs for secrets — `.planning/todos/pending/2026-09-29-harden-privileged-units-and-scan-logs-for-secrets.md`
 - [major] Remove temporary Claude SSH access before real bank data (before the automatic sync goes live) — `.planning/todos/pending/2026-09-28-remove-temporary-claude-ssh-access-before-real-bank-data.md`
 - [minor] Migrate tests to Microsoft.Testing.Platform for xunit v4 (after go-live) — `.planning/todos/pending/2026-09-28-migrate-tests-to-microsoft-testing-platform-for-xunit-v4.md`
 
