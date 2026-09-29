@@ -1,17 +1,18 @@
 ---
 phase: 01-secure-platform-release-pipeline
-verified: 2026-09-28T21:49:57Z
-status: human_needed
+verified: 2026-09-29T19:50:00Z
+status: passed
 score: 5/5 roadmap success criteria verified (all with live/host evidence for the portions code alone cannot prove)
 behavior_unverified: 0
 overrides_applied: 0
-human_verification:
-  - test: "Cut release v0.1.2 from the current `main` (after merging the open PR with the migration-detection and alert-volume fixes) and observe a deploy that has nothing to migrate."
-    expected: "The installer's pre-migration backup and the migrator efbundle run are both skipped, and the deploy still activates and reports healthy."
-    why_human: "The migration-detection fix (commit 79e6f1c, reading EF's own `\"MigrationId\"` history column) is proven correct by an offline logic test and by the reporting function returning \"no migrations pending\" against the real v0.1.1 database, but no actual deploy has yet been run end-to-end with that fixed function in a state where it takes the skip branch — only version 0.1.0 (which had pending migrations, the bug era) and 0.1.1 (which incorrectly always saw migrations as pending, pre-fix) have been deployed live. This is explicitly called out as an open item in 01-12-SUMMARY.md's 'User Setup Required' section."
-  - test: "Remove the orchestrator's temporary SSH access to the ledger LXC and the reverse proxy."
-    expected: "No standing SSH credential for Claude/the orchestrator remains on either host."
-    why_human: "Tracked as a pending, major todo (`.planning/todos/pending/2026-09-28-remove-temporary-claude-ssh-access-before-real-bank-data.md`), explicitly scoped to be resolved before Phase 2 (real bank data), not required for Phase 1's own success criteria, but worth surfacing so it isn't lost."
+human_verification: []
+resolved_human_verification:
+  - item: "Deploy with nothing to migrate skips the pre-migration backup and the migration bundle"
+    resolved: 2026-09-29
+    evidence: "v0.1.2 was installed automatically by the host's poll timer: artifact and provenance verified, Prometheus config checked, activated; no pre-migration backup and no migration bundle ran (the newest pre-migration backup is still the one from the v0.1.1 deploy); Healthy; ledger_build_info reports version 0.1.2 and the attested main commit; outcome email accepted by the relay."
+  - item: "Temporary orchestrator SSH access"
+    resolved: 2026-09-29
+    evidence: "Not a phase 1 criterion; tracked as a major todo that must be done before real bank data arrives."
 ---
 
 # Phase 1: Secure Platform & Release Pipeline Verification Report
@@ -164,3 +165,13 @@ No gaps were found against any of the phase's 5 roadmap success criteria or its 
 
 *Verified: 2026-09-28T21:49:57Z*
 *Verifier: Claude (gsd-verifier)*
+
+## Re-verification 2026-09-29
+
+Both human-needed items are resolved, so the status moves from human_needed to passed:
+
+- **The no-migration deploy path is proven live.** v0.1.2 (main merge commit, including the migration-detection and metrics-readability fixes) was published after operator approval and installed automatically by the host's poll timer. The install verified the artifact and provenance, then activated without a pre-migration backup and without running the migration bundle, which keeps automatic rollback available. The host is Healthy and reports the attested commit.
+- **After the install**, the host's platform scripts were re-provisioned from the attested v0.1.2 release tree; every installed script is identical to the release. `ledger-selfcheck` reports 48 PASS, 0 FAIL, 0 SKIP.
+- **The temporary SSH access** is outside the phase criteria and is tracked as a todo due before real bank data arrives.
+
+The end-of-phase code review (01-REVIEW.md), security audit (01-SECURITY.md, threats_open: 0) and test-coverage audit (01-VALIDATION.md, nyquist_compliant: true) completed after the original verification. Every fix they produced is on main and in v0.1.2.

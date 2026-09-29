@@ -12,7 +12,11 @@ Claude can serve as a trustworthy financial advisor for the household — answer
 
 ### Validated
 
-(None yet — ship to validate)
+- [x] Public GitHub repo; release on semver tag on `main` → build on GitHub-hosted runner → attested release artifact → published after approval → the app LXC pulls, verifies and installs it (no self-hosted runner) — *Validated in Phase 1: Secure Platform & Release Pipeline*
+- [x] Deployment pattern hardened versus the existing homelab reference (see Context → Security review) — *Validated in Phase 1: Secure Platform & Release Pipeline*
+- [x] App, PostgreSQL, Grafana and Prometheus run in one LXC; provisioning is automated where possible and any one-time setup is documented step by step — *Validated in Phase 1: Secure Platform & Release Pipeline*
+- [x] Dashboards, datasources and alert rules are provisioned as code from the repository — nothing clicked together by hand — *Validated in Phase 1: Secure Platform & Release Pipeline*
+- [x] Both partners can open the dashboards without technical steps, at home and away (via the home VPN) — *Validated in Phase 1: Secure Platform & Release Pipeline*
 
 ### Active
 
@@ -47,23 +51,18 @@ Claude can serve as a trustworthy financial advisor for the household — answer
 
 **Dashboards (Grafana)**
 - [ ] Dashboards for: where the money goes, category drill-down, trends over time, budget vs actual, savings goals, recurring costs
-- [ ] Dashboards, datasources and alert rules are provisioned as code from the repository — nothing clicked together by hand
 - [ ] Dashboards available in both English and Dutch
-- [ ] Both partners can open the dashboards without technical steps, at home and away (via the home VPN)
 - [ ] Grafana reads financial data through a SELECT-only database role on a reporting schema of views (chosen after comparing views, REST via a JSON datasource and Prometheus)
 
 **Operations & observability**
 - [ ] App exposes `/metrics` for Prometheus: sync health, time of last successful sync, days until bank consent expires, error counts
 - [ ] Alerts for failing syncs and for bank consent nearing expiry
-- [ ] App, PostgreSQL, Grafana and Prometheus run in one LXC; provisioning is automated where possible and any one-time setup is documented step by step
 
 **REST API & web page**
 - [ ] REST endpoints for operations that MCP is not suited to, and to back the web page
 - [ ] (Deferred to v2) Small web page for reviewing and fixing transactions, translatable English/Dutch
 
 **Deployment & security**
-- [ ] Public GitHub repo; release on semver tag on `main` → build on GitHub-hosted runner → attested release artifact → published after approval → the app LXC pulls, verifies and installs it (no self-hosted runner)
-- [ ] Deployment pattern hardened versus the existing homelab reference (see Context → Security review)
 
 ### Out of Scope
 
@@ -170,4 +169,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-09-27 after Phase 1 context discussion (PostgreSQL, pull-based deploys)*
+*Last updated: 2026-09-29 after Phase 1 (Secure Platform & Release Pipeline) completed: v0.1.2 live on the LXC through the attested, approval-gated pipeline*
