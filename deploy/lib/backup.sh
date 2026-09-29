@@ -20,16 +20,20 @@ ledger_backup_validate_recipients() {
     ledger_die "recipients file not found: $file"
   fi
 
-  local line found=0
+  # A rejected line is never echoed: it may be a pasted private identity, so
+  # errors name only the line number. The identity marker is searched for
+  # anywhere in the line, so a stray leading character cannot hide it.
+  local line found=0 line_number=0
   while IFS= read -r line || [ -n "$line" ]; do
+    line_number=$((line_number + 1))
     [ -z "$line" ] && continue
 
-    if [[ "${line^^}" =~ ^AGE-SECRET-KEY-1 ]]; then
-      ledger_die "recipients file $file contains what looks like a private age identity, refusing"
+    if [[ "${line^^}" == *AGE-SECRET-KEY-* ]]; then
+      ledger_die "recipients file $file line ${line_number} looks like a private age identity, refusing (the line is not shown)"
     fi
 
     if [[ ! "$line" =~ ^age1[0-9a-z]+$ ]]; then
-      ledger_die "recipients file $file contains a line that is not an age public key: $line"
+      ledger_die "recipients file $file line ${line_number} is not an age public key (the line is not shown)"
     fi
 
     found=1

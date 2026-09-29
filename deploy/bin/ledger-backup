@@ -103,7 +103,14 @@ fail() {
 
 ledger_backup_validate_recipients "$RECIPIENTS_FILE"
 
-mkdir -p "$BACKUP_ROOT"
+mkdir -p "$BACKUP_ROOT" "$STATE_DIR"
+
+# One backup at a time: two runs within the same second would otherwise
+# publish to the same file name and prune each other's output.
+exec 9>"${STATE_DIR}/backup.lock"
+if ! flock -n 9; then
+  ledger_die "another backup is already running"
+fi
 
 TMP_FILE="$(mktemp "${BACKUP_ROOT}/.${TARGET_NAME}.XXXXXX")"
 trap 'rm -f "$TMP_FILE"' EXIT

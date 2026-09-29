@@ -7,13 +7,13 @@ if [ -n "${LEDGER_DEPLOY_SH_LOADED:-}" ]; then
 fi
 LEDGER_DEPLOY_SH_LOADED=1
 
-# Verifies a downloaded release artifact against its Sigstore bundle, fully
-# offline: no GitHub API call is made and no GitHub credential is read or
-# used. Runs with GH_TOKEN, GITHUB_TOKEN and GH_ENTERPRISE_TOKEN unset and a
-# fresh, empty GH_CONFIG_DIR so no ambient credential can influence the
-# result. On success, prints the certificate's sourceRepositoryDigest.
-# Returns non-zero on any failure, including an unreachable Sigstore
-# instance.
+# Verifies a downloaded release artifact against the Sigstore bundle
+# published with it. No GitHub API call is made and no GitHub credential is
+# read or used: gh runs with GH_TOKEN, GITHUB_TOKEN and GH_ENTERPRISE_TOKEN
+# unset and a fresh, empty GH_CONFIG_DIR. gh does fetch Sigstore's public
+# trust root, so an unreachable Sigstore instance fails verification rather
+# than skipping it. On success, prints the certificate's
+# sourceRepositoryDigest; returns non-zero on any failure.
 ledger_verify_attestation() {
   local artifact="$1"
   local bundle="$2"

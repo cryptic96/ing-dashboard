@@ -446,13 +446,16 @@ grafana_admin_get() {
   escaped_user="${escaped_user//\"/\\\"}"
   escaped_password="${password//\\/\\\\}"
   escaped_password="${escaped_password//\"/\\\"}"
+  local escaped_domain="${domain:-127.0.0.1}"
+  escaped_domain="${escaped_domain//\\/\\\\}"
+  escaped_domain="${escaped_domain//\"/\\\"}"
   {
     printf 'request = "GET"\n'
     printf 'user = "%s:%s"\n' "$escaped_user" "$escaped_password"
     printf 'silent\n'
     printf 'show-error\n'
     printf 'fail\n'
-    printf 'header = "Host: %s"\n' "${domain:-127.0.0.1}"
+    printf 'header = "Host: %s"\n' "${escaped_domain}"
     printf 'url = "http://127.0.0.1:3000%s"\n' "$path"
   } | curl --config - || rc=$?
   return "$rc"
