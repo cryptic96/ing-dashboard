@@ -131,6 +131,9 @@ ledger_write_textfile_metrics() {
   fi
 
   printf '%s\n' "$content" >> "$tmp"
+  # mktemp creates the file 0600, but node_exporter reads it as its own
+  # service user; the metrics hold no secrets, so the file is world-readable.
+  chmod 0644 "$tmp"
   mv -f "$tmp" "$file"
 }
 

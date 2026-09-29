@@ -146,6 +146,14 @@ ledger_write_deploy_run_metrics "success" "1700000100" "1.2.3"
 
 METRICS_FILE="${METRICS_ROOT}/ledger_deploy.prom"
 
+# node_exporter reads textfile metrics as its own service user, so the file
+# must be world-readable even when the writer runs under a strict umask (the
+# backup unit uses UMask=0077).
+( umask 077; ledger_write_textfile_metrics "strict_umask" "ledger_test_metric 1" )
+check "textfile metrics are readable by node_exporter under a strict umask" "644" \
+  "$(stat -c '%a' "${METRICS_ROOT}/strict_umask.prom")"
+check "the deploy metrics file is readable by node_exporter" "644" "$(stat -c '%a' "$METRICS_FILE")"
+
 check "textfile has ledger_deploy_last_poll_timestamp_seconds" "1" \
   "$(grep -c '^ledger_deploy_last_poll_timestamp_seconds ' "$METRICS_FILE" || true)"
 check "textfile has ledger_deploy_last_poll_success" "1" \
