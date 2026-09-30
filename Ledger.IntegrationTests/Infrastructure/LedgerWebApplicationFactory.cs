@@ -75,7 +75,8 @@ public class LedgerWebApplicationFactory : WebApplicationFactory<Program>
             {
                 ["ConnectionStrings:Ledger"] = _ledgerConnectionString,
                 ["Kestrel:Endpoints:Api:Url"] = $"http://127.0.0.1:{ApiPort}",
-                ["Kestrel:Endpoints:Ops:Url"] = $"http://127.0.0.1:{OpsPort}"
+                ["Kestrel:Endpoints:Ops:Url"] = $"http://127.0.0.1:{OpsPort}",
+                ["Ingestion:SchedulerEnabled"] = "false"
             });
 
             if (_additionalConfiguration is not null)

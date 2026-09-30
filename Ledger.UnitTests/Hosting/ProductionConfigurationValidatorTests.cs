@@ -144,6 +144,64 @@ public class ProductionConfigurationValidatorTests : IDisposable
         act.Should().NotThrow();
     }
 
+    [Theory]
+    [Trait("Category", "Configuration")]
+    [InlineData("Nowhere/Atlantis")]
+    [InlineData("   ")]
+    public void ThrowIfInvalid_names_the_time_zone_key_when_the_zone_cannot_be_resolved(string timeZone)
+    {
+        var configuration = BuildConfiguration(
+            _existingCertificatePath,
+            SentinelPassword,
+            ValidConnectionString,
+            timeZone: timeZone);
+
+        var act = () => ProductionConfigurationValidator.ThrowIfInvalid(configuration);
+
+        var exception = act.Should().Throw<InvalidOperationException>().Which;
+        exception.Message.Should().Contain("Ingestion:TimeZone");
+        exception.Message.Should().NotContain("Atlantis");
+        exception.Message.Should().NotContain("Ingestion:ScheduleLocalTime");
+    }
+
+    [Theory]
+    [Trait("Category", "Configuration")]
+    [InlineData("6:30 am")]
+    [InlineData("25:00")]
+    [InlineData("")]
+    [InlineData("0630")]
+    [InlineData("02:30")]
+    public void ThrowIfInvalid_names_the_schedule_time_key_when_the_time_is_unparseable_or_skipped_by_a_clock_change(string scheduleTime)
+    {
+        var configuration = BuildConfiguration(
+            _existingCertificatePath,
+            SentinelPassword,
+            ValidConnectionString,
+            scheduleTime: scheduleTime);
+
+        var act = () => ProductionConfigurationValidator.ThrowIfInvalid(configuration);
+
+        var exception = act.Should().Throw<InvalidOperationException>().Which;
+        exception.Message.Should().Contain("Ingestion:ScheduleLocalTime");
+        exception.Message.Should().NotContain("Ingestion:TimeZone");
+    }
+
+    [Fact]
+    [Trait("Category", "Configuration")]
+    public void ThrowIfInvalid_accepts_a_custom_zone_and_a_time_that_always_exists()
+    {
+        var configuration = BuildConfiguration(
+            _existingCertificatePath,
+            SentinelPassword,
+            ValidConnectionString,
+            timeZone: "Europe/London",
+            scheduleTime: "07:15");
+
+        var act = () => ProductionConfigurationValidator.ThrowIfInvalid(configuration);
+
+        act.Should().NotThrow();
+    }
+
     /// <inheritdoc />
     public void Dispose()
     {
@@ -155,7 +213,9 @@ public class ProductionConfigurationValidatorTests : IDisposable
         string? certificatePassword,
         string connectionString,
         string? provider = null,
-        string? redirectUrl = null)
+        string? redirectUrl = null,
+        string? timeZone = null,
+        string? scheduleTime = null)
     {
         var values = new Dictionary<string, string?>
         {
@@ -163,7 +223,9 @@ public class ProductionConfigurationValidatorTests : IDisposable
             ["DataProtection:CertificatePassword"] = certificatePassword,
             ["ConnectionStrings:Ledger"] = connectionString,
             ["Ingestion:Provider"] = provider,
-            ["BankLink:RedirectUrl"] = redirectUrl
+            ["BankLink:RedirectUrl"] = redirectUrl,
+            ["Ingestion:TimeZone"] = timeZone,
+            ["Ingestion:ScheduleLocalTime"] = scheduleTime
         };
 
         return new ConfigurationBuilder().AddInMemoryCollection(values).Build();

@@ -72,6 +72,22 @@ public class DatabaseRoleTests(DatabaseFixture fixture)
 
     [Fact]
     [Trait("Category", "DatabaseRoles")]
+    public async Task Runtime_role_can_only_append_to_the_provider_call_ledger()
+    {
+        await AssertDeniedAsync("ledger_runtime", "UPDATE public.provider_calls SET background = background", "42501");
+        await AssertDeniedAsync("ledger_runtime", "DELETE FROM public.provider_calls", "42501");
+        await AssertDeniedAsync("ledger_runtime", "TRUNCATE public.provider_calls", "42501");
+
+        var granted = await QueryNamesAsync("""
+            SELECT 'insert' WHERE has_table_privilege('ledger_runtime', 'public.provider_calls', 'INSERT')
+            UNION ALL
+            SELECT 'select' WHERE has_table_privilege('ledger_runtime', 'public.provider_calls', 'SELECT')
+            """);
+        granted.Should().BeEquivalentTo(["insert", "select"]);
+    }
+
+    [Fact]
+    [Trait("Category", "DatabaseRoles")]
     public async Task Grafana_reader_has_only_select_on_every_reporting_object_and_nothing_in_public()
     {
         var writable = await QueryNamesAsync("""

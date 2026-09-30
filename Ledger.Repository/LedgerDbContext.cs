@@ -41,6 +41,9 @@ public class LedgerDbContext(DbContextOptions<LedgerDbContext> options)
     /// <summary>Pending bank authorisations, each identified only by the SHA-256 of its one-time state.</summary>
     public DbSet<BankAuthorizationEntity> BankAuthorizations { get; set; } = null!;
 
+    /// <summary>Every account-data call made to the bank, recorded before it was sent. Append-only.</summary>
+    public DbSet<ProviderCallEntity> ProviderCalls { get; set; } = null!;
+
     /// <inheritdoc />
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -74,8 +77,30 @@ public class LedgerDbContext(DbContextOptions<LedgerDbContext> options)
         ConfigureTransactionPayloads(modelBuilder);
         ConfigureSyncRuns(modelBuilder);
         ConfigureBankAuthorizations(modelBuilder);
+        ConfigureProviderCalls(modelBuilder);
 
         SnakeCaseNaming.Apply(modelBuilder);
+    }
+
+    private static void ConfigureProviderCalls(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<ProviderCallEntity>(entity =>
+        {
+            entity.HasKey(call => call.Id);
+            entity.Property(call => call.Kind).HasConversion(new SnakeCaseEnumConverter<ProviderCallKind>()).IsRequired();
+            entity.HasIndex(call => new { call.AccountId, call.CalledAt });
+            entity.HasOne<LedgerAccountEntity>()
+                .WithMany()
+                .HasForeignKey(call => call.AccountId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<SyncRunEntity>()
+                .WithMany()
+                .HasForeignKey(call => call.SyncRunId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.ToTable(table => table.HasCheckConstraint(
+                "ck_provider_calls_kind",
+                $"kind IN ({EnumText.CheckList<ProviderCallKind>()})"));
+        });
     }
 
     private static void ConfigureBankConnections(ModelBuilder modelBuilder)

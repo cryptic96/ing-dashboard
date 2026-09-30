@@ -59,6 +59,28 @@ public record ConnectionOverview(ConnectionSummary Connection, ConsentSnapshot C
 /// <summary>The result of saving an account selection: the accounts afterwards and whether a first sync was queued.</summary>
 public record SelectionResult(IReadOnlyList<LinkedAccount> Accounts, bool FirstSyncQueued);
 
+/// <summary>What happened to a request to sync now.</summary>
+public enum SyncNowResult
+{
+    /// <summary>The sync was queued.</summary>
+    Queued,
+
+    /// <summary>No bank provider is configured.</summary>
+    NotConfigured,
+
+    /// <summary>There is no active connection to sync.</summary>
+    NoConnection,
+
+    /// <summary>The connection has no selected account.</summary>
+    NoAccountsSelected,
+
+    /// <summary>A sync of the connection is already running.</summary>
+    AlreadyRunning,
+
+    /// <summary>The sync would use the last background call of the day for an account, and nobody is present to make it a foreground call.</summary>
+    WouldUseLastCall
+}
+
 /// <summary>
 /// The application layer of the guided bank link: starting a consent, completing it from the bank redirect and choosing the
 /// accounts to sync. Every bank endpoint goes through this class, and so will every later client.
@@ -69,7 +91,10 @@ public class BankLinkService(
     IBankAuthorizationStore authorizations,
     ISecretProtector secretProtector,
     ISyncDispatcher dispatcher,
+    ISyncRunStore runs,
+    IProviderCallStore calls,
     IOptions<BankLinkOptions> options,
+    IOptions<IngestionOptions> ingestionOptions,
     TimeProvider timeProvider,
     ILogger<BankLinkService> logger)
 {
@@ -249,6 +274,107 @@ public class BankLinkService(
         }
 
         return new SelectionResult(accounts, needsFirstSync);
+    }
+
+    /// <summary>
+    /// Queues a sync of a connection right now. Without the operator's presence details the sync is a background one and is
+    /// refused when it would use the last remaining background call of any selected account for the day; with them it is an
+    /// attended sync and spends none of that allowance.
+    /// </summary>
+    /// <param name="connectionKey">The connection to sync, or null for the only active connection.</param>
+    /// <param name="psu">The operator's presence details, or null when they are not sent to the bank.</param>
+    /// <param name="cancellationToken">Cancels the request.</param>
+    /// <exception cref="BankLinkException">The key names no connection, the connection cannot be synced, or the choice is ambiguous.</exception>
+    public async Task<SyncNowResult> SyncNowAsync(string? connectionKey, PsuContext? psu, CancellationToken cancellationToken)
+    {
+        if (provider is DisabledBankDataProvider)
+        {
+            return SyncNowResult.NotConfigured;
+        }
+
+        var connection = await ResolveSyncConnectionAsync(connectionKey, cancellationToken);
+
+        if (connection is null)
+        {
+            return SyncNowResult.NoConnection;
+        }
+
+        var selected = (await connections.ListAccountsAsync(connection.Id, cancellationToken))
+            .Where(account => account.SyncEnabled)
+            .ToList();
+
+        if (selected.Count == 0)
+        {
+            return SyncNowResult.NoAccountsSelected;
+        }
+
+        if (await runs.HasUnfinishedRunAsync(connection.Id, cancellationToken))
+        {
+            return SyncNowResult.AlreadyRunning;
+        }
+
+        if (psu is null && await WouldUseLastCallAsync(selected, cancellationToken))
+        {
+            return SyncNowResult.WouldUseLastCall;
+        }
+
+        if (!dispatcher.TryEnqueue(new SyncRequest(connection.Id, SyncTrigger.Manual, new FetchContext(psu))))
+        {
+            throw new BankLinkException(BankLinkFailure.Busy, "The sync queue is full. Repeat the call shortly.");
+        }
+
+        logger.LogInformation("A sync of connection {ConnectionKey} was queued on request.", connection.ConnectionKey);
+        return SyncNowResult.Queued;
+    }
+
+    private async Task<ConnectionSummary?> ResolveSyncConnectionAsync(string? connectionKey, CancellationToken cancellationToken)
+    {
+        var now = timeProvider.GetUtcNow();
+
+        if (connectionKey is not null)
+        {
+            var named = await FindAsync(connectionKey, cancellationToken);
+
+            if (named.Status != ConnectionStatus.Active
+                || ConsentState.Derive(named.Status, named.ValidUntil, now).State == ConsentView.Expired)
+            {
+                throw new BankLinkException(BankLinkFailure.Conflict, "Only a connection with a valid consent can be synced. Renew the consent first.");
+            }
+
+            return named;
+        }
+
+        var active = (await connections.ListConnectionsAsync(cancellationToken))
+            .Where(candidate => candidate.Status == ConnectionStatus.Active
+                && ConsentState.Derive(candidate.Status, candidate.ValidUntil, now).State != ConsentView.Expired)
+            .ToList();
+
+        if (active.Count > 1)
+        {
+            throw new BankLinkException(BankLinkFailure.Conflict, "More than one connection is active. Give the connectionKey of the one to sync.");
+        }
+
+        return active.SingleOrDefault();
+    }
+
+    private async Task<bool> WouldUseLastCallAsync(IReadOnlyList<LinkedAccount> accounts, CancellationToken cancellationToken)
+    {
+        var settings = ingestionOptions.Value;
+        var zone = settings.ResolveTimeZone();
+        var now = timeProvider.GetUtcNow();
+        var since = CallBudget.WindowStart(now, settings.QuotaWindow, zone);
+
+        foreach (var account in accounts)
+        {
+            var earlier = await calls.ListBackgroundCallTimesAsync(account.Id, since, cancellationToken);
+
+            if (CallBudget.Remaining(settings.BackgroundCallsPerDay, earlier, now, settings.QuotaWindow, zone) <= 1)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>Starts a consent with the provider and records the pending authorisation under the hash of a fresh state.</summary>

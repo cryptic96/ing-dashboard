@@ -99,8 +99,11 @@ public class BankConnectionStore(LedgerDbContext dbContext) : IBankConnectionSto
         var text = EnumText.ToText(status);
         var closedAt = status is ConnectionStatus.Revoked or ConnectionStatus.Superseded ? (DateTimeOffset?)at : null;
 
+        var onlyFromActive = status == ConnectionStatus.ProviderExpired;
+
         await dbContext.BankConnections
-            .Where(connection => connection.Id == connectionId)
+            .Where(connection => connection.Id == connectionId
+                && (!onlyFromActive || connection.Status == BankConnectionEntity.Statuses.Active))
             .ExecuteUpdateAsync(
                 setters => setters
                     .SetProperty(connection => connection.Status, text)

@@ -15,6 +15,7 @@ public class SyncOrchestrator(
     IBankConnectionStore connectionStore,
     ILedgerStore ledgerStore,
     ISyncRunStore runStore,
+    IProviderCallStore callStore,
     ISecretProtector secretProtector,
     IOptions<IngestionOptions> options,
     TimeProvider timeProvider,
@@ -37,10 +38,24 @@ public class SyncOrchestrator(
         {
             await SyncAccountsAsync(connectionId, runId, trigger, context, progress, cancellationToken);
         }
+        catch (CallBudgetExhaustedException)
+        {
+            outcome = SyncOutcome.QuotaExhausted;
+            providerError = "call_budget";
+        }
         catch (BankProviderException exception)
         {
             outcome = MapOutcome(exception.Kind);
             providerError = exception.ProviderCode;
+
+            if (exception.Kind == ProviderErrorKind.ConsentRejected)
+            {
+                await connectionStore.MarkStatusAsync(
+                    connectionId,
+                    ConnectionStatus.ProviderExpired,
+                    timeProvider.GetUtcNow(),
+                    CancellationToken.None);
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -96,8 +111,12 @@ public class SyncOrchestrator(
         var items = new List<ProviderTransaction>();
         var complete = false;
         var accountRef = new ProviderAccountRef(sessionId, account.ProviderAccountUid);
+        var meteredContext = context with
+        {
+            Meter = new ProviderCallMeter(account.AccountId, runId, context.IsBackground, callStore, settings, timeProvider)
+        };
 
-        await foreach (var page in provider.GetTransactionsAsync(accountRef, query, context, cancellationToken))
+        await foreach (var page in provider.GetTransactionsAsync(accountRef, query, meteredContext, cancellationToken))
         {
             progress.CallsMade++;
             items.AddRange(page.Transactions);

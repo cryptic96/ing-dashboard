@@ -46,15 +46,20 @@ public class SyntheticBankDataProvider(SyntheticBankScenario scenario) : IBankDa
     }
 
     /// <inheritdoc />
-    public Task<IReadOnlyList<ProviderBalance>> GetBalancesAsync(
+    public async Task<IReadOnlyList<ProviderBalance>> GetBalancesAsync(
         ProviderAccountRef account,
         FetchContext context,
         CancellationToken cancellationToken)
     {
+        if (context.Meter is not null)
+        {
+            await context.Meter.BeforeCallAsync(ProviderCallKind.Balances, cancellationToken);
+        }
+
         scenario.RecordCall(nameof(GetBalancesAsync), account.AccountUid, string.Empty);
 
         var synthetic = Resolve(account);
-        return Task.FromResult(synthetic.Balances);
+        return synthetic.Balances;
     }
 
     /// <inheritdoc />
@@ -74,6 +79,12 @@ public class SyntheticBankDataProvider(SyntheticBankScenario scenario) : IBankDa
         for (var pageNumber = 1; pageNumber <= pageCount; pageNumber++)
         {
             cancellationToken.ThrowIfCancellationRequested();
+
+            if (context.Meter is not null)
+            {
+                await context.Meter.BeforeCallAsync(ProviderCallKind.Transactions, cancellationToken);
+            }
+
             scenario.RecordCall(nameof(GetTransactionsAsync), account.AccountUid, Describe(query, pageNumber));
 
             var failure = scenario.TakeFailureFor(pageNumber);

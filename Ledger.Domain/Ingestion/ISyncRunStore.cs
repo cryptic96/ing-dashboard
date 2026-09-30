@@ -9,6 +9,17 @@ public interface ISyncRunStore
 
     /// <summary>Records how the run ended.</summary>
     Task FinishAsync(Guid runId, SyncRunCompletion completion, CancellationToken cancellationToken);
+
+    /// <summary>Lists the connection's runs that started at or after the given instant, in any order.</summary>
+    Task<IReadOnlyList<SyncRunSummary>> ListRunsSinceAsync(Guid connectionId, DateTimeOffset since, CancellationToken cancellationToken);
+
+    /// <summary>Returns whether the connection has a run that has not finished.</summary>
+    Task<bool> HasUnfinishedRunAsync(Guid connectionId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Marks every unfinished run as abandoned, because the process that owned it has stopped, and returns how many were marked.
+    /// </summary>
+    Task<int> AbandonUnfinishedAsync(DateTimeOffset now, CancellationToken cancellationToken);
 }
 
 /// <summary>How a run ended, with its call and row counts. The provider error is a short code, never a message with data.</summary>

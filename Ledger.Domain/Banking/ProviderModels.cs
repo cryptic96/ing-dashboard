@@ -120,11 +120,40 @@ public record ProviderTransactionPage(IReadOnlyList<ProviderTransaction> Transac
 /// <summary>Which transactions to fetch: from a date, or as far back as the bank allows.</summary>
 public record TransactionQuery(DateOnly? DateFrom, HistoryDepth Depth);
 
-/// <summary>Whether a fetch happens in the background or on behalf of a person who is present.</summary>
-public record FetchContext(PsuContext? Psu)
+/// <summary>The kinds of account-data call that count against a bank's call allowance.</summary>
+public enum ProviderCallKind
+{
+    /// <summary>One page of a transaction fetch.</summary>
+    Transactions,
+
+    /// <summary>A balances read.</summary>
+    Balances
+}
+
+/// <summary>
+/// Counts and gates every account-data call. A provider must await it immediately before each request it sends to the bank,
+/// so the call is recorded before it happens and a call over the allowance is never sent.
+/// </summary>
+public interface IProviderCallMeter
+{
+    /// <summary>Records the call that is about to be sent.</summary>
+    /// <exception cref="CallBudgetExhaustedException">The call allowance for the account is used up, so the call must not be sent.</exception>
+    ValueTask BeforeCallAsync(ProviderCallKind kind, CancellationToken cancellationToken);
+}
+
+/// <summary>Thrown by a call meter when a background call would exceed the account's allowance. Nothing was sent to the bank.</summary>
+public class CallBudgetExhaustedException(string message) : Exception(message);
+
+/// <summary>
+/// Whether a fetch happens in the background or on behalf of a person who is present, and the meter that counts its calls.
+/// </summary>
+public record FetchContext(PsuContext? Psu, IProviderCallMeter? Meter = null)
 {
     /// <summary>A fetch with no person present, as the scheduled sync does.</summary>
     public static FetchContext Background { get; } = new FetchContext((PsuContext?)null);
+
+    /// <summary>Whether no person is present, which is what a bank treats as a background call.</summary>
+    public bool IsBackground => Psu is null;
 }
 
 /// <summary>Details of the person present during a fetch, for providers that distinguish attended from unattended access.</summary>

@@ -50,6 +50,22 @@ Bank linking only works when a provider is configured with the `Ingestion:Provid
 - `POST /api/v1/bank/connections/{connectionKey}/renew` starts a new consent through the same steps. After approval the accounts keep their keys, names, selection and all their history, the old connection becomes `superseded`, and a sync with the longest available history runs. Renew when the consent is `expiring`.
 - `DELETE /api/v1/bank/connections/{connectionKey}` ends the consent at the provider and marks the connection `revoked`. If the provider cannot end it, the call answers `502` and nothing changes.
 
+### Syncing
+
+Once accounts are selected, the ledger syncs them by itself. You never have to trigger anything.
+
+- **Every morning.** Each active connection with at least one selected account syncs once a day at 06:30 Amsterdam time. A process that starts after that time and has not synced yet that day catches up at once. The time and zone are set with `Ingestion:ScheduleLocalTime` (HH:mm) and `Ingestion:TimeZone`.
+- **One retry.** When the morning sync fails for a temporary reason, it is retried once, no earlier than four hours after it finished and only on the same day (`Ingestion:RetryDelayHours`). A rate limit from the bank, a used-up call budget, a consent the bank no longer accepts or rejected application credentials are never retried that day. A consent the bank no longer accepts also marks the connection as expired straight away, so you see it in the connection list.
+- **A call budget per account.** Banks only allow a few unattended calls per account per day. The ledger writes every call to a call ledger before it is sent and allows at most `Ingestion:BackgroundCallsPerDay` (default 4) unattended calls per account in the trailing 24 hours (`Ingestion:QuotaWindow` can switch this to the local calendar day). A sync that would go over the budget stops before calling and is recorded as quota exhausted.
+- **Nothing is silent.** Every run, successful or not, is recorded with how it ended and the provider's short error code. A run that a restart interrupted is marked abandoned when the service starts and counts as a temporary failure for that day's retry.
+- **Only the schedule and your own requests fetch from the bank.** Reading connections or accounts, the health check and the metrics never start a sync, so opening a dashboard can never use up a call.
+
+#### Syncing right now
+
+`POST /api/v1/bank/sync` queues a sync of the connection and answers `202` with `{"status":"queued"}`. Use it after renewing a consent or when you want fresh data before the next morning. With several active connections, add `?connectionKey=...`; without it the only active connection is used.
+
+The request carries your client address and User-Agent on to the bank, so the bank treats it as attended access and it spends none of the unattended allowance. If that is switched off with `Ingestion:PsuHeadersOnOperatorSyncs`, the call counts as an unattended one and is refused with `429` when it would use an account's last remaining call of the day. Other answers: `409` when there is no active connection, no account is selected, a sync is already running or the consent has ended, `404` for an unknown connection key and `503` when bank linking is not configured.
+
 ### How the callback is protected
 
 The callback is the only endpoint that answers without a key, because the bank redirects your browser to it. It only accepts the one-time link created by your own start call: a random 256-bit value that is stored only as a hash, works once and expires after 15 minutes. A reused, expired, cancelled or unknown link, and a failed code exchange, all get the same short message and reveal no account detail, code or identifier. The responses are never cached and never send a referrer.

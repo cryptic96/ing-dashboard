@@ -30,6 +30,10 @@ Content-Type: application/json
   ]
 }
 
+### Sync now. The scheduler already syncs every morning, so this is only for fresh data in between. Add ?connectionKey=... when several connections are active.
+POST {{host}}/api/v1/bank/sync
+X-Api-Key: {{apiKey}}
+
 ### Renew a connection that is expiring. Open the returned authorizationUrl and approve it again. History and selection are kept.
 POST {{host}}/api/v1/bank/connections/{{connectionKey}}/renew
 X-Api-Key: {{apiKey}}
