@@ -64,6 +64,17 @@ id = "generic-api-key"
   ]
 
   [[rules.allowlists]]
+  description = "one line of a planning summary lists self-check names next to the Europe/Amsterdam time zone; only that exact phrase in summary files is allowed"
+  condition = "AND"
+  regexTarget = "match"
+  paths = [
+    '''(^|/)\.plannin[g]/phases/[^/]+/[^/]+-SUMMARY\.md$''',
+  ]
+  regexes = [
+    '''^key mode check, Europe/Amsterdam $''',
+  ]
+
+  [[rules.allowlists]]
   description = "pinned OpenPGP key fingerprints of public package signing keys are public identifiers, not secrets"
   condition = "AND"
   regexTarget = "match"
