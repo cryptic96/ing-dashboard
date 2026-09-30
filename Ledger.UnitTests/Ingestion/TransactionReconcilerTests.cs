@@ -359,6 +359,148 @@ public class TransactionReconcilerTests
         plan.Inserts.Select(insert => insert.Ref).Distinct().Should().HaveCount(2);
     }
 
+    [Fact]
+    public void Unresolved_pending_row_inside_the_covered_range_is_dropped_after_a_complete_non_empty_fetch()
+    {
+        var pending = PendingState("er:A", Day);
+
+        var plan = TransactionReconciler.Plan([pending], [], new FetchCoverage(Day, true, 1), Options);
+
+        plan.Drops.Should().ContainSingle().Which.Should().Be(pending.Id);
+    }
+
+    [Fact]
+    public void Pending_row_is_dropped_when_the_fetch_reached_back_without_a_start_date()
+    {
+        var pending = PendingState("er:A", Day);
+
+        var plan = TransactionReconciler.Plan([pending], [], new FetchCoverage(null, true, 3), Options);
+
+        plan.Drops.Should().ContainSingle().Which.Should().Be(pending.Id);
+    }
+
+    [Theory]
+    [InlineData(false, 5, 0)]
+    [InlineData(true, 0, 0)]
+    [InlineData(true, 5, 1)]
+    public void Pending_row_is_never_dropped_on_a_partial_empty_or_later_starting_fetch(bool complete, int itemCount, int fromOffsetDays)
+    {
+        var pending = PendingState("er:A", Day);
+        var coverage = new FetchCoverage(Day.AddDays(fromOffsetDays), complete, itemCount);
+
+        var plan = TransactionReconciler.Plan([pending], [], coverage, Options);
+
+        plan.Drops.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Pending_row_present_in_the_feed_is_not_dropped()
+    {
+        var pending = PendingState("er:A", Day);
+        var stillPending = BookedItem("A", Day, status: ProviderTransactionStatus.Pending);
+
+        var plan = TransactionReconciler.Plan([pending], [stillPending], new FetchCoverage(null, true, 1), Options);
+
+        plan.Drops.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Merged_and_flagged_pending_rows_are_never_dropped()
+    {
+        var merged = PendingState("er:A", Day, amount: -5.00m);
+        var firstDoubtful = PendingState("er:B1", Day, amount: -7.00m);
+        var secondDoubtful = PendingState("er:B2", Day, amount: -7.00m);
+        var alreadyFlagged = PendingState("er:C", Day, amount: -9.00m) with { Flag = MatchFlag.Ambiguous };
+        var unrelated = PendingState("er:D", Day, amount: -11.00m);
+        var incoming = new[]
+        {
+            BookedItem("N1", Day, amount: -5.00m),
+            BookedItem("N2", Day, amount: -7.00m)
+        };
+
+        var plan = TransactionReconciler.Plan(
+            [merged, firstDoubtful, secondDoubtful, alreadyFlagged, unrelated],
+            incoming,
+            new FetchCoverage(null, true, 2),
+            Options);
+
+        plan.Merges.Should().ContainSingle().Which.PendingTransactionId.Should().Be(merged.Id);
+        plan.FlagAmbiguous.Should().BeEquivalentTo([firstDoubtful.Id, secondDoubtful.Id]);
+        plan.Drops.Should().ContainSingle().Which.Should().Be(unrelated.Id);
+    }
+
+    [Fact]
+    public void Cancelled_status_for_a_known_pending_reference_drops_the_row_once()
+    {
+        var pending = PendingState("er:A", Day);
+        var cancelled = BookedItem("A", Day, status: ProviderTransactionStatus.Cancelled);
+
+        var plan = TransactionReconciler.Plan([pending], [cancelled], new FetchCoverage(null, true, 1), Options);
+
+        plan.Drops.Should().ContainSingle().Which.Should().Be(pending.Id);
+        plan.Updates.Should().BeEmpty();
+        plan.Inserts.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(ProviderTransactionStatus.Cancelled)]
+    [InlineData(ProviderTransactionStatus.Pending)]
+    public void Cancelled_or_pending_observation_of_a_booked_row_changes_nothing(ProviderTransactionStatus status)
+    {
+        var booked = PendingState("er:A", Day) with { Status = LedgerTransactionStatus.Booked };
+        var observation = BookedItem("A", Day, status: status);
+
+        var plan = TransactionReconciler.Plan([booked], [observation], new FetchCoverage(null, true, 1), Options);
+
+        plan.Drops.Should().BeEmpty();
+        plan.Updates.Should().BeEmpty();
+        plan.Inserts.Should().BeEmpty();
+        plan.Merges.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(ProviderTransactionStatus.Pending, false)]
+    [InlineData(ProviderTransactionStatus.Booked, true)]
+    public void Dropped_row_whose_reference_is_seen_again_is_restored(ProviderTransactionStatus status, bool upgrade)
+    {
+        var dropped = PendingState("er:A", Day) with { Status = LedgerTransactionStatus.Dropped };
+        var observation = BookedItem("A", Day, status: status);
+
+        var plan = TransactionReconciler.Plan([dropped], [observation], new FetchCoverage(null, true, 1), Options);
+
+        plan.Inserts.Should().BeEmpty();
+        plan.Drops.Should().BeEmpty();
+        plan.Updates.Should().ContainSingle()
+            .Which.Should().Be(new PlannedUpdate(dropped.Id, observation, upgrade, true));
+    }
+
+    [Fact]
+    public void Dropped_row_is_not_a_merge_candidate()
+    {
+        var dropped = PendingState("er:A", Day) with { Status = LedgerTransactionStatus.Dropped };
+        var booked = BookedItem("B", Day);
+
+        var plan = TransactionReconciler.Plan([dropped], [booked], new FetchCoverage(null, true, 1), Options);
+
+        plan.Merges.Should().BeEmpty();
+        plan.FlagAmbiguous.Should().BeEmpty();
+        plan.Inserts.Should().ContainSingle();
+    }
+
+    [Fact]
+    public void Flagged_pending_row_that_books_under_its_own_reference_is_upgraded()
+    {
+        var flagged = PendingState("er:A", Day) with { Flag = MatchFlag.Ambiguous };
+        var booked = BookedItem("A", Day.AddDays(1));
+
+        var plan = TransactionReconciler.Plan([flagged], [booked], new FetchCoverage(null, true, 1), Options);
+
+        plan.Updates.Should().ContainSingle()
+            .Which.Should().Be(new PlannedUpdate(flagged.Id, booked, true));
+        plan.Drops.Should().BeEmpty();
+        plan.FlagAmbiguous.Should().BeEmpty();
+    }
+
     private static ProviderTransaction BookedItem(
         string? entryReference,
         DateOnly date,
