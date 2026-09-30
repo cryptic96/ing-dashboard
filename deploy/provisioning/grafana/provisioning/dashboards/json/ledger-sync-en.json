@@ -44,13 +44,194 @@
     {
       "id": 1,
       "type": "table",
+      "title": "Sync status",
+      "description": "One row per selected account: when data last arrived, how many days the bank consent lasts, the latest balance and whether it reconciles with the transactions, and how many pending transactions have an unclear match.",
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "ledger-reporting"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "ledger-reporting"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT account_name, last_success_at, consent_state, consent_days_left, balance_amount, balance_currency, balance_date, balance_reconciled, flagged_count\nFROM reporting.account_status\nWHERE account_key IN (${account:sqlstring})\nORDER BY account_name, account_key",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Consent"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "expired": {
+                        "text": "Expired",
+                        "color": "red",
+                        "index": 2
+                      },
+                      "expiring": {
+                        "text": "Expiring soon",
+                        "color": "orange",
+                        "index": 1
+                      },
+                      "linked": {
+                        "text": "Linked",
+                        "color": "green",
+                        "index": 0
+                      },
+                      "revoked": {
+                        "text": "Revoked",
+                        "color": "red",
+                        "index": 3
+                      },
+                      "superseded": {
+                        "text": "Replaced",
+                        "color": "blue",
+                        "index": 4
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Balance"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Reconciles"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "no": {
+                        "text": "Does not reconcile",
+                        "color": "red",
+                        "index": 1
+                      },
+                      "unknown": {
+                        "text": "Unknown",
+                        "color": "orange",
+                        "index": 2
+                      },
+                      "yes": {
+                        "text": "Reconciles",
+                        "color": "green",
+                        "index": 0
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Unclear matches"
+            },
+            "properties": [
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green"
+                    },
+                    {
+                      "color": "red",
+                      "value": 1
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "account_name": "Account",
+              "balance_amount": "Balance",
+              "balance_currency": "Currency",
+              "balance_date": "Balance date",
+              "balance_reconciled": "Reconciles",
+              "consent_days_left": "Days left",
+              "consent_state": "Consent",
+              "flagged_count": "Unclear matches",
+              "last_success_at": "Last successful sync"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "table",
       "title": "Recent transactions",
       "description": "Shows at most 500 transactions, newest first, for the selected accounts and time range. Narrow the time range to reach older transactions.",
       "gridPos": {
         "h": 16,
         "w": 24,
         "x": 0,
-        "y": 0
+        "y": 6
       },
       "datasource": {
         "type": "grafana-postgresql-datasource",

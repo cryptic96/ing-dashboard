@@ -22,13 +22,14 @@ public partial class DashboardQueryTests(DatabaseFixture fixture)
     private static partial Regex TimeFilterMacro();
 
     [Fact]
-    public async Task Every_committed_query_runs_as_the_grafana_reader_and_the_transactions_query_returns_rows()
+    public async Task Every_committed_query_runs_as_the_grafana_reader_and_the_status_and_transactions_queries_return_rows()
     {
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
         var scenario = SyntheticBankScenario.Create();
         var account = scenario.AddAccount(AccountKind.Current);
         scenario.AddTransaction(account, IngestionTestSupport.Booked("dash-001", -21.50m, today.AddDays(-1), "Example Grocer", "Weekly shopping"));
         scenario.AddTransaction(account, IngestionTestSupport.Pending("dash-002", -4.25m, today, "Example Bakery", "Bread"));
+        scenario.SetBalances(account, [new ProviderBalance(BalanceKind.ClosingBooked, "CLBD", 125.40m, "EUR", today.AddDays(-1))]);
 
         await using var factory = IngestionTestSupport.CreateFactory(fixture, scenario);
         var connection = await IngestionTestSupport.LinkSyntheticAsync(factory, scenario, selectFirstAccountOnly: false);
@@ -43,7 +44,7 @@ public partial class DashboardQueryTests(DatabaseFixture fixture)
         foreach (var file in DashboardFiles)
         {
             var queries = ReadQueries(file).ToList();
-            queries.Should().HaveCountGreaterThanOrEqualTo(2, file);
+            queries.Should().HaveCountGreaterThanOrEqualTo(3, file);
 
             foreach (var (kind, query) in queries)
             {
@@ -52,8 +53,40 @@ public partial class DashboardQueryTests(DatabaseFixture fixture)
 
                 rows.Should().BeGreaterThan(0, $"{file} {kind} query should return the seeded data: {runnable}");
             }
+
+            var statusQuery = queries.Single(candidate => candidate.Query.Contains("reporting.account_status", StringComparison.Ordinal)).Query;
+            var statusRow = await ReadStatusRowAsync(grafanaReader, Expand(statusQuery, accountKey));
+
+            statusRow.ConsentState.Should().Be("linked", file);
+            statusRow.LastSuccessAt.Should().NotBeNull(file);
+            statusRow.BalanceAmount.Should().Be(125.40m, file);
+            statusRow.BalanceReconciled.Should().Be("unknown", file);
+            statusRow.FlaggedCount.Should().Be(0, file);
         }
     }
+
+    private static async Task<StatusRow> ReadStatusRowAsync(NpgsqlConnection connection, string sql)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = sql;
+
+        await using var reader = await command.ExecuteReaderAsync();
+        (await reader.ReadAsync()).Should().BeTrue();
+
+        return new StatusRow(
+            reader.IsDBNull(1) ? null : reader.GetFieldValue<DateTimeOffset>(1),
+            reader.GetString(2),
+            reader.IsDBNull(4) ? null : reader.GetDecimal(4),
+            reader.GetString(7),
+            reader.GetInt32(8));
+    }
+
+    private sealed record StatusRow(
+        DateTimeOffset? LastSuccessAt,
+        string ConsentState,
+        decimal? BalanceAmount,
+        string BalanceReconciled,
+        int FlaggedCount);
 
     private static string Expand(string query, string accountKey)
     {
