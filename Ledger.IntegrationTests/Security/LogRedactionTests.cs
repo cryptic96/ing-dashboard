@@ -1,9 +1,12 @@
 using System.Net;
 using System.Text;
 using FluentAssertions;
+using Ledger.Domain.Banking;
 using Ledger.IntegrationTests.Infrastructure;
+using Ledger.IntegrationTests.Ingestion;
 using Ledger.Repository;
 using Ledger.Repository.Stores;
+using Ledger.Service.Ingestion.Synthetic;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.EntityFrameworkCore;
@@ -164,6 +167,60 @@ public class LogRedactionTests(DatabaseFixture fixture)
 
         coreOptionsExtension.Should().NotBeNull();
         coreOptionsExtension!.IsSensitiveDataLoggingEnabled.Should().BeFalse();
+    }
+
+    [Fact]
+    [Trait("Category", "LogRedaction")]
+    public async Task Link_state_code_and_session_id_never_reach_logs_responses_or_metrics_across_a_full_link_and_sync()
+    {
+        var scenario = SyntheticBankScenario.Create();
+        var account = scenario.AddAccount(AccountKind.Current);
+        scenario.AddTransaction(account, IngestionTestSupport.Booked("entry-redaction-001", -9.99m, new DateOnly(2026, 9, 30)));
+        var wrongCode = $"LedgerSentinelWrongCode{Guid.NewGuid():N}";
+
+        await using var host = await BankLinkTestHost.StartAsync(fixture, scenario);
+
+        var responseBodies = new List<string>();
+
+        string state;
+        using (var link = await host.SendAsync(HttpMethod.Post, "/api/v1/bank/connections/link"))
+        {
+            var linkBody = await link.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+            state = BankLinkTestHost.StateFromAuthorizationUrl(
+                System.Text.Json.JsonDocument.Parse(linkBody).RootElement.GetProperty("authorizationUrl").GetString()!);
+        }
+
+        using (var failed = await host.CallbackAsync(await host.StartLinkAsync(), wrongCode))
+        {
+            responseBodies.Add(await failed.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+        }
+
+        using (var callback = await host.CallbackAsync(state, scenario.AuthorizationCode))
+        {
+            callback.StatusCode.Should().Be(HttpStatusCode.OK);
+            responseBodies.Add(await callback.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+        }
+
+        var connectionKey = await host.LatestConnectionKeyAsync();
+        var accounts = await host.ListAccountsAsync(connectionKey);
+        responseBodies.Add(System.Text.Json.JsonSerializer.Serialize(accounts));
+
+        var selection = await host.SelectAsync(connectionKey, (accounts[0].GetProperty("accountKey").GetString()!, "Redaction", true));
+        responseBodies.Add(selection.ToString());
+
+        await host.WaitForReportedRowsAsync(accounts[0].GetProperty("accountKey").GetString()!, expected: 1);
+
+        using var opsClient = host.Factory.CreateOpsClient();
+        using var metricsResponse = await opsClient.GetAsync("/metrics", TestContext.Current.CancellationToken);
+        var metricsBody = await metricsResponse.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        var logText = string.Join('\n', host.Factory.CapturedLogMessages);
+
+        foreach (var sentinel in new[] { state, scenario.AuthorizationCode, scenario.SessionId, wrongCode })
+        {
+            logText.Should().NotContain(sentinel);
+            metricsBody.Should().NotContain(sentinel);
+            responseBodies.Should().OnlyContain(body => !body.Contains(sentinel, StringComparison.Ordinal));
+        }
     }
 
     private static IEnumerable<string> AllMessages(Exception? exception)

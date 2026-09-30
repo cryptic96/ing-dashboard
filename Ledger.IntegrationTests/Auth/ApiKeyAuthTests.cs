@@ -29,7 +29,7 @@ public partial class ApiKeyAuthTests(DatabaseFixture fixture)
 
         routeEndpoints.Should().NotBeEmpty();
 
-        foreach (var endpoint in routeEndpoints)
+        foreach (var endpoint in routeEndpoints.Where(candidate => candidate.RoutePattern.RawText != AnonymousBankCallbackRoute))
         {
             var method = endpoint.Metadata.GetMetadata<HttpMethodMetadata>()?.HttpMethods.FirstOrDefault() ?? "GET";
             var path = FillRoutePlaceholders(endpoint);
@@ -198,6 +198,8 @@ public partial class ApiKeyAuthTests(DatabaseFixture fixture)
     }
 
     private const string ApiKeyAuthenticationHandlerScheme = "ApiKey";
+
+    private const string AnonymousBankCallbackRoute = "/api/v1/bank/callback";
 
     private async Task AssertUnauthorizedAsync(HttpClient client, params string[] headerValues)
     {

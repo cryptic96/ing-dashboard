@@ -86,6 +86,64 @@ public class ProductionConfigurationValidatorTests : IDisposable
         exception.Message.Should().NotContain("localhost");
     }
 
+    [Theory]
+    [Trait("Category", "Configuration")]
+    [InlineData("Synthetic")]
+    [InlineData("synthetic")]
+    [InlineData("SomethingElseEntirely")]
+    public void ThrowIfInvalid_names_the_provider_key_for_synthetic_or_unknown_providers(string provider)
+    {
+        var configuration = BuildConfiguration(_existingCertificatePath, SentinelPassword, ValidConnectionString, provider);
+
+        var act = () => ProductionConfigurationValidator.ThrowIfInvalid(configuration);
+
+        var exception = act.Should().Throw<InvalidOperationException>().Which;
+        exception.Message.Should().Contain("Ingestion:Provider");
+        exception.Message.Should().NotContain(provider);
+    }
+
+    [Theory]
+    [Trait("Category", "Configuration")]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("http://ledger-api.example.com/api/v1/bank/callback")]
+    [InlineData("/api/v1/bank/callback")]
+    public void ThrowIfInvalid_names_the_redirect_key_when_enable_banking_has_no_https_redirect(string? redirectUrl)
+    {
+        var configuration = BuildConfiguration(
+            _existingCertificatePath,
+            SentinelPassword,
+            ValidConnectionString,
+            "EnableBanking",
+            redirectUrl);
+
+        var act = () => ProductionConfigurationValidator.ThrowIfInvalid(configuration);
+
+        var exception = act.Should().Throw<InvalidOperationException>().Which;
+        exception.Message.Should().Contain("BankLink:RedirectUrl");
+        exception.Message.Should().NotContain("Ingestion:Provider");
+        exception.Message.Should().NotContain("example.com");
+    }
+
+    [Theory]
+    [Trait("Category", "Configuration")]
+    [InlineData(null, null)]
+    [InlineData("None", null)]
+    [InlineData("EnableBanking", "https://ledger-api.example.com/api/v1/bank/callback")]
+    public void ThrowIfInvalid_accepts_no_provider_and_enable_banking_with_an_https_redirect(string? provider, string? redirectUrl)
+    {
+        var configuration = BuildConfiguration(
+            _existingCertificatePath,
+            SentinelPassword,
+            ValidConnectionString,
+            provider,
+            redirectUrl);
+
+        var act = () => ProductionConfigurationValidator.ThrowIfInvalid(configuration);
+
+        act.Should().NotThrow();
+    }
+
     /// <inheritdoc />
     public void Dispose()
     {
@@ -95,13 +153,17 @@ public class ProductionConfigurationValidatorTests : IDisposable
     private static IConfiguration BuildConfiguration(
         string? certificatePath,
         string? certificatePassword,
-        string connectionString)
+        string connectionString,
+        string? provider = null,
+        string? redirectUrl = null)
     {
         var values = new Dictionary<string, string?>
         {
             ["DataProtection:CertificatePath"] = certificatePath,
             ["DataProtection:CertificatePassword"] = certificatePassword,
-            ["ConnectionStrings:Ledger"] = connectionString
+            ["ConnectionStrings:Ledger"] = connectionString,
+            ["Ingestion:Provider"] = provider,
+            ["BankLink:RedirectUrl"] = redirectUrl
         };
 
         return new ConfigurationBuilder().AddInMemoryCollection(values).Build();
