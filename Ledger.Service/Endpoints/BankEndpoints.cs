@@ -20,10 +20,12 @@ public static class BankEndpoints
         var bank = endpoints.MapGroup("/api/v1/bank");
 
         bank.MapPost("/connections/link", StartLinkAsync);
+        bank.MapPost("/connections/{connectionKey}/renew", StartRenewAsync);
         bank.MapGet("/callback", CallbackAsync).AllowAnonymous();
         bank.MapGet("/connections", ListConnectionsAsync);
         bank.MapGet("/connections/{connectionKey}/accounts", ListAccountsAsync);
         bank.MapPut("/connections/{connectionKey}/accounts", SelectAccountsAsync);
+        bank.MapDelete("/connections/{connectionKey}", RevokeAsync);
 
         return endpoints;
     }
@@ -34,6 +36,30 @@ public static class BankEndpoints
         {
             var start = await service.StartLinkAsync(cancellationToken);
             return Results.Ok(new AuthorizationResponse(start.AuthorizationUrl.AbsoluteUri, start.ExpiresAt));
+        });
+    }
+
+    private static Task<IResult> StartRenewAsync(
+        string connectionKey,
+        BankLinkService service,
+        CancellationToken cancellationToken)
+    {
+        return Translate(async () =>
+        {
+            var start = await service.StartRenewAsync(connectionKey, cancellationToken);
+            return Results.Ok(new AuthorizationResponse(start.AuthorizationUrl.AbsoluteUri, start.ExpiresAt));
+        });
+    }
+
+    private static Task<IResult> RevokeAsync(
+        string connectionKey,
+        BankLinkService service,
+        CancellationToken cancellationToken)
+    {
+        return Translate(async () =>
+        {
+            await service.RevokeAsync(connectionKey, cancellationToken);
+            return Results.NoContent();
         });
     }
 

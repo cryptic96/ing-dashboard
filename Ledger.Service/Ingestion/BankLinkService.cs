@@ -82,6 +82,22 @@ public class BankLinkService(
         return await StartAsync(AuthorizationPurposes.Link, null, cancellationToken);
     }
 
+    /// <summary>
+    /// Starts a consent that renews an existing connection through the same redirect path as a first link. A connection whose
+    /// consent has ended can be renewed; a revoked or superseded one cannot.
+    /// </summary>
+    public async Task<LinkStart> StartRenewAsync(string connectionKey, CancellationToken cancellationToken)
+    {
+        var connection = await FindAsync(connectionKey, cancellationToken);
+
+        if (!IsRenewable(connection.Status))
+        {
+            throw new BankLinkException(BankLinkFailure.Conflict, "The connection was revoked or replaced and cannot be renewed.");
+        }
+
+        return await StartAsync(AuthorizationPurposes.Renew, connection.Id, cancellationToken);
+    }
+
     /// <summary>Completes a bank redirect. Every failure is reported identically, with no detail about why it failed.</summary>
     public async Task<CallbackOutcome> CompleteAsync(
         string? state,
@@ -107,6 +123,11 @@ public class BankLinkService(
             return Reject("redirect without a code");
         }
 
+        if (consumed.Purpose == AuthorizationPurposes.Renew && !await IsStillRenewableAsync(consumed.ConnectionId, cancellationToken))
+        {
+            return Reject("connection can no longer be renewed");
+        }
+
         ProviderSession session;
 
         try
@@ -124,6 +145,11 @@ public class BankLinkService(
             return new CallbackOutcome(CallbackResult.NoAccounts, 0);
         }
 
+        if (consumed.Purpose == AuthorizationPurposes.Renew)
+        {
+            return await CompleteRenewalAsync(consumed.ConnectionId!.Value, session, psu, cancellationToken);
+        }
+
         var linked = await connections.AddConnectionAsync(
             provider.Name,
             options.Value.AspspName,
@@ -135,6 +161,40 @@ public class BankLinkService(
 
         logger.LogInformation("Bank link callback finished with outcome {Outcome}.", CallbackResult.Completed);
         return new CallbackOutcome(CallbackResult.Completed, linked.Accounts.Count);
+    }
+
+    /// <summary>
+    /// Ends a connection: the provider closes the session first, and only then is the connection marked revoked, so a provider
+    /// failure changes nothing.
+    /// </summary>
+    public async Task RevokeAsync(string connectionKey, CancellationToken cancellationToken)
+    {
+        var connection = await FindAsync(connectionKey, cancellationToken);
+
+        if (!IsRenewable(connection.Status))
+        {
+            throw new BankLinkException(BankLinkFailure.Conflict, "The connection was already revoked or replaced.");
+        }
+
+        if (provider is DisabledBankDataProvider)
+        {
+            throw new BankLinkException(BankLinkFailure.NotConfigured, "Bank linking is not configured.");
+        }
+
+        var protectedSessionId = await connections.GetProtectedSessionIdAsync(connection.Id, cancellationToken)
+            ?? throw new BankLinkException(BankLinkFailure.NotFound, "The connection does not exist.");
+
+        try
+        {
+            await provider.RevokeSessionAsync(secretProtector.Unprotect(protectedSessionId), cancellationToken);
+        }
+        catch (BankProviderException exception)
+        {
+            logger.LogWarning("Revoking a bank session failed with {Kind}.", exception.Kind);
+            throw new BankLinkException(BankLinkFailure.Provider, "The bank provider could not end the session.");
+        }
+
+        await connections.MarkStatusAsync(connection.Id, ConnectionStatus.Revoked, timeProvider.GetUtcNow(), cancellationToken);
     }
 
     /// <summary>Lists every connection with its derived consent state. No session material is ever part of the result.</summary>
@@ -232,6 +292,58 @@ public class BankLinkService(
     {
         return await connections.FindConnectionAsync(connectionKey, cancellationToken)
             ?? throw new BankLinkException(BankLinkFailure.NotFound, "The connection does not exist.");
+    }
+
+    private async Task<CallbackOutcome> CompleteRenewalAsync(
+        Guid supersededConnectionId,
+        ProviderSession session,
+        PsuContext? psu,
+        CancellationToken cancellationToken)
+    {
+        RenewalResult renewal;
+
+        try
+        {
+            renewal = await connections.ApplyRenewalAsync(
+                supersededConnectionId,
+                provider.Name,
+                options.Value.AspspName,
+                options.Value.AspspCountry,
+                session,
+                secretProtector.Protect(session.SessionId),
+                timeProvider.GetUtcNow(),
+                cancellationToken);
+        }
+        catch (InvalidOperationException)
+        {
+            return Reject("connection can no longer be renewed");
+        }
+
+        if (!dispatcher.TryEnqueue(new SyncRequest(renewal.Connection.Id, SyncTrigger.PostLink, new FetchContext(psu))))
+        {
+            logger.LogWarning("The sync after a renewal could not be queued because the queue is full.");
+        }
+
+        logger.LogInformation("Bank link callback finished with outcome {Outcome}.", CallbackResult.Completed);
+        return new CallbackOutcome(CallbackResult.Completed, renewal.MappedAccounts + renewal.NewAccounts);
+    }
+
+    private async Task<bool> IsStillRenewableAsync(Guid? connectionId, CancellationToken cancellationToken)
+    {
+        if (connectionId is null)
+        {
+            return false;
+        }
+
+        var all = await connections.ListConnectionsAsync(cancellationToken);
+        var connection = all.FirstOrDefault(candidate => candidate.Id == connectionId);
+
+        return connection is not null && IsRenewable(connection.Status);
+    }
+
+    private static bool IsRenewable(ConnectionStatus status)
+    {
+        return status is ConnectionStatus.Active or ConnectionStatus.ProviderExpired;
     }
 
     private CallbackOutcome Reject(string reason)

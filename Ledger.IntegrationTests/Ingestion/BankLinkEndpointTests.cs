@@ -233,6 +233,180 @@ public class BankLinkEndpointTests(DatabaseFixture fixture)
         messages.Should().NotContain(message => message.Contains("NotAProviderSentinel"));
     }
 
+    [Fact]
+    [Trait("Category", "Consent")]
+    public async Task Connections_show_the_consent_state_and_whole_days_left_and_never_a_session_id()
+    {
+        var scenario = SyntheticBankScenario.Create();
+        scenario.AddAccount(AccountKind.Current);
+        scenario.SessionValidUntil = DateTimeOffset.UtcNow.AddDays(10).AddHours(1);
+
+        await using var host = await BankLinkTestHost.StartAsync(fixture, scenario);
+
+        var expiringKey = await host.LinkAsync(scenario);
+        scenario.SessionValidUntil = DateTimeOffset.UtcNow.AddDays(90);
+        var linkedKey = await host.LinkAsync(scenario);
+
+        var connections = await host.ListConnectionsAsync();
+        var expiring = connections.Single(connection => connection.GetProperty("connectionKey").GetString() == expiringKey);
+        var linked = connections.Single(connection => connection.GetProperty("connectionKey").GetString() == linkedKey);
+
+        expiring.GetProperty("consentState").GetString().Should().Be("expiring");
+        expiring.GetProperty("daysUntilExpiry").GetInt32().Should().Be(10);
+        expiring.GetProperty("status").GetString().Should().Be("active");
+        linked.GetProperty("consentState").GetString().Should().Be("linked");
+        linked.GetProperty("daysUntilExpiry").GetInt32().Should().BeInRange(89, 90);
+
+        var raw = System.Text.Json.JsonSerializer.Serialize(connections);
+        raw.Should().NotContain(scenario.SessionId).And.NotContainEquivalentOf("session");
+    }
+
+    [Fact]
+    [Trait("Category", "Consent")]
+    public async Task Renewal_keeps_account_keys_names_selection_and_history_and_syncs_the_longest_history_without_duplicates()
+    {
+        var scenario = SyntheticBankScenario.Create();
+        var first = scenario.AddAccount(AccountKind.Current);
+        var second = scenario.AddAccount(AccountKind.Savings);
+        scenario.AddTransaction(first, IngestionTestSupport.Booked("entry-a-1", -10.00m, Day));
+        scenario.AddTransaction(first, IngestionTestSupport.Booked("entry-a-2", -20.00m, Day.AddDays(-1)));
+        scenario.AddTransaction(second, IngestionTestSupport.Booked("entry-b-1", 5.00m, Day));
+        var bankProvider = new RenewableSyntheticProvider(scenario);
+
+        await using var host = await BankLinkTestHost.StartAsync(fixture, bankProvider);
+
+        var originalKey = await host.LinkAsync(scenario);
+        var original = await host.ListAccountsAsync(originalKey);
+        var firstKey = original[0].GetProperty("accountKey").GetString()!;
+        var secondKey = original[1].GetProperty("accountKey").GetString()!;
+
+        await host.SelectAsync(originalKey, (firstKey, "Joint", true), (secondKey, "Spaar", true));
+        (await host.WaitForReportedRowsAsync(firstKey, expected: 2)).Should().HaveCount(2);
+        (await host.WaitForReportedRowsAsync(secondKey, expected: 1)).Should().HaveCount(1);
+        var idsBefore = (await IngestionTestSupport.ReadReportingTransactionsAsync(fixture, firstKey)).Select(row => row.TransactionId).ToList();
+
+        scenario.AddTransaction(first, IngestionTestSupport.Booked("entry-a-3", -30.00m, Day.AddDays(1)));
+        bankProvider.ExposeRenewedSession = true;
+
+        var renewState = await host.StartRenewAsync(originalKey);
+        using (var callback = await host.CallbackAsync(renewState, scenario.AuthorizationCode))
+        {
+            callback.StatusCode.Should().Be(HttpStatusCode.OK);
+            (await callback.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).Should().Contain("2 accounts");
+        }
+
+        var renewedKey = await host.LatestConnectionKeyAsync();
+        renewedKey.Should().NotBe(originalKey);
+
+        var renewed = await host.ListAccountsAsync(renewedKey);
+        renewed.Should().HaveCount(2);
+        var kept = renewed.Single(account => account.GetProperty("accountKey").GetString() == firstKey);
+        kept.GetProperty("displayName").GetString().Should().Be("Joint");
+        kept.GetProperty("syncEnabled").GetBoolean().Should().BeTrue();
+        var added = renewed.Single(account => account.GetProperty("accountKey").GetString() != firstKey);
+        added.GetProperty("accountKey").GetString().Should().NotBe(secondKey);
+        added.GetProperty("syncEnabled").GetBoolean().Should().BeFalse();
+        added.GetProperty("displayName").ValueKind.Should().Be(JsonValueKind.Null);
+
+        var connections = await host.ListConnectionsAsync();
+        var supersededEntry = connections.Single(connection => connection.GetProperty("connectionKey").GetString() == originalKey);
+        supersededEntry.GetProperty("status").GetString().Should().Be("superseded");
+        supersededEntry.GetProperty("consentState").GetString().Should().Be("superseded");
+        connections.Single(connection => connection.GetProperty("connectionKey").GetString() == renewedKey)
+            .GetProperty("status").GetString().Should().Be("active");
+
+        var afterRows = await host.WaitForReportedRowsAsync(firstKey, expected: 3);
+        afterRows.Should().HaveCount(3);
+        var idsAfter = (await IngestionTestSupport.ReadReportingTransactionsAsync(fixture, firstKey)).Select(row => row.TransactionId).ToList();
+        idsAfter.Should().Contain(idsBefore);
+        idsAfter.Should().OnlyHaveUniqueItems();
+        (await IngestionTestSupport.ReadCountsAsync(fixture, firstKey)).Should().Be(new RowCounts(3, 3, 3));
+        (await host.WaitForReportedRowsAsync(secondKey, expected: 1)).Should().HaveCount(1);
+
+        var longestFetches = scenario.Calls.Where(call =>
+            call.Method == nameof(IBankDataProvider.GetTransactionsAsync)
+            && call.AccountUid == first.Uid
+            && call.Query.Contains("depth=Longest", StringComparison.Ordinal));
+        longestFetches.Should().HaveCount(2);
+    }
+
+    [Fact]
+    [Trait("Category", "Consent")]
+    public async Task A_renew_state_whose_connection_was_superseded_meanwhile_gets_the_generic_failure()
+    {
+        var scenario = SyntheticBankScenario.Create();
+        scenario.AddAccount(AccountKind.Current);
+        var bankProvider = new RenewableSyntheticProvider(scenario) { ExposeRenewedSession = true };
+
+        await using var host = await BankLinkTestHost.StartAsync(fixture, bankProvider);
+
+        var connectionKey = await host.LinkAsync(scenario);
+        var firstRenewal = await host.StartRenewAsync(connectionKey);
+        var secondRenewal = await host.StartRenewAsync(connectionKey);
+
+        using var accepted = await host.CallbackAsync(firstRenewal, scenario.AuthorizationCode);
+        accepted.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        using var rejected = await host.CallbackAsync(secondRenewal, scenario.AuthorizationCode);
+        using var unknown = await host.CallbackAsync(LinkStateToken.Generate().State, scenario.AuthorizationCode);
+
+        rejected.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await rejected.Content.ReadAsStringAsync(TestContext.Current.CancellationToken))
+            .Should().Be(await unknown.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    [Trait("Category", "Consent")]
+    public async Task Revoking_ends_the_provider_session_marks_the_connection_revoked_and_blocks_renewal()
+    {
+        var scenario = SyntheticBankScenario.Create();
+        scenario.AddAccount(AccountKind.Current);
+        var bankProvider = new RenewableSyntheticProvider(scenario);
+
+        await using var host = await BankLinkTestHost.StartAsync(fixture, bankProvider);
+
+        var connectionKey = await host.LinkAsync(scenario);
+
+        using (var revoke = await host.SendAsync(HttpMethod.Delete, $"/api/v1/bank/connections/{connectionKey}"))
+        {
+            revoke.StatusCode.Should().Be(HttpStatusCode.NoContent);
+        }
+
+        bankProvider.RevokedSessionIds.Should().Equal(scenario.SessionId);
+
+        var entry = (await host.ListConnectionsAsync()).Single(connection => connection.GetProperty("connectionKey").GetString() == connectionKey);
+        entry.GetProperty("status").GetString().Should().Be("revoked");
+        entry.GetProperty("consentState").GetString().Should().Be("revoked");
+
+        using var renew = await host.SendAsync(HttpMethod.Post, $"/api/v1/bank/connections/{connectionKey}/renew");
+        renew.StatusCode.Should().Be(HttpStatusCode.Conflict);
+
+        using var again = await host.SendAsync(HttpMethod.Delete, $"/api/v1/bank/connections/{connectionKey}");
+        again.StatusCode.Should().Be(HttpStatusCode.Conflict);
+
+        using var unknown = await host.SendAsync(HttpMethod.Post, "/api/v1/bank/connections/0000000000000000/renew");
+        unknown.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
+    [Trait("Category", "Consent")]
+    public async Task A_provider_failure_while_revoking_returns_502_and_changes_nothing()
+    {
+        var scenario = SyntheticBankScenario.Create();
+        scenario.AddAccount(AccountKind.Current);
+        var bankProvider = new RenewableSyntheticProvider(scenario) { FailRevoke = true };
+
+        await using var host = await BankLinkTestHost.StartAsync(fixture, bankProvider);
+
+        var connectionKey = await host.LinkAsync(scenario);
+
+        using var revoke = await host.SendAsync(HttpMethod.Delete, $"/api/v1/bank/connections/{connectionKey}");
+
+        revoke.StatusCode.Should().Be(HttpStatusCode.BadGateway);
+        var entry = (await host.ListConnectionsAsync()).Single(connection => connection.GetProperty("connectionKey").GetString() == connectionKey);
+        entry.GetProperty("status").GetString().Should().Be("active");
+    }
+
     private static void AssertHardenedHeaders(HttpResponseMessage response)
     {
         response.Headers.CacheControl.Should().NotBeNull();
@@ -265,9 +439,18 @@ public sealed class BankLinkTestHost : IAsyncDisposable
     public string Token { get; }
 
     /// <summary>Boots a host with the scenario's provider registered and a fresh API key.</summary>
-    public static async Task<BankLinkTestHost> StartAsync(
+    public static Task<BankLinkTestHost> StartAsync(
         DatabaseFixture fixture,
         SyntheticBankScenario scenario,
+        IReadOnlyDictionary<string, string?>? additionalConfiguration = null)
+    {
+        return StartAsync(fixture, new SyntheticBankDataProvider(scenario), additionalConfiguration);
+    }
+
+    /// <summary>Boots a host with the given provider registered and a fresh API key.</summary>
+    public static async Task<BankLinkTestHost> StartAsync(
+        DatabaseFixture fixture,
+        IBankDataProvider bankProvider,
         IReadOnlyDictionary<string, string?>? additionalConfiguration = null)
     {
         var configuration = new Dictionary<string, string?> { ["BankLink:RedirectUrl"] = RedirectUrl };
@@ -282,8 +465,7 @@ public sealed class BankLinkTestHost : IAsyncDisposable
 
         var factory = new LedgerWebApplicationFactory(
             fixture.ConnectionStringFor("ledger_runtime"),
-            configureTestServices: services =>
-                services.AddSingleton<IBankDataProvider>(new SyntheticBankDataProvider(scenario)),
+            configureTestServices: services => services.AddSingleton(bankProvider),
             additionalConfiguration: configuration);
 
         var token = await CreateKeyAsync(fixture);
@@ -419,6 +601,35 @@ public sealed class BankLinkTestHost : IAsyncDisposable
         return body.EnumerateArray().ToList();
     }
 
+    /// <summary>Starts a renewal of the connection and returns the one-time state carried by the authorisation address.</summary>
+    public async Task<string> StartRenewAsync(string connectionKey)
+    {
+        using var response = await SendAsync(HttpMethod.Post, $"/api/v1/bank/connections/{connectionKey}/renew");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken);
+        return StateFromAuthorizationUrl(body.GetProperty("authorizationUrl").GetString()!);
+    }
+
+    /// <summary>Links the scenario's consent and returns the new connection's key, without selecting any account.</summary>
+    public async Task<string> LinkAsync(SyntheticBankScenario scenario)
+    {
+        var state = await StartLinkAsync();
+        using var callback = await CallbackAsync(state, scenario.AuthorizationCode);
+        callback.StatusCode.Should().Be(HttpStatusCode.OK);
+        return await LatestConnectionKeyAsync();
+    }
+
+    /// <summary>Lists every connection through the API.</summary>
+    public async Task<IReadOnlyList<JsonElement>> ListConnectionsAsync()
+    {
+        using var response = await SendAsync(HttpMethod.Get, "/api/v1/bank/connections");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken);
+        return body.EnumerateArray().ToList();
+    }
+
     /// <summary>Saves an account selection and returns the response body.</summary>
     public async Task<JsonElement> SelectAsync(string connectionKey, params (string AccountKey, string DisplayName, bool Sync)[] selections)
     {
@@ -539,5 +750,102 @@ public sealed class BankLinkTestHost : IAsyncDisposable
         }
 
         throw new TimeoutException("The ops endpoint never became healthy within the timeout.");
+    }
+}
+
+/// <summary>
+/// Wraps the synthetic provider so a renewal can return the same accounts under new provider ids, leave one account out and
+/// expose one new account, and so a session revocation can be observed or made to fail.
+/// </summary>
+public sealed class RenewableSyntheticProvider(SyntheticBankScenario scenario) : IBankDataProvider
+{
+    private const string RenewedPrefix = "renewed-";
+    private readonly SyntheticBankDataProvider _inner = new(scenario);
+    private readonly List<string> _revokedSessionIds = [];
+
+    /// <summary>The session id handed out for a renewed consent.</summary>
+    public string RenewedSessionId { get; } = "renewed-session-" + Guid.NewGuid().ToString("N");
+
+    /// <summary>When true, completing a consent returns the renewed session instead of the original one.</summary>
+    public bool ExposeRenewedSession { get; set; }
+
+    /// <summary>When true, revoking a session fails with a provider error.</summary>
+    public bool FailRevoke { get; set; }
+
+    /// <summary>The plaintext session ids the application asked the provider to end.</summary>
+    public IReadOnlyList<string> RevokedSessionIds => _revokedSessionIds.ToList();
+
+    /// <inheritdoc />
+    public string Name => _inner.Name;
+
+    /// <inheritdoc />
+    public Task<AuthorizationStart> StartAuthorizationAsync(AuthorizationRequest request, CancellationToken cancellationToken)
+    {
+        return _inner.StartAuthorizationAsync(request, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<ProviderSession> CompleteAuthorizationAsync(string code, CancellationToken cancellationToken)
+    {
+        var session = await _inner.CompleteAuthorizationAsync(code, cancellationToken);
+
+        if (!ExposeRenewedSession)
+        {
+            return session;
+        }
+
+        var kept = session.Accounts
+            .Take(Math.Max(1, session.Accounts.Count - 1))
+            .Select(account => account with { Uid = RenewedPrefix + account.Uid })
+            .ToList();
+
+        kept.Add(new ProviderAccount(
+            RenewedPrefix + "new-" + Guid.NewGuid().ToString("N"),
+            "renewed-new-" + Guid.NewGuid().ToString("N"),
+            "XX00SYNT0000000099",
+            "Synthetic new account",
+            "Current",
+            AccountKind.Current,
+            "EUR"));
+
+        return new ProviderSession(RenewedSessionId, session.ValidUntil, kept);
+    }
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<ProviderBalance>> GetBalancesAsync(
+        ProviderAccountRef account,
+        FetchContext context,
+        CancellationToken cancellationToken)
+    {
+        return _inner.GetBalancesAsync(Original(account), context, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public IAsyncEnumerable<ProviderTransactionPage> GetTransactionsAsync(
+        ProviderAccountRef account,
+        TransactionQuery query,
+        FetchContext context,
+        CancellationToken cancellationToken)
+    {
+        return _inner.GetTransactionsAsync(Original(account), query, context, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task RevokeSessionAsync(string sessionId, CancellationToken cancellationToken)
+    {
+        if (FailRevoke)
+        {
+            throw new BankProviderException(ProviderErrorKind.Transient, "revoke_failed", "The provider could not end the session.");
+        }
+
+        _revokedSessionIds.Add(sessionId);
+        return _inner.RevokeSessionAsync(sessionId, cancellationToken);
+    }
+
+    private ProviderAccountRef Original(ProviderAccountRef account)
+    {
+        return account.SessionId == RenewedSessionId
+            ? new ProviderAccountRef(scenario.SessionId, account.AccountUid[RenewedPrefix.Length..])
+            : account;
     }
 }

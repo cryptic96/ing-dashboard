@@ -1,0 +1,39 @@
+# Ready-to-use requests for linking, selecting, renewing and revoking bank accounts.
+# Works with the VS Code REST Client extension and with JetBrains HTTP client files.
+# Replace the placeholder values below. Never commit a real key or a real connection or account key.
+
+@host = https://ledger-api.example.com
+@apiKey = paste-the-operator-key-here
+@connectionKey = paste-a-connection-key-here
+@accountKey = paste-an-account-key-here
+
+### Start a link. Open the returned authorizationUrl in a browser on the home network or VPN and approve it in the bank app.
+POST {{host}}/api/v1/bank/connections/link
+X-Api-Key: {{apiKey}}
+
+### List connections with their consent state and whole days left. Copy the connectionKey of the new connection.
+GET {{host}}/api/v1/bank/connections
+X-Api-Key: {{apiKey}}
+
+### List the accounts of a connection. Nothing is synced until accounts are selected.
+GET {{host}}/api/v1/bank/connections/{{connectionKey}}/accounts
+X-Api-Key: {{apiKey}}
+
+### Select the accounts to sync and name them. Do this right after approving: the first sync starts now and reads the longest history.
+PUT {{host}}/api/v1/bank/connections/{{connectionKey}}/accounts
+X-Api-Key: {{apiKey}}
+Content-Type: application/json
+
+{
+  "accounts": [
+    { "accountKey": "{{accountKey}}", "displayName": "Joint", "sync": true }
+  ]
+}
+
+### Renew a connection that is expiring. Open the returned authorizationUrl and approve it again. History and selection are kept.
+POST {{host}}/api/v1/bank/connections/{{connectionKey}}/renew
+X-Api-Key: {{apiKey}}
+
+### Revoke a connection: the consent is ended at the provider and the connection is marked revoked.
+DELETE {{host}}/api/v1/bank/connections/{{connectionKey}}
+X-Api-Key: {{apiKey}}

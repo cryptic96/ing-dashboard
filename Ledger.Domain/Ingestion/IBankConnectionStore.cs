@@ -41,7 +41,30 @@ public interface IBankConnectionStore
 
     /// <summary>Returns the protected session id of the connection, or null when the connection does not exist.</summary>
     Task<string?> GetProtectedSessionIdAsync(Guid connectionId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Replaces a connection's consent with a renewed one in a single database transaction. Accounts the ledger already knows by
+    /// their stable identification hash move to the new connection with their ids, display names and selection intact, accounts
+    /// seen for the first time are recorded unselected, and the old connection becomes superseded. The old session is left
+    /// untouched at the provider.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The connection to replace is revoked, already superseded or unknown.</exception>
+    Task<RenewalResult> ApplyRenewalAsync(
+        Guid supersededConnectionId,
+        string provider,
+        string aspspName,
+        string aspspCountry,
+        ProviderSession session,
+        string protectedSessionId,
+        DateTimeOffset authorizedAt,
+        CancellationToken cancellationToken);
+
+    /// <summary>Sets the stored status of a connection, recording the closing time for a revoked one.</summary>
+    Task MarkStatusAsync(Guid connectionId, ConnectionStatus status, DateTimeOffset at, CancellationToken cancellationToken);
 }
+
+/// <summary>What a renewal did: the new connection, how many accounts kept their ledger identity and how many were new.</summary>
+public record RenewalResult(LinkedConnection Connection, int MappedAccounts, int NewAccounts);
 
 /// <summary>A connection as listed to the operator. It carries no session material.</summary>
 public record ConnectionSummary(
