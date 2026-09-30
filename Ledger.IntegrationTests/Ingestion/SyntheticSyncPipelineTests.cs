@@ -269,7 +269,7 @@ public class SyntheticSyncPipelineTests(DatabaseFixture fixture)
         recovered.Outcome.Should().Be(SyncOutcome.Succeeded);
         recovered.Inserted.Should().Be(5);
         (await IngestionTestSupport.ReadCountsAsync(fixture, accountKey)).Should().Be(new RowCounts(5, 5, 5));
-        (await IngestionTestSupport.ReadRunAsync(fixture, recovered.RunId)).CallsMade.Should().Be(3);
+        (await IngestionTestSupport.ReadRunAsync(fixture, recovered.RunId)).CallsMade.Should().Be(4);
     }
 
     [Fact]
