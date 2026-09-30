@@ -33,6 +33,13 @@ FAILURES=0
 # tests point this at a fixture.
 PROVISION_CONF="${LEDGER_PROVISION_CONF:-/etc/ledger/provision.conf}"
 
+# Where the log scan looks, and which env file and zone file are read. The
+# defaults are the host's real paths; offline tests point them at fixtures.
+JOURNAL_CMD="${LEDGER_SELFCHECK_JOURNAL_CMD:-journalctl --since \"-30 days\" --no-pager -o cat}"
+LOG_ROOTS="${LEDGER_SELFCHECK_LOG_ROOTS:-/var/log}"
+ENV_FILE="${LEDGER_SELFCHECK_ENV_FILE:-/etc/ledger/ledger.env}"
+ZONEINFO_FILE="${LEDGER_SELFCHECK_ZONEINFO:-/usr/share/zoneinfo/Europe/Amsterdam}"
+
 pass() {
   echo "PASS - $*"
 }
@@ -197,6 +204,20 @@ check_files() {
   check_mode_owner /etc/ledger/provision.conf 600 root:root
   check_mode_owner /var/backups/ledger 700 ledger_backup:ledger_backup
 
+  local bank_key_path
+  bank_key_path="$(env_file_value EnableBanking__PrivateKeyPath)"
+  if [[ -n "$bank_key_path" ]]; then
+    check_mode_owner "$bank_key_path" 640 root:ledger
+  else
+    skip "bank key not configured yet"
+  fi
+
+  if [[ -f "$ZONEINFO_FILE" ]]; then
+    pass "the Europe/Amsterdam time zone file exists"
+  else
+    fail "the Europe/Amsterdam time zone file is missing"
+  fi
+
   if [[ -f /etc/ledger/backup-recipients.txt ]]; then
     if grep -vqE '^age1[0-9a-z]+$|^$' /etc/ledger/backup-recipients.txt; then
       fail "backup-recipients.txt contains a line that is not an age1 public key"
@@ -256,6 +277,98 @@ check_secrets_hygiene() {
     pass "no GitHub Actions runner directory, process or unit found"
   else
     fail "a GitHub Actions runner directory, process or unit was found"
+  fi
+}
+
+# Prints the value of KEY from the env file, or nothing when the file or the
+# key is absent. The value is only ever stored in a shell variable.
+env_file_value() {
+  local key="$1" value
+  [[ -r "$ENV_FILE" ]] || return 0
+  value="$(grep -E "^${key}=" "$ENV_FILE" | head -n1 | cut -d= -f2-)"
+  value="${value#\"}"
+  value="${value%\"}"
+  printf '%s' "$value"
+}
+
+# Succeeds when the journal holds text matching the needle. A regex needle
+# is passed as an argument (it is not secret); a fixed needle is a secret
+# value and is fed through file descriptor 3 so it never appears in any
+# process argument list. grep -q prints nothing.
+journal_matches() {
+  local mode="$1" needle="$2"
+  if [[ "$mode" == "fixed" ]]; then
+    bash -c "$JOURNAL_CMD" 2> /dev/null | grep -F -q -f /dev/fd/3 3<<< "$needle"
+    return "${PIPESTATUS[1]}"
+  fi
+  bash -c "$JOURNAL_CMD" 2> /dev/null | grep -E -q -- "$needle"
+  return "${PIPESTATUS[1]}"
+}
+
+# Prints the first text file under the log roots that matches the needle.
+# grep -l prints only file names, never matched text.
+first_log_file_matching() {
+  local mode="$1" needle="$2"
+  local -a roots
+  read -r -a roots <<< "$LOG_ROOTS"
+  if [[ "$mode" == "fixed" ]]; then
+    grep -rIl -F -f /dev/fd/3 "${roots[@]}" 3<<< "$needle" 2> /dev/null | head -n1 || true
+  else
+    grep -rIlE -- "$needle" "${roots[@]}" 2> /dev/null | head -n1 || true
+  fi
+}
+
+LOG_LEAKS=0
+
+# Fails once per place (the journal, the first matching file) where text of
+# the given kind was found. The report names the kind and the place only.
+scan_logs_for() {
+  local kind="$1" mode="$2" needle="$3" file
+  if journal_matches "$mode" "$needle"; then
+    fail "secret-shaped text (${kind}) found in the journal"
+    LOG_LEAKS=$((LOG_LEAKS + 1))
+  fi
+  file="$(first_log_file_matching "$mode" "$needle")"
+  if [[ -n "$file" ]]; then
+    fail "secret-shaped text (${kind}) found in ${file}"
+    LOG_LEAKS=$((LOG_LEAKS + 1))
+  fi
+}
+
+# Adds a fixed needle scan only for values long enough not to match ordinary
+# log text.
+scan_logs_for_value() {
+  local kind="$1" value="$2"
+  if [[ "${#value}" -ge 16 ]]; then
+    scan_logs_for "$kind" fixed "$value"
+  fi
+}
+
+check_log_secrets() {
+  local age_marker="AGE-SECRET-KEY-" age_one="1"
+  local pem_open="-----BEGIN " pem_name="PRIVATE KEY-----"
+  LOG_LEAKS=0
+
+  scan_logs_for "age identity" regex "${age_marker}${age_one}[0-9A-Z]{58}"
+  scan_logs_for "API key" regex 'ldg_[0-9a-f]{16}_[A-Za-z0-9_-]{43}'
+  scan_logs_for "private key" regex "${pem_open}([A-Z]+ )*${pem_name}"
+
+  local value key_path body
+  value="$(env_file_value DataProtection__CertificatePassword)"
+  scan_logs_for_value "certificate password" "$value"
+  value="$(env_file_value EnableBanking__PrivateKeyPassword)"
+  scan_logs_for_value "bank key password" "$value"
+  unset value
+
+  key_path="$(env_file_value EnableBanking__PrivateKeyPath)"
+  if [[ -n "$key_path" && -r "$key_path" ]]; then
+    body="$(grep -v -- '-----' "$key_path" | head -n1 || true)"
+    scan_logs_for_value "bank key" "$body"
+    unset body
+  fi
+
+  if [[ "$LOG_LEAKS" -eq 0 ]]; then
+    pass "no secret-shaped text found in the journal or under the log directories"
   fi
 }
 
@@ -596,6 +709,7 @@ check_services
 check_postgres
 check_files
 check_secrets_hygiene
+check_log_secrets
 check_listeners
 check_firewall
 
