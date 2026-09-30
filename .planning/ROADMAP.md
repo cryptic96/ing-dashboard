@@ -85,12 +85,12 @@ Plans:
   4. Both partners can open a Grafana dashboard showing sync status and recent transactions per account, in English or Dutch; both language versions are generated from one source. The dashboard reads through the SELECT-only reporting role, and the database rejects a write query attempted with that role.
   5. The bank connection is read-only, and no code path can initiate a payment. A synthetic test provider can feed the same pipeline with no changes outside ingestion.
 
-**Plans**: 15 plans
+**Plans**: 1/15 plans executed
 
 Plans:
 **Wave 1**
 
-- [ ] 02-01-PLAN.md — Test platform moved to Microsoft.Testing.Platform (xunit.v3 4.x), proven with the DST-safe Amsterdam schedule math
+- [x] 02-01-PLAN.md — Test platform moved to Microsoft.Testing.Platform (xunit.v3 4.x), proven with the DST-safe Amsterdam schedule math
 - [ ] 02-02-PLAN.md — Real-consent spike kickoff (operator): encrypted, structure-only spike tool; savings coverage, consent limits, history window; daily captures start; SSH key passphrase
 - [ ] 02-03-PLAN.md — Host hardening: selfcheck log secret scan, sandboxed installer unit and apikey wrapper, tzdata, ledger-bank-key for the password-protected aggregator key
 
@@ -129,6 +129,7 @@ Plans:
 **Wave 9** *(blocked on Wave 8 completion)*
 
 - [ ] 02-15-PLAN.md — Go-live: release, sandboxed installer proof, server's aggregator application and key, first real link, next-morning automatic sync
+
 **UI hint**: yes
 **Research flags**: Spike first: confirm with a real consent that Enable Banking's ING NL link includes the savings accounts (Salt Edge is the fallback). Also confirm the aggregator's rate limits and actual consent duration. Validate pending-to-booked reconciliation against real captured transaction pairs kept outside the repository; only synthetic fixtures are committed.
 
@@ -214,7 +215,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Secure Platform & Release Pipeline | 12/12 | Complete    | 2026-09-29 |
-| 2. Automatic ING Sync | 0/15 | Planned | - |
+| 2. Automatic ING Sync | 1/15 | In Progress|  |
 | 3. Claude Reads the Ledger | 0/TBD | Not started | - |
 | 4. Trustworthy Categorisation | 0/TBD | Not started | - |
 | 5. Budgets, Goals & Forecast | 0/TBD | Not started | - |
