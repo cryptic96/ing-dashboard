@@ -23,3 +23,9 @@ public sealed record ValueMappingOption(string Text, string? Color, int Index);
 
 /// <summary>How a table cell is rendered.</summary>
 public sealed record CellOptions(string Type);
+
+/// <summary>Colours applied to a field by value, from the base step upwards.</summary>
+public sealed record Thresholds(string Mode, IReadOnlyList<ThresholdStep> Steps);
+
+/// <summary>One threshold step: the colour applies from the value upwards, and the base step has no value.</summary>
+public sealed record ThresholdStep(string Color, int? Value);
