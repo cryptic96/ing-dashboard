@@ -6,6 +6,14 @@
 # share one folder), a changed set of firing alerts is sent at most once an
 # hour, and a still-firing group is repeated every 12 hours. That bounds
 # alert mail to roughly 24 messages a day even while alerts flap.
+#
+# Household alerts (the bank sync and consent rules, in the Household folder)
+# have their own child route to the same contact point. They form one group
+# of their own and keep the hourly group interval, but a household alert that
+# is still firing is repeated once a day instead of every 12 hours, so an
+# unrenewed consent or a stale sync becomes a daily reminder rather than
+# twice-daily noise. To get fewer or more reminders, change that one repeat
+# interval.
 apiVersion: 1
 
 policies:
@@ -16,3 +24,12 @@ policies:
     group_wait: 1m
     group_interval: 1h
     repeat_interval: 12h
+    routes:
+      - receiver: operator-email
+        object_matchers:
+          - ["grafana_folder", "=", "Household"]
+        group_by:
+          - grafana_folder
+        group_wait: 1m
+        group_interval: 1h
+        repeat_interval: 24h

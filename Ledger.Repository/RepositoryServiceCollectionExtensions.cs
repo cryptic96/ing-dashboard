@@ -28,6 +28,7 @@ public static class RepositoryServiceCollectionExtensions
         services.AddScoped<ISyncRunStore, SyncRunStore>();
         services.AddScoped<IProviderCallStore, ProviderCallStore>();
         services.AddScoped<IBalanceStore, BalanceStore>();
+        services.AddScoped<IIngestionStatusStore, IngestionStatusStore>();
 
         return services;
     }
