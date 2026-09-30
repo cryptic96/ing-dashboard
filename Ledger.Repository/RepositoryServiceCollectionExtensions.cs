@@ -1,4 +1,5 @@
 using Ledger.Domain.Auth;
+using Ledger.Domain.Ingestion;
 using Ledger.Domain.Security;
 using Ledger.Repository.Health;
 using Ledger.Repository.Stores;
@@ -21,6 +22,9 @@ public static class RepositoryServiceCollectionExtensions
 
         services.AddScoped<IDataProtectionCanaryStore, DataProtectionCanaryStore>();
         services.AddScoped<IApiKeyStore, ApiKeyStore>();
+        services.AddScoped<IBankConnectionStore, BankConnectionStore>();
+        services.AddScoped<ILedgerStore, LedgerStore>();
+        services.AddScoped<ISyncRunStore, SyncRunStore>();
 
         return services;
     }

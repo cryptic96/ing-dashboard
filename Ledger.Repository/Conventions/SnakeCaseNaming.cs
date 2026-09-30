@@ -35,7 +35,7 @@ public static class SnakeCaseNaming
         }
     }
 
-    private static string ToSnakeCase(string name)
+    internal static string ToSnakeCase(string name)
     {
         var builder = new StringBuilder();
 

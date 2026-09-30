@@ -6,6 +6,7 @@ using Ledger.Service.Cli;
 using Ledger.Service.Endpoints;
 using Ledger.Service.Health;
 using Ledger.Service.Hosting;
+using Ledger.Service.Ingestion;
 using Ledger.Service.Security;
 using Ledger.Domain.Security;
 using Microsoft.AspNetCore.Authentication;
@@ -41,6 +42,8 @@ builder.Services.Configure<KestrelServerOptions>(options => options.AddServerHea
 builder.Services.AddProblemDetails();
 
 builder.Services.AddLedgerRepository(builder.Configuration);
+
+builder.Services.AddLedgerIngestion(builder.Configuration);
 
 builder.Services.AddLedgerDataProtection(builder.Configuration, builder.Environment);
 
