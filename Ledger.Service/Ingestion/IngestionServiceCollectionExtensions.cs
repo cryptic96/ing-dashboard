@@ -11,7 +11,8 @@ public static class IngestionServiceCollectionExtensions
     /// Binds the ingestion options, registers the sync orchestrator and the bank link flow, and registers the provider chosen by
     /// Ingestion:Provider. With None a disabled provider is registered, so the host always starts and bank linking reports that it
     /// is not configured. An unknown value, or a provider that has no adapter yet, stops startup naming only the key. The daily
-    /// scheduler is always registered and idles when no provider is configured or Ingestion:SchedulerEnabled is false.
+    /// scheduler is always registered and idles when no provider is configured or Ingestion:SchedulerEnabled is false. The metrics
+    /// refresher is always registered, because consent and sync state are worth exposing whatever the provider.
     /// </summary>
     /// <exception cref="InvalidOperationException">Ingestion:Provider holds a value that cannot be used.</exception>
     public static IServiceCollection AddLedgerIngestion(this IServiceCollection services, IConfiguration configuration)
@@ -31,6 +32,9 @@ public static class IngestionServiceCollectionExtensions
         services.AddSingleton<SyncScheduler>();
         services.AddHostedService(provider => provider.GetRequiredService<SyncScheduler>());
         services.AddScoped<BankLinkService>();
+
+        services.AddSingleton<SyncMetricsRefresher>();
+        services.AddHostedService(provider => provider.GetRequiredService<SyncMetricsRefresher>());
 
         return services;
     }
