@@ -14,6 +14,7 @@ trap 'rm -rf "$WORKDIR"' EXIT
 
 # shellcheck source=deploy/bin/ledger-bank-key
 LEDGER_BANK_KEY_LIB_ONLY=1 source "$BANK_KEY"
+set +e
 set -uo pipefail
 
 FAILURES=0
@@ -119,7 +120,26 @@ check "a second generate refuses" "1" "$?"
 check "a second generate leaves the key unchanged" "$KEY_BEFORE" "$(cksum < "$KEY_FILE")"
 check "a second generate leaves the env file unchanged" "$ENV_BEFORE" "$(cat "$GEN_ENV")"
 check "the refusal says the key already exists" "1" "$(grep -c 'already exists' <<< "$SECOND_OUT")"
-check "only the key, certificate and public key are in the key directory" "3""$(find "$KEY_DIR" -mindepth 1 | wc -l | tr -d ' ')"
+check "only the key, certificate and public key are in the key directory" "3" "$(find "$KEY_DIR" -mindepth 1 | wc -l | tr -d ' ')"
+
+# --- configure ----------------------------------------------------------------
+CONFIGURED_ID='0b9e2c7a-4d1f-4a6e-9c3b-5e8f1a2d7c64'
+CONFIGURED_URL='https://host.example.com/api/v1/bank/callback'
+(bank_key_configure "$GEN_ENV" --application-id "$CONFIGURED_ID" --redirect-url "$CONFIGURED_URL") > /dev/null 2>&1
+check "configure succeeds with valid values" "0" "$?"
+check "configure writes the application id" "$CONFIGURED_ID" "$(read_env_value EnableBanking__ApplicationId "$GEN_ENV")"
+check "configure selects the provider" "EnableBanking" "$(read_env_value Ingestion__Provider "$GEN_ENV")"
+check "configure writes the callback URL" "$CONFIGURED_URL" "$(read_env_value BankLink__RedirectUrl "$GEN_ENV")"
+check "configure keeps the generated key path" "$KEY_FILE" "$(read_env_value EnableBanking__PrivateKeyPath "$GEN_ENV")"
+
+CONFIGURED_BEFORE="$(cat "$GEN_ENV")"
+(bank_key_configure "$GEN_ENV" --application-id 'not-a-uuid' --redirect-url "$CONFIGURED_URL") > /dev/null 2>&1
+check "configure rejects an invalid application id" "1" "$?"
+(bank_key_configure "$GEN_ENV" --application-id "$CONFIGURED_ID" --redirect-url 'http://host.example.com/api/v1/bank/callback') > /dev/null 2>&1
+check "configure rejects an insecure callback URL" "1" "$?"
+(bank_key_configure "$GEN_ENV" --application-id "$CONFIGURED_ID") > /dev/null 2>&1
+check "configure requires both values" "2" "$?"
+check "rejected configure calls leave the env file unchanged" "$CONFIGURED_BEFORE" "$(cat "$GEN_ENV")"
 
 echo ""
 if [ "$FAILURES" -eq 0 ]; then
