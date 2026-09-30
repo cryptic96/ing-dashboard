@@ -292,6 +292,27 @@ SCAN_ROOT="${WORKDIR}/scan-root"
 mkdir -p "$SCAN_ROOT"
 export LEDGER_SELFCHECK_SCAN_ROOTS="$SCAN_ROOT"
 
+# The log scan would otherwise read this machine's journal and /var/log and
+# the real env file; every run is pointed at fixtures that start clean.
+LOG_ROOT="${WORKDIR}/log-root"
+JOURNAL_FILE="${WORKDIR}/journal.txt"
+ENV_FIXTURE="${WORKDIR}/ledger.env"
+ZONE_ROOT="${WORKDIR}/zoneinfo"
+mkdir -p "$LOG_ROOT" "${ZONE_ROOT}/Europe"
+: > "${ZONE_ROOT}/Europe/Amsterdam"
+export LEDGER_SELFCHECK_LOG_ROOTS="$LOG_ROOT"
+export LEDGER_SELFCHECK_JOURNAL_CMD="cat ${JOURNAL_FILE}"
+export LEDGER_SELFCHECK_ENV_FILE="$ENV_FIXTURE"
+export LEDGER_SELFCHECK_ZONEINFO="${ZONE_ROOT}/Europe/Amsterdam"
+
+reset_log_fixtures() {
+  rm -rf "$LOG_ROOT"
+  mkdir -p "$LOG_ROOT"
+  printf 'service started\nsync finished\n' > "$JOURNAL_FILE"
+  : > "$ENV_FIXTURE"
+}
+reset_log_fixtures
+
 setup_good_env() {
   unset STUB_LISTEN_ADDRESSES STUB_HBA_NONLOCAL STUB_CREATE_TABLE_OUTPUT \
     STUB_GRAFANA_READER_OUTPUT STUB_MIGRATOR_LOGIN_EXIT STUB_SS_OUTPUT \
@@ -556,6 +577,146 @@ assert_line "the version after a HELP comment line is parsed correctly" "$OUT" \
   "PASS - ledger_build_info version matches the current release (1.4.2)"
 assert_line "the commit after a HELP comment line is parsed correctly" "$OUT" \
   "PASS - the running build's commit matches the release manifest (abcdef012345)"
+
+# =====================================================================
+# Log secret scan (check_log_secrets): the journal and the log directories
+# are searched for complete secret shapes and for the values of the password
+# settings. A hit names only the kind and the place, never the text. All
+# secrets are synthetic and generated here.
+# =====================================================================
+random_chars() {
+  LC_ALL=C tr -dc "$1" < /dev/urandom | head -c "$2"
+}
+
+FIXTURE_API_KEY="ldg_$(random_chars 'a-f0-9' 16)_$(random_chars 'A-Za-z0-9_-' 43)"
+FIXTURE_DP_PASSWORD="$(random_chars 'A-Za-z0-9' 28)"
+FIXTURE_BANK_PASSWORD="$(random_chars 'A-Za-z0-9' 28)"
+FIXTURE_KEY_FILE="${WORKDIR}/fixture-bank-key.pem"
+FIXTURE_KEY_PASSWORD="$FIXTURE_BANK_PASSWORD" openssl genpkey -algorithm RSA \
+  -pkeyopt rsa_keygen_bits:2048 -aes-256-cbc -pass env:FIXTURE_KEY_PASSWORD \
+  -out "$FIXTURE_KEY_FILE" 2> /dev/null
+chmod 640 "$FIXTURE_KEY_FILE"
+FIXTURE_KEY_BODY_LINE="$(grep -v -- '-----' "$FIXTURE_KEY_FILE" | head -n1)"
+PEM_OPEN="-----BEGIN "
+PEM_NAME="PRIVATE KEY-----"
+
+write_env_fixture() {
+  {
+    printf 'DataProtection__CertificatePassword=%s\n' "$FIXTURE_DP_PASSWORD"
+    if [ "${1:-}" = "with-bank-key" ]; then
+      printf 'EnableBanking__PrivateKeyPath=%s\n' "$FIXTURE_KEY_FILE"
+      printf 'EnableBanking__PrivateKeyPassword=%s\n' "$FIXTURE_BANK_PASSWORD"
+    fi
+  } > "$ENV_FIXTURE"
+}
+
+assert_absent() {
+  local description="$1" output="$2" secret="$3"
+  local found=0
+  if grep -qF -- "$secret" <<< "$output"; then
+    found=1
+  fi
+  check "$description" "0" "$found"
+}
+
+CLEAN_LOG_LINE="PASS - no secret-shaped text found in the journal or under the log directories"
+
+setup_good_env
+reset_log_fixtures
+write_env_fixture with-bank-key
+OUT="$(run_selfcheck --pre-deploy)"
+assert_line "clean journal and log directory pass the log secret scan" "$OUT" "$CLEAN_LOG_LINE"
+
+setup_good_env
+reset_log_fixtures
+write_env_fixture
+printf 'request failed for key %s\n' "$FIXTURE_API_KEY" >> "$JOURNAL_FILE"
+OUT="$(run_selfcheck --pre-deploy)"
+assert_line "an API key in the journal fails" "$OUT" \
+  "FAIL - secret-shaped text (API key) found in the journal"
+assert_absent "the API key is never printed" "$OUT" "$FIXTURE_API_KEY"
+
+setup_good_env
+reset_log_fixtures
+write_env_fixture
+printf 'connect password=%s\n' "$FIXTURE_DP_PASSWORD" > "${LOG_ROOT}/app.log"
+OUT="$(run_selfcheck --pre-deploy)"
+assert_line "the certificate password in a log file fails" "$OUT" \
+  "FAIL - secret-shaped text (certificate password) found in ${LOG_ROOT}/app.log"
+assert_absent "the certificate password is never printed" "$OUT" "$FIXTURE_DP_PASSWORD"
+
+setup_good_env
+reset_log_fixtures
+write_env_fixture with-bank-key
+printf 'loaded %s\n' "$FIXTURE_BANK_PASSWORD" >> "$JOURNAL_FILE"
+OUT="$(run_selfcheck --pre-deploy)"
+assert_line "the bank key password in the journal fails" "$OUT" \
+  "FAIL - secret-shaped text (bank key password) found in the journal"
+assert_absent "the bank key password is never printed" "$OUT" "$FIXTURE_BANK_PASSWORD"
+
+setup_good_env
+reset_log_fixtures
+write_env_fixture with-bank-key
+printf '%s\n' "$FIXTURE_KEY_BODY_LINE" > "${LOG_ROOT}/dump.log"
+OUT="$(run_selfcheck --pre-deploy)"
+assert_line "the bank key body in a log file fails" "$OUT" \
+  "FAIL - secret-shaped text (bank key) found in ${LOG_ROOT}/dump.log"
+assert_absent "the bank key body is never printed" "$OUT" "$FIXTURE_KEY_BODY_LINE"
+
+setup_good_env
+reset_log_fixtures
+write_env_fixture
+printf 'trace %s%s\n' "$PEM_OPEN" "$PEM_NAME" >> "$JOURNAL_FILE"
+OUT="$(run_selfcheck --pre-deploy)"
+assert_line "a private key header in the journal fails" "$OUT" \
+  "FAIL - secret-shaped text (private key) found in the journal"
+
+setup_good_env
+reset_log_fixtures
+write_env_fixture
+printf 'AGE-SECRET-KEY-%s%s\n' "1" "$(random_chars 'A-Z0-9' 58)" > "${LOG_ROOT}/age.log"
+OUT="$(run_selfcheck --pre-deploy)"
+assert_line "an age identity in a log file fails" "$OUT" \
+  "FAIL - secret-shaped text (age identity) found in ${LOG_ROOT}/age.log"
+
+setup_good_env
+reset_log_fixtures
+printf 'DataProtection__CertificatePassword=short\n' > "$ENV_FIXTURE"
+printf 'the word short appears here\n' >> "$JOURNAL_FILE"
+OUT="$(run_selfcheck --pre-deploy)"
+assert_line "a password under 16 characters is not used as a needle" "$OUT" "$CLEAN_LOG_LINE"
+
+# =====================================================================
+# Bank key file and time zone (check_files)
+# =====================================================================
+setup_good_env
+reset_log_fixtures
+write_env_fixture
+OUT="$(run_selfcheck --pre-deploy)"
+assert_line "an unconfigured bank key is skipped" "$OUT" \
+  "SKIP - bank key not configured yet"
+
+setup_good_env
+reset_log_fixtures
+write_env_fixture with-bank-key
+OUT="$(run_selfcheck --pre-deploy)"
+FOUND=0
+grep -qE "^(PASS|FAIL) - ${FIXTURE_KEY_FILE}: " <<< "$OUT" && FOUND=1
+check "a configured bank key has its mode and owner checked" "1" "$FOUND"
+
+setup_good_env
+reset_log_fixtures
+OUT="$(run_selfcheck --pre-deploy)"
+assert_line "the Amsterdam zone file present passes" "$OUT" \
+  "PASS - the Europe/Amsterdam time zone file exists"
+
+setup_good_env
+reset_log_fixtures
+export LEDGER_SELFCHECK_ZONEINFO="${ZONE_ROOT}/Europe/Missing"
+OUT="$(run_selfcheck --pre-deploy)"
+assert_line "a missing Amsterdam zone file fails" "$OUT" \
+  "FAIL - the Europe/Amsterdam time zone file is missing"
+export LEDGER_SELFCHECK_ZONEINFO="${ZONE_ROOT}/Europe/Amsterdam"
 
 echo ""
 if [ "$FAILURES" -eq 0 ]; then
