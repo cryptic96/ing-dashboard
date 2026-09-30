@@ -38,6 +38,9 @@ public class LedgerDbContext(DbContextOptions<LedgerDbContext> options)
     /// <summary>One row per sync attempt, with its counts and outcome.</summary>
     public DbSet<SyncRunEntity> SyncRuns { get; set; } = null!;
 
+    /// <summary>Pending bank authorisations, each identified only by the SHA-256 of its one-time state.</summary>
+    public DbSet<BankAuthorizationEntity> BankAuthorizations { get; set; } = null!;
+
     /// <inheritdoc />
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -70,6 +73,7 @@ public class LedgerDbContext(DbContextOptions<LedgerDbContext> options)
         ConfigureTransactionRefs(modelBuilder);
         ConfigureTransactionPayloads(modelBuilder);
         ConfigureSyncRuns(modelBuilder);
+        ConfigureBankAuthorizations(modelBuilder);
 
         SnakeCaseNaming.Apply(modelBuilder);
     }
@@ -219,6 +223,25 @@ public class LedgerDbContext(DbContextOptions<LedgerDbContext> options)
                     "ck_sync_runs_outcome",
                     $"outcome IS NULL OR outcome IN ({EnumText.CheckList<SyncOutcome>()})");
             });
+        });
+    }
+
+    private static void ConfigureBankAuthorizations(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<BankAuthorizationEntity>(entity =>
+        {
+            entity.HasKey(authorization => authorization.Id);
+            entity.Property(authorization => authorization.StateSha256).IsRequired();
+            entity.Property(authorization => authorization.Purpose).HasMaxLength(16).IsRequired();
+            entity.Property(authorization => authorization.ProviderAuthorizationId).HasMaxLength(256).IsRequired();
+            entity.HasIndex(authorization => authorization.StateSha256).IsUnique();
+            entity.HasOne<BankConnectionEntity>()
+                .WithMany()
+                .HasForeignKey(authorization => authorization.ConnectionId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.ToTable(table => table.HasCheckConstraint(
+                "ck_bank_authorizations_purpose",
+                "purpose IN ('link', 'renew')"));
         });
     }
 }

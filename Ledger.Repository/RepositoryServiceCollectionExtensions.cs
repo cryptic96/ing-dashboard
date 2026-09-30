@@ -23,6 +23,7 @@ public static class RepositoryServiceCollectionExtensions
         services.AddScoped<IDataProtectionCanaryStore, DataProtectionCanaryStore>();
         services.AddScoped<IApiKeyStore, ApiKeyStore>();
         services.AddScoped<IBankConnectionStore, BankConnectionStore>();
+        services.AddScoped<IBankAuthorizationStore, BankAuthorizationStore>();
         services.AddScoped<ILedgerStore, LedgerStore>();
         services.AddScoped<ISyncRunStore, SyncRunStore>();
 

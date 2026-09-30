@@ -117,6 +117,7 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapStatusEndpoints();
+app.MapBankEndpoints();
 
 await app.RunAsync();
 

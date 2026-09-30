@@ -13,10 +13,16 @@ public static class IngestionServiceCollectionExtensions
     public static IServiceCollection AddLedgerIngestion(this IServiceCollection services, IConfiguration configuration)
     {
         services.Configure<IngestionOptions>(configuration.GetSection(IngestionOptions.SectionName));
+        services.Configure<BankLinkOptions>(configuration.GetSection(BankLinkOptions.SectionName));
 
         services.TryAddSingleton(TimeProvider.System);
         services.TryAddSingleton<IBankDataProvider, DisabledBankDataProvider>();
         services.AddScoped<SyncOrchestrator>();
+
+        services.AddSingleton<ChannelSyncDispatcher>();
+        services.AddSingleton<ISyncDispatcher>(provider => provider.GetRequiredService<ChannelSyncDispatcher>());
+        services.AddHostedService<SyncWorker>();
+        services.AddScoped<BankLinkService>();
 
         return services;
     }

@@ -1,5 +1,6 @@
 using Ledger.Domain.Banking;
 using Ledger.Domain.Ingestion;
+using Ledger.Repository.Conventions;
 using Ledger.Repository.Entities;
 using Microsoft.EntityFrameworkCore;
 
@@ -131,6 +132,68 @@ public class BankConnectionStore(LedgerDbContext dbContext) : IBankConnectionSto
             connection.Provider,
             connection.SessionIdProtected,
             accounts);
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<ConnectionSummary>> ListConnectionsAsync(CancellationToken cancellationToken)
+    {
+        var connections = await dbContext.BankConnections
+            .AsNoTracking()
+            .OrderByDescending(connection => connection.CreatedAt)
+            .ThenByDescending(connection => connection.Id)
+            .ToListAsync(cancellationToken);
+
+        return connections.Select(ToSummary).ToList();
+    }
+
+    /// <inheritdoc />
+    public async Task<ConnectionSummary?> FindConnectionAsync(string connectionKey, CancellationToken cancellationToken)
+    {
+        var connection = await dbContext.BankConnections
+            .AsNoTracking()
+            .SingleOrDefaultAsync(candidate => candidate.ConnectionKey == connectionKey, cancellationToken);
+
+        return connection is null ? null : ToSummary(connection);
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<LinkedAccount>> ListAccountsAsync(Guid connectionId, CancellationToken cancellationToken)
+    {
+        var accounts = await dbContext.Accounts
+            .AsNoTracking()
+            .Where(account => account.BankConnectionId == connectionId)
+            .OrderBy(account => account.CreatedAt)
+            .ThenBy(account => account.Id)
+            .ToListAsync(cancellationToken);
+
+        return accounts.Select(ToLinkedAccount).ToList();
+    }
+
+    /// <inheritdoc />
+    public Task<bool> HasAnySyncRunAsync(Guid connectionId, CancellationToken cancellationToken)
+    {
+        return dbContext.SyncRuns.AnyAsync(run => run.BankConnectionId == connectionId, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task<string?> GetProtectedSessionIdAsync(Guid connectionId, CancellationToken cancellationToken)
+    {
+        return dbContext.BankConnections
+            .AsNoTracking()
+            .Where(connection => connection.Id == connectionId)
+            .Select(connection => (string?)connection.SessionIdProtected)
+            .SingleOrDefaultAsync(cancellationToken);
+    }
+
+    private static ConnectionSummary ToSummary(BankConnectionEntity connection)
+    {
+        return new ConnectionSummary(
+            connection.Id,
+            connection.ConnectionKey,
+            connection.Provider,
+            EnumText.Parse<ConnectionStatus>(connection.Status),
+            connection.AuthorizedAt,
+            connection.ValidUntil);
     }
 
     private static LinkedAccount ToLinkedAccount(LedgerAccountEntity account)
