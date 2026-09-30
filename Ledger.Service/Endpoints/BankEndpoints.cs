@@ -12,6 +12,7 @@ namespace Ledger.Service.Endpoints;
 public static class BankEndpoints
 {
     private const string CallbackFailureText = "This bank link could not be completed. Start again with a new link request.";
+    private const string SyncNowRefusedText = "Sync now would use the last remaining bank call of the day for an account; try again later.";
     private const string NoAccountsText = "The bank approved the link but exposes no accounts. Link the accounts in the aggregator's control panel first, then start again with a new link request.";
 
     /// <summary>Maps the bank endpoints under /api/v1/bank.</summary>
@@ -26,8 +27,39 @@ public static class BankEndpoints
         bank.MapGet("/connections/{connectionKey}/accounts", ListAccountsAsync);
         bank.MapPut("/connections/{connectionKey}/accounts", SelectAccountsAsync);
         bank.MapDelete("/connections/{connectionKey}", RevokeAsync);
+        bank.MapPost("/sync", SyncNowAsync);
 
         return endpoints;
+    }
+
+    /// <summary>
+    /// POST /api/v1/bank/sync: queues a sync of the active connection, or of the one named by connectionKey. It answers 202 when
+    /// queued, 409 when there is nothing to sync or a sync is already running, and 429 when an unattended sync would use an
+    /// account's last remaining background call of the day.
+    /// </summary>
+    private static Task<IResult> SyncNowAsync(
+        HttpContext context,
+        BankLinkService service,
+        IOptions<IngestionOptions> ingestionOptions,
+        string? connectionKey,
+        CancellationToken cancellationToken)
+    {
+        var psu = PsuContextFactory.FromRequest(context, ingestionOptions.Value);
+
+        return Translate(async () =>
+        {
+            var result = await service.SyncNowAsync(string.IsNullOrWhiteSpace(connectionKey) ? null : connectionKey, psu, cancellationToken);
+
+            return result switch
+            {
+                SyncNowResult.Queued => Results.Accepted(value: new SyncQueuedResponse("queued")),
+                SyncNowResult.NotConfigured => Results.Problem(title: "Bank linking is not configured.", statusCode: StatusCodes.Status503ServiceUnavailable),
+                SyncNowResult.NoConnection => Results.Problem(title: "There is no active bank connection to sync.", statusCode: StatusCodes.Status409Conflict),
+                SyncNowResult.NoAccountsSelected => Results.Problem(title: "No accounts are selected for this connection. Select the accounts to sync first.", statusCode: StatusCodes.Status409Conflict),
+                SyncNowResult.AlreadyRunning => Results.Problem(title: "A sync is running for this connection. Wait for it to finish.", statusCode: StatusCodes.Status409Conflict),
+                _ => Results.Problem(title: SyncNowRefusedText, statusCode: StatusCodes.Status429TooManyRequests)
+            };
+        });
     }
 
     private static Task<IResult> StartLinkAsync(BankLinkService service, CancellationToken cancellationToken)
@@ -212,6 +244,8 @@ public static class BankEndpoints
         int DaysUntilExpiry,
         DateTimeOffset ValidUntil,
         DateTimeOffset AuthorizedAt);
+
+    private sealed record SyncQueuedResponse(string Status);
 
     private sealed record AuthorizationResponse(string AuthorizationUrl, DateTimeOffset ExpiresAt);
 

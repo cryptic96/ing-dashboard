@@ -17,6 +17,7 @@ public class SyncScheduler(
     ILogger<SyncScheduler> logger) : BackgroundService
 {
     private static readonly TimeSpan TickInterval = TimeSpan.FromMinutes(1);
+    private static readonly TimeSpan UnselectedWarningAge = TimeSpan.FromMinutes(30);
 
     private readonly ConcurrentDictionary<string, bool> _warnedConnections = new(StringComparer.Ordinal);
     private ScheduleSettings? _settings;
@@ -124,6 +125,7 @@ public class SyncScheduler(
 
             if (!accounts.Any(account => account.SyncEnabled))
             {
+                await WarnOnceIfLongHistoryMayBeLostAsync(connection, now, services, cancellationToken);
                 return false;
             }
 
@@ -162,6 +164,29 @@ public class SyncScheduler(
                 connection.ConnectionKey,
                 exception.GetType().Name);
             return false;
+        }
+    }
+
+    private async Task WarnOnceIfLongHistoryMayBeLostAsync(
+        ConnectionSummary connection,
+        DateTimeOffset now,
+        IServiceProvider services,
+        CancellationToken cancellationToken)
+    {
+        if (now - connection.AuthorizedAt <= UnselectedWarningAge || _warnedConnections.ContainsKey(connection.ConnectionKey))
+        {
+            return;
+        }
+
+        var hasSynced = await services.GetRequiredService<IBankConnectionStore>()
+            .HasAnySyncRunAsync(connection.Id, cancellationToken);
+
+        if (!hasSynced && _warnedConnections.TryAdd(connection.ConnectionKey, true))
+        {
+            logger.LogWarning(
+                "Connection {ConnectionKey} was authorised more than {Minutes} minutes ago and still has no selected account or sync, so the bank may no longer return its full history. Select the accounts to sync.",
+                connection.ConnectionKey,
+                (int)UnselectedWarningAge.TotalMinutes);
         }
     }
 

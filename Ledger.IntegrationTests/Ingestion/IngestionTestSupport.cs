@@ -13,13 +13,17 @@ namespace Ledger.IntegrationTests.Ingestion;
 /// <summary>Helpers that link a synthetic consent, run syncs and read results back through real database roles.</summary>
 public static class IngestionTestSupport
 {
-    /// <summary>Boots the host against the shared database with the synthetic provider registered as the only provider.</summary>
+    /// <summary>
+    /// Boots the host against the shared database with the synthetic provider registered as the only provider and a call
+    /// budget large enough that reconciliation tests, which sync one account many times, are never limited by it.
+    /// </summary>
     public static LedgerWebApplicationFactory CreateFactory(DatabaseFixture fixture, SyntheticBankScenario scenario)
     {
         return new LedgerWebApplicationFactory(
             fixture.ConnectionStringFor("ledger_runtime"),
             configureTestServices: services =>
-                services.AddSingleton<IBankDataProvider>(new SyntheticBankDataProvider(scenario)));
+                services.AddSingleton<IBankDataProvider>(new SyntheticBankDataProvider(scenario)),
+            additionalConfiguration: new Dictionary<string, string?> { ["Ingestion:BackgroundCallsPerDay"] = "1000" });
     }
 
     /// <summary>

@@ -1,3 +1,6 @@
+using System.Net;
+using System.Net.Http.Json;
+using System.Text.Json;
 using FluentAssertions;
 using Ledger.Domain.Banking;
 using Ledger.Domain.Ingestion;
@@ -287,6 +290,200 @@ public class SchedulerAndQuotaTests(DatabaseFixture fixture)
             ("retry", "succeeded"));
     }
 
+    [Fact]
+    public async Task Sync_now_queues_an_attended_manual_run_whose_calls_are_not_background_calls()
+    {
+        var scenario = SyntheticScenario(pagesForFirstAccount: 2);
+        await using var host = await SchedulerTestHost.StartAsync(fixture, scenario, AmsterdamInstant(Monday, 14, 0));
+        var linked = await host.LinkAsync(selectFirstAccountOnly: true);
+
+        using var response = await host.SendAsync(HttpMethod.Post, "/api/v1/bank/sync");
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken);
+        body.GetProperty("status").GetString().Should().Be("queued");
+
+        var runs = await host.WaitForFinishedRunsAsync(1);
+        runs.Should().ContainSingle();
+        runs[0].Trigger.Should().Be("manual");
+        runs[0].Outcome.Should().Be("succeeded");
+
+        var ledger = await host.ReadCallLedgerAsync(linked.Accounts[0].AccountKey);
+        ledger.Count.Should().Be(2);
+        ledger.NoneBackground.Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData(3, HttpStatusCode.TooManyRequests)]
+    [InlineData(2, HttpStatusCode.Accepted)]
+    [InlineData(0, HttpStatusCode.Accepted)]
+    public async Task Without_the_operators_presence_sync_now_is_refused_when_one_or_fewer_background_calls_are_left(
+        int backgroundCallsAlreadyMade,
+        HttpStatusCode expected)
+    {
+        var scenario = SyntheticScenario(pagesForFirstAccount: 1);
+        await using var host = await SchedulerTestHost.StartAsync(
+            fixture,
+            scenario,
+            AmsterdamInstant(Monday, 14, 0),
+            new Dictionary<string, string?> { ["Ingestion:PsuHeadersOnOperatorSyncs"] = "false" });
+        var linked = await host.LinkAsync(selectFirstAccountOnly: true);
+        var now = host.Clock.GetUtcNow();
+
+        await host.RecordBackgroundCallsAsync(
+            linked.Accounts[0].Id,
+            Enumerable.Range(1, backgroundCallsAlreadyMade).Select(index => now.AddHours(-index)).ToArray());
+
+        using var response = await host.SendAsync(HttpMethod.Post, "/api/v1/bank/sync");
+
+        response.StatusCode.Should().Be(expected);
+
+        if (expected == HttpStatusCode.TooManyRequests)
+        {
+            var problem = await response.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken);
+            problem.GetProperty("title").GetString().Should().Contain("last remaining bank call");
+            (await host.ReadRunsAsync()).Should().BeEmpty();
+        }
+        else
+        {
+            var runs = await host.WaitForFinishedRunsAsync(1);
+            runs.Single().Outcome.Should().Be("succeeded");
+        }
+    }
+
+    [Fact]
+    public async Task Sync_now_hands_the_operators_presence_to_the_queued_request_only_when_the_option_allows_it()
+    {
+        var withPresence = new RecordingSyncDispatcher();
+        await using var attended = await SchedulerTestHost.StartAsync(
+            fixture,
+            SyntheticScenario(pagesForFirstAccount: 1),
+            AmsterdamInstant(Monday, 14, 0),
+            configureServices: services => services.AddSingleton<ISyncDispatcher>(withPresence));
+        await attended.LinkAsync(selectFirstAccountOnly: true);
+
+        using var attendedResponse = await attended.SendAsync(HttpMethod.Post, "/api/v1/bank/sync");
+
+        attendedResponse.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        var request = withPresence.Requests.Should().ContainSingle().Which;
+        request.Trigger.Should().Be(SyncTrigger.Manual);
+        request.Context.Psu.Should().NotBeNull();
+        request.Context.Psu!.UserAgent.Should().Be("ledger-scheduler-tests/1.0");
+
+        var withoutPresence = new RecordingSyncDispatcher();
+        await using var unattended = await SchedulerTestHost.StartAsync(
+            fixture,
+            SyntheticScenario(pagesForFirstAccount: 1),
+            AmsterdamInstant(Monday, 14, 0),
+            new Dictionary<string, string?> { ["Ingestion:PsuHeadersOnOperatorSyncs"] = "false" },
+            configureServices: services => services.AddSingleton<ISyncDispatcher>(withoutPresence));
+        await unattended.LinkAsync(selectFirstAccountOnly: true);
+
+        using var unattendedResponse = await unattended.SendAsync(HttpMethod.Post, "/api/v1/bank/sync");
+
+        unattendedResponse.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        withoutPresence.Requests.Should().ContainSingle().Which.Context.Psu.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Sync_now_answers_409_when_no_account_is_selected()
+    {
+        await using var host = await SchedulerTestHost.StartAsync(
+            fixture,
+            SyntheticScenario(pagesForFirstAccount: 1),
+            AmsterdamInstant(Monday, 14, 0));
+        await host.LinkAsync(selectFirstAccountOnly: false, selectAnyAccount: false);
+
+        using var response = await host.SendAsync(HttpMethod.Post, "/api/v1/bank/sync");
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var problem = await response.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken);
+        problem.GetProperty("title").GetString().Should().Contain("No accounts are selected");
+    }
+
+    [Fact]
+    public async Task Sync_now_answers_409_when_a_sync_is_already_running()
+    {
+        await using var host = await SchedulerTestHost.StartAsync(
+            fixture,
+            SyntheticScenario(pagesForFirstAccount: 1),
+            AmsterdamInstant(Monday, 14, 0));
+        var linked = await host.LinkAsync(selectFirstAccountOnly: true);
+        await host.StartUnfinishedRunAsync(linked.Id, SyncTrigger.Scheduled);
+
+        using var response = await host.SendAsync(HttpMethod.Post, "/api/v1/bank/sync");
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var problem = await response.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken);
+        problem.GetProperty("title").GetString().Should().Contain("sync is running");
+    }
+
+    [Fact]
+    public async Task Sync_now_answers_409_when_there_is_no_connection_and_401_without_a_key()
+    {
+        await using var host = await SchedulerTestHost.StartAsync(
+            fixture,
+            SyntheticScenario(pagesForFirstAccount: 1),
+            AmsterdamInstant(Monday, 14, 0));
+
+        using var withKey = await host.SendAsync(HttpMethod.Post, "/api/v1/bank/sync");
+        using var withoutKey = await host.SendAsync(HttpMethod.Post, "/api/v1/bank/sync", withKey: false);
+
+        withKey.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        withoutKey.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
+    public async Task Nothing_interactive_queues_or_runs_a_sync()
+    {
+        var scenario = SyntheticScenario(pagesForFirstAccount: 2);
+        var recorder = new RecordingSyncDispatcher();
+        await using var host = await SchedulerTestHost.StartAsync(
+            fixture,
+            scenario,
+            AmsterdamInstant(Monday, 14, 0),
+            configureServices: services => services.AddSingleton<ISyncDispatcher>(recorder));
+        var linked = await host.LinkAsync(selectFirstAccountOnly: true);
+
+        using var connections = await host.SendAsync(HttpMethod.Get, "/api/v1/bank/connections");
+        using var accounts = await host.SendAsync(HttpMethod.Get, $"/api/v1/bank/connections/{linked.ConnectionKey}/accounts");
+        using var ops = host.Factory.CreateOpsClient();
+        using var health = await ops.GetAsync("/health", TestContext.Current.CancellationToken);
+        using var metrics = await ops.GetAsync("/metrics", TestContext.Current.CancellationToken);
+
+        connections.StatusCode.Should().Be(HttpStatusCode.OK);
+        accounts.StatusCode.Should().Be(HttpStatusCode.OK);
+        health.StatusCode.Should().Be(HttpStatusCode.OK);
+        metrics.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        recorder.Requests.Should().BeEmpty();
+        (await host.ReadRunsAsync()).Should().BeEmpty();
+        scenario.Calls
+            .Where(call => call.Method is nameof(IBankDataProvider.GetTransactionsAsync) or nameof(IBankDataProvider.GetBalancesAsync))
+            .Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_connection_without_a_selected_account_warns_exactly_once_after_thirty_minutes()
+    {
+        var scenario = SyntheticScenario(pagesForFirstAccount: 1);
+        await using var host = await SchedulerTestHost.StartAsync(fixture, scenario, AmsterdamInstant(Monday, 5, 0));
+        var linked = await host.LinkAsync(selectFirstAccountOnly: false, selectAnyAccount: false);
+
+        host.Clock.Advance(TimeSpan.FromMinutes(10));
+        await host.RunDueAsync();
+        host.WarningsNaming(linked.ConnectionKey).Should().BeEmpty();
+
+        for (var tick = 0; tick < 4; tick++)
+        {
+            host.Clock.Advance(TimeSpan.FromMinutes(11));
+            await host.RunDueAsync();
+        }
+
+        host.WarningsNaming(linked.ConnectionKey).Should().ContainSingle();
+        (await host.ReadRunsAsync()).Should().BeEmpty();
+    }
+
     private static DateTimeOffset AmsterdamInstant(DateOnly date, int hour, int minute)
     {
         return Ledger.Domain.Ingestion.SyncSchedule.InstantFor(date, new TimeOnly(hour, minute), Amsterdam);
@@ -315,6 +512,7 @@ public class SchedulerAndQuotaTests(DatabaseFixture fixture)
 public sealed class SchedulerTestHost : IAsyncDisposable
 {
     private readonly DatabaseFixture _fixture;
+    private string? _token;
 
     private SchedulerTestHost(
         DatabaseFixture fixture,
@@ -388,7 +586,7 @@ public sealed class SchedulerTestHost : IAsyncDisposable
     /// Stores the scenario's consent as a connection authorised at the clock's current instant and saves the account selection:
     /// every account, or only the first one when requested.
     /// </summary>
-    public async Task<LinkedConnection> LinkAsync(bool selectFirstAccountOnly)
+    public async Task<LinkedConnection> LinkAsync(bool selectFirstAccountOnly, bool selectAnyAccount = true)
     {
         using var scope = Factory.Services.CreateScope();
         var provider = scope.ServiceProvider.GetRequiredService<IBankDataProvider>();
@@ -404,6 +602,11 @@ public sealed class SchedulerTestHost : IAsyncDisposable
             protector.Protect(session.SessionId),
             Clock.GetUtcNow(),
             TestContext.Current.CancellationToken);
+
+        if (!selectAnyAccount)
+        {
+            return connection;
+        }
 
         var selections = connection.Accounts
             .Select((account, index) => new AccountSelection(
@@ -453,7 +656,9 @@ public sealed class SchedulerTestHost : IAsyncDisposable
         await using var connection = await OpenAsync();
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT count(*), COALESCE(bool_and(c.background), true), COALESCE(bool_and(c.sync_run_id IS NOT NULL), true)
+            SELECT count(*),
+                   count(*) FILTER (WHERE c.background),
+                   count(*) FILTER (WHERE c.sync_run_id IS NOT NULL)
             FROM public.provider_calls c
             JOIN public.accounts a ON a.id = c.account_id
             WHERE a.account_key = @accountKey
@@ -463,7 +668,62 @@ public sealed class SchedulerTestHost : IAsyncDisposable
         await using var reader = await command.ExecuteReaderAsync(TestContext.Current.CancellationToken);
         await reader.ReadAsync(TestContext.Current.CancellationToken);
 
-        return new CallLedgerSummary(reader.GetInt64(0), reader.GetBoolean(1), reader.GetBoolean(2));
+        return new CallLedgerSummary(reader.GetInt64(0), reader.GetInt64(1), reader.GetInt64(2));
+    }
+
+    /// <summary>Returns the logged messages that name the connection key and complain about a missing account selection.</summary>
+    public IReadOnlyList<string> WarningsNaming(string connectionKey)
+    {
+        return Factory.CapturedLogMessages
+            .Where(message => message.Contains(connectionKey, StringComparison.Ordinal)
+                && message.Contains("no selected account", StringComparison.Ordinal))
+            .ToList();
+    }
+
+    /// <summary>Sends a request to the API port with a fresh key of the database unless told otherwise, and a User-Agent.</summary>
+    public async Task<HttpResponseMessage> SendAsync(
+        HttpMethod method,
+        string path,
+        bool withKey = true,
+        string? userAgent = "ledger-scheduler-tests/1.0")
+    {
+        _token ??= await CreateApiKeyAsync();
+
+        using var client = Factory.CreateApiClient();
+        using var request = new HttpRequestMessage(method, path);
+
+        if (withKey)
+        {
+            request.Headers.Add("X-Api-Key", _token);
+        }
+
+        if (userAgent is not null)
+        {
+            request.Headers.UserAgent.ParseAdd(userAgent);
+        }
+
+        return await client.SendAsync(request, TestContext.Current.CancellationToken);
+    }
+
+    /// <summary>Waits up to ten seconds until the expected number of runs have finished and returns every run.</summary>
+    public async Task<IReadOnlyList<RunRow>> WaitForFinishedRunsAsync(int expected)
+    {
+        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(10);
+        IReadOnlyList<RunRow> runs = [];
+
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            runs = await ReadRunsAsync();
+
+            if (runs.Count(run => run.Outcome is not null) >= expected)
+            {
+                return runs;
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(100), TestContext.Current.CancellationToken);
+        }
+
+        return runs;
     }
 
     /// <summary>Reads the stored status of every connection, oldest first.</summary>
@@ -562,6 +822,25 @@ public sealed class SchedulerTestHost : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         await Factory.DisposeAsync();
+
+        foreach (var role in new[] { "ledger_runtime", "ledger_backup" })
+        {
+            await using var connection = new NpgsqlConnection(_fixture.ConnectionStringForDatabase(DatabaseName, role));
+            NpgsqlConnection.ClearPool(connection);
+        }
+    }
+
+    private async Task<string> CreateApiKeyAsync()
+    {
+        var optionsBuilder = new DbContextOptionsBuilder<LedgerDbContext>();
+        optionsBuilder.UseNpgsql(_fixture.ConnectionStringForDatabase(DatabaseName, "ledger_runtime"));
+
+        await using var context = new LedgerDbContext(optionsBuilder.Options);
+        var created = await new ApiKeyStore(context).CreateAsync(
+            "sched-" + Guid.NewGuid().ToString("N")[..12],
+            TestContext.Current.CancellationToken);
+
+        return created.Token;
     }
 
     private static async Task<string> CreateMigratedDatabaseAsync(DatabaseFixture fixture)
@@ -579,8 +858,34 @@ public sealed class SchedulerTestHost : IAsyncDisposable
     }
 }
 
+/// <summary>A dispatcher that remembers what was asked of it and runs nothing.</summary>
+public sealed class RecordingSyncDispatcher : ISyncDispatcher
+{
+    private readonly System.Collections.Concurrent.ConcurrentQueue<SyncRequest> _requests = new();
+
+    /// <summary>Every request queued so far.</summary>
+    public IReadOnlyList<SyncRequest> Requests => _requests.ToArray();
+
+    /// <inheritdoc />
+    public bool TryEnqueue(SyncRequest request)
+    {
+        _requests.Enqueue(request);
+        return true;
+    }
+}
+
 /// <summary>A stored sync run as the scheduler tests need it.</summary>
 public record RunRow(Guid Id, string Trigger, string? Outcome, string? ProviderError);
 
 /// <summary>How many calls the ledger holds for an account and whether they were all background calls tied to a run.</summary>
-public record CallLedgerSummary(long Count, bool AllBackground, bool AllLinkedToARun);
+public record CallLedgerSummary(long Count, long BackgroundCount, long LinkedToRunCount)
+{
+    /// <summary>Whether every call was a background call.</summary>
+    public bool AllBackground => BackgroundCount == Count;
+
+    /// <summary>Whether no call was a background call.</summary>
+    public bool NoneBackground => BackgroundCount == 0;
+
+    /// <summary>Whether every call belongs to a sync run.</summary>
+    public bool AllLinkedToARun => LinkedToRunCount == Count;
+}
