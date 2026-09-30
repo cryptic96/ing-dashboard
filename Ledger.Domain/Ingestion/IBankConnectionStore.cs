@@ -59,7 +59,10 @@ public interface IBankConnectionStore
         DateTimeOffset authorizedAt,
         CancellationToken cancellationToken);
 
-    /// <summary>Sets the stored status of a connection, recording the closing time for a revoked one.</summary>
+    /// <summary>
+    /// Sets the stored status of a connection, recording the closing time for a revoked one. Marking a connection provider-expired
+    /// only applies to an active connection, so a revoked or superseded one is never changed back to expired.
+    /// </summary>
     Task MarkStatusAsync(Guid connectionId, ConnectionStatus status, DateTimeOffset at, CancellationToken cancellationToken);
 }
 

@@ -103,6 +103,79 @@ public class SyncScheduleTests
         SyncSchedule.Decide(LocalInstant(date, 9, 0), Settings(), []).Should().Be(SyncDecisionKind.Scheduled);
     }
 
+    [Theory]
+    [InlineData(SyncOutcome.FailedTransient)]
+    [InlineData(SyncOutcome.FailedMalformed)]
+    [InlineData(SyncOutcome.Abandoned)]
+    public void Decide_retries_once_four_hours_after_a_temporarily_failed_scheduled_run_and_not_a_minute_earlier(SyncOutcome outcome)
+    {
+        var date = new DateOnly(2026, 10, 26);
+        var runs = new[] { Run(SyncTrigger.Scheduled, date, 6, 30, 6, 35, outcome) };
+
+        SyncSchedule.Decide(LocalInstant(date, 10, 34), Settings(), runs).Should().Be(SyncDecisionKind.None);
+        SyncSchedule.Decide(LocalInstant(date, 10, 35), Settings(), runs).Should().Be(SyncDecisionKind.Retry);
+    }
+
+    [Fact]
+    public void Decide_is_none_three_hours_fifty_nine_minutes_after_the_failure_and_retry_at_four_hours()
+    {
+        var date = new DateOnly(2026, 10, 26);
+        var runs = new[] { Run(SyncTrigger.Scheduled, date, 6, 30, 7, 0, SyncOutcome.FailedTransient) };
+        var finished = LocalInstant(date, 7, 0);
+
+        SyncSchedule.Decide(finished + TimeSpan.FromMinutes(239), Settings(), runs).Should().Be(SyncDecisionKind.None);
+        SyncSchedule.Decide(finished + TimeSpan.FromHours(4), Settings(), runs).Should().Be(SyncDecisionKind.Retry);
+    }
+
+    [Fact]
+    public void Decide_never_retries_again_once_a_retry_run_exists_today()
+    {
+        var date = new DateOnly(2026, 10, 26);
+        var runs = new[]
+        {
+            Run(SyncTrigger.Scheduled, date, 6, 30, 6, 35, SyncOutcome.FailedTransient),
+            Run(SyncTrigger.Retry, date, 10, 35, 10, 40, SyncOutcome.FailedTransient)
+        };
+
+        SyncSchedule.Decide(LocalInstant(date, 20, 0), Settings(), runs).Should().Be(SyncDecisionKind.None);
+    }
+
+    [Fact]
+    public void Decide_gives_no_retry_when_the_retry_moment_falls_on_the_next_local_day()
+    {
+        var date = new DateOnly(2026, 10, 26);
+        var runs = new[] { Run(SyncTrigger.Scheduled, date, 20, 55, 21, 0, SyncOutcome.FailedTransient) };
+
+        SyncSchedule.Decide(LocalInstant(date, 23, 59), Settings(), runs).Should().Be(SyncDecisionKind.None);
+        SyncSchedule.Decide(LocalInstant(date.AddDays(1), 1, 0), Settings(), []).Should().Be(SyncDecisionKind.None);
+    }
+
+    [Theory]
+    [InlineData(SyncOutcome.FailedRateLimited)]
+    [InlineData(SyncOutcome.QuotaExhausted)]
+    [InlineData(SyncOutcome.FailedConsent)]
+    [InlineData(SyncOutcome.FailedProviderAuth)]
+    public void Decide_is_none_for_the_rest_of_the_day_after_a_refusal_even_for_a_scheduled_run_that_has_not_happened_yet(SyncOutcome outcome)
+    {
+        var date = new DateOnly(2026, 10, 26);
+        var manualRefusal = new[] { Run(SyncTrigger.Manual, date, 5, 0, 5, 1, outcome) };
+        var scheduledRefusal = new[] { Run(SyncTrigger.Scheduled, date, 6, 30, 6, 31, outcome) };
+
+        SyncSchedule.Decide(LocalInstant(date, 7, 0), Settings(), manualRefusal).Should().Be(SyncDecisionKind.None);
+        SyncSchedule.Decide(LocalInstant(date, 23, 0), Settings(), scheduledRefusal).Should().Be(SyncDecisionKind.None);
+    }
+
+    [Fact]
+    public void Decide_starts_the_next_day_afresh_after_a_refusal_yesterday()
+    {
+        var yesterday = new DateOnly(2026, 10, 26);
+        var today = yesterday.AddDays(1);
+
+        SyncSchedule.Decide(LocalInstant(today, 6, 30), Settings(), []).Should().Be(SyncDecisionKind.Scheduled);
+        SyncSchedule.Decide(LocalInstant(yesterday, 23, 0), Settings(), [Run(SyncTrigger.Scheduled, yesterday, 6, 30, 6, 31, SyncOutcome.FailedRateLimited)])
+            .Should().Be(SyncDecisionKind.None);
+    }
+
     [Fact]
     public void Start_of_local_day_is_local_midnight_even_when_the_day_has_an_extra_hour()
     {

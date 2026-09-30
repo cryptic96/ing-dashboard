@@ -69,8 +69,10 @@ public static class SyncSchedule
 
     /// <summary>
     /// Decides whether an automatic sync is due for one connection right now, given the runs that started on the current local day.
-    /// A sync is due once the local scheduled time has passed and nothing has succeeded and nothing is running today, so a process
-    /// that starts late catches up at once.
+    /// A sync is due once the local scheduled time has passed and nothing has succeeded, nothing is running and nothing was refused
+    /// today, so a process that starts late catches up at once. After a temporary failure of the scheduled run exactly one retry is
+    /// due once the retry delay has passed, and only when that moment still falls on the same local day. A rate limit, an
+    /// exhausted call budget, a consent rejection or a credential rejection suppresses every further automatic run that day.
     /// </summary>
     /// <param name="now">The current instant.</param>
     /// <param name="settings">When the daily sync runs and how long to wait before the retry.</param>
@@ -82,7 +84,7 @@ public static class SyncSchedule
     {
         var today = LocalDate(now, settings.Zone);
 
-        if (runsToday.Any(run => run.FinishedAt is null || run.Outcome == SyncOutcome.Succeeded))
+        if (runsToday.Any(run => run.FinishedAt is null || EndsTheDay(run.Outcome)))
         {
             return SyncDecisionKind.None;
         }
@@ -92,9 +94,32 @@ public static class SyncSchedule
             return SyncDecisionKind.None;
         }
 
-        return runsToday.Any(run => run.Trigger == SyncTrigger.Scheduled)
-            ? SyncDecisionKind.None
-            : SyncDecisionKind.Scheduled;
+        var scheduledRuns = runsToday.Where(run => run.Trigger == SyncTrigger.Scheduled).ToList();
+
+        if (scheduledRuns.Count == 0)
+        {
+            return SyncDecisionKind.Scheduled;
+        }
+
+        if (runsToday.Any(run => run.Trigger == SyncTrigger.Retry))
+        {
+            return SyncDecisionKind.None;
+        }
+
+        var retryAt = scheduledRuns.Max(run => run.FinishedAt!.Value) + settings.RetryDelay;
+
+        return now >= retryAt && LocalDate(retryAt, settings.Zone) == today
+            ? SyncDecisionKind.Retry
+            : SyncDecisionKind.None;
+    }
+
+    private static bool EndsTheDay(SyncOutcome? outcome)
+    {
+        return outcome is SyncOutcome.Succeeded
+            or SyncOutcome.FailedRateLimited
+            or SyncOutcome.QuotaExhausted
+            or SyncOutcome.FailedConsent
+            or SyncOutcome.FailedProviderAuth;
     }
 
     private static DateTimeOffset ScheduledInstant(DateOnly localDate, ScheduleSettings settings)

@@ -1,3 +1,5 @@
+using System.Globalization;
+using Ledger.Domain.Ingestion;
 using Ledger.Repository;
 using Ledger.Service.Ingestion;
 using Microsoft.Extensions.Configuration;
@@ -12,6 +14,8 @@ public static class ProductionConfigurationValidator
     private const string ConnectionStringKey = "ConnectionStrings:Ledger";
     private const string ProviderKey = "Ingestion:Provider";
     private const string RedirectUrlKey = "BankLink:RedirectUrl";
+    private const string TimeZoneKey = "Ingestion:TimeZone";
+    private const string ScheduleLocalTimeKey = "Ingestion:ScheduleLocalTime";
 
     /// <summary>Throws one InvalidOperationException listing every offending configuration key when the Production configuration is unsafe.</summary>
     public static void ThrowIfInvalid(IConfiguration configuration)
@@ -37,12 +41,57 @@ public static class ProductionConfigurationValidator
         }
 
         AddBankLinkProblems(configuration, offendingKeys);
+        AddScheduleProblems(configuration, offendingKeys);
 
         if (offendingKeys.Count > 0)
         {
             throw new InvalidOperationException(
                 $"Unsafe or missing required configuration key(s): {string.Join(", ", offendingKeys)}.");
         }
+    }
+
+    private static void AddScheduleProblems(IConfiguration configuration, List<string> offendingKeys)
+    {
+        var defaults = new IngestionOptions();
+        var zoneId = configuration[TimeZoneKey] ?? defaults.TimeZone;
+        var timeText = configuration[ScheduleLocalTimeKey] ?? defaults.ScheduleLocalTime;
+
+        TimeZoneInfo? zone = null;
+
+        try
+        {
+            zone = TimeZoneInfo.FindSystemTimeZoneById(zoneId);
+        }
+        catch (Exception exception) when (exception is TimeZoneNotFoundException or InvalidTimeZoneException or ArgumentException)
+        {
+            offendingKeys.Add(TimeZoneKey);
+        }
+
+        if (!TimeOnly.TryParseExact(timeText, "HH:mm", CultureInfo.InvariantCulture, DateTimeStyles.None, out var time))
+        {
+            offendingKeys.Add(ScheduleLocalTimeKey);
+            return;
+        }
+
+        if (zone is not null && SkippedOnAnyDayOfTheNextYear(time, zone))
+        {
+            offendingKeys.Add(ScheduleLocalTimeKey);
+        }
+    }
+
+    private static bool SkippedOnAnyDayOfTheNextYear(TimeOnly time, TimeZoneInfo zone)
+    {
+        var first = DateOnly.FromDateTime(DateTime.UtcNow);
+
+        for (var offset = 0; offset <= 400; offset++)
+        {
+            if (SyncSchedule.IsNonexistentLocalTime(first.AddDays(offset), time, zone))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static void AddBankLinkProblems(IConfiguration configuration, List<string> offendingKeys)

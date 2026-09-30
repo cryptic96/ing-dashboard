@@ -1,3 +1,6 @@
+using System.Globalization;
+using Ledger.Domain.Ingestion;
+
 namespace Ledger.Service.Ingestion;
 
 /// <summary>Tunable ingestion behaviour, bound from the "Ingestion" configuration section.</summary>
@@ -43,6 +46,12 @@ public class IngestionOptions
     /// <summary>How many hours after a failed scheduled run the single same-day retry may happen.</summary>
     public int RetryDelayHours { get; set; } = 4;
 
+    /// <summary>How many background calls the bank allows per account in the quota window. Every page and balances read counts.</summary>
+    public int BackgroundCallsPerDay { get; set; } = 4;
+
+    /// <summary>How the quota window is measured: Rolling24Hours (the default, the conservative reading) or LocalCalendarDay.</summary>
+    public QuotaWindow QuotaWindow { get; set; } = QuotaWindow.Rolling24Hours;
+
     /// <summary>Whether the background scheduler runs. Turning it off leaves operator-triggered syncs working.</summary>
     public bool SchedulerEnabled { get; set; } = true;
 
@@ -57,6 +66,6 @@ public class IngestionOptions
     /// <exception cref="FormatException">The configured time is not in the HH:mm form.</exception>
     public TimeOnly ParseScheduleLocalTime()
     {
-        return TimeOnly.ParseExact(ScheduleLocalTime, "HH:mm", System.Globalization.CultureInfo.InvariantCulture);
+        return TimeOnly.ParseExact(ScheduleLocalTime, "HH:mm", CultureInfo.InvariantCulture);
     }
 }
