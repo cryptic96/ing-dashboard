@@ -404,6 +404,9 @@
           "xunit.v3.runner.common": "[4.0.1]"
         }
       },
+      "ledger.dashboards": {
+        "type": "Project"
+      },
       "ledger.domain": {
         "type": "Project"
       },

@@ -180,8 +180,10 @@ if [ ! -f "$PROMETHEUS_YML" ]; then
 fi
 
 # Boot the real, digest-pinned Grafana image with the repository's own
-# grafana.ini and provisioning directory, mounted read-only exactly as
-# compose.yaml already does for the whole repo. GF_SERVER_ENFORCE_DOMAIN is
+# grafana.ini, with the repository provisioning tree mounted read-only at
+# /etc/grafana/provisioning exactly where the installer puts it, so the
+# dashboard provider path resolves as it does on the host. The repository is
+# mounted as compose.yaml already does. GF_SERVER_ENFORCE_DOMAIN is
 # relaxed only for this ephemeral, loopback-published container so curl can
 # reach it by IP; the shipped grafana.ini itself still has enforce_domain
 # true, which is what the assertions above already checked.
@@ -209,7 +211,8 @@ GRAFANA_CID="$($LINT_COMPOSE -d \
   -e GF_SERVER_ENFORCE_DOMAIN=false \
   -e LEDGER_ALERT_EMAIL=alerts@example.com \
   -e GF_PATHS_CONFIG=/repo/deploy/provisioning/grafana/grafana.ini \
-  -e GF_PATHS_PROVISIONING=/repo/deploy/provisioning/grafana/provisioning \
+  -v "$PROVISIONING_DIR:/etc/grafana/provisioning:ro" \
+  -e GF_PATHS_PROVISIONING=/etc/grafana/provisioning \
   --entrypoint /run.sh \
   grafana)"
 
@@ -273,5 +276,20 @@ if ! grep -q "operator-email" <<<"$contact_points_json"; then
   echo "contact point operator-email not found in /api/v1/provisioning/contact-points" >&2
   status=1
 fi
+
+echo "Asserting provisioned dashboards"
+dashboards_json="$(tr -d ' \n' <<<"$(curl -s -u "admin:${ADMIN_PASSWORD}" "$BASE_URL/api/search?type=dash-db")")"
+for uid in ledger-sync-en ledger-sync-nl; do
+  if ! grep -qE "\"uid\":\"${uid}\"[^}]*\"folderTitle\":\"HouseholdLedger\"|\"folderTitle\":\"HouseholdLedger\"[^}]*\"uid\":\"${uid}\"" <<<"$dashboards_json"; then
+    echo "dashboard uid $uid is not listed in the Household Ledger folder" >&2
+    status=1
+  fi
+
+  dashboard_json="$(tr -d ' \n' <<<"$(curl -s -u "admin:${ADMIN_PASSWORD}" "$BASE_URL/api/dashboards/uid/${uid}")")"
+  if ! grep -q '"provisioned":true' <<<"$dashboard_json"; then
+    echo "dashboard $uid is not reported as provisioned" >&2
+    status=1
+  fi
+done
 
 exit "$status"

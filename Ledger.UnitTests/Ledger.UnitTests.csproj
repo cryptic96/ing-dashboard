@@ -19,6 +19,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Ledger.Dashboards\Ledger.Dashboards.csproj" />
     <ProjectReference Include="..\Ledger.Domain\Ledger.Domain.csproj" />
     <ProjectReference Include="..\Ledger.Repository\Ledger.Repository.csproj" />
     <ProjectReference Include="..\Ledger.Service\Ledger.Service.csproj" />

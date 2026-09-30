@@ -1,8 +1,8 @@
-# Dashboard provider. No dashboard JSON ships yet: every dashboard must
-# exist in both English and Dutch, generated from one source, before it is
-# committed here. This provider only reserves the folder and turns off
-# UI-side dashboard edits so that, once dashboards do land, they stay
-# generated rather than hand-tweaked in place.
+# Dashboard provider. Every dashboard ships in English and Dutch, is generated
+# by the Ledger.Dashboards tool from one definition and one translation file,
+# and is never edited by hand or in the Grafana UI: change the definition and
+# run the tool instead. The installer copies this whole provisioning tree to
+# /etc/grafana/provisioning, so the generated JSON lives next to this file.
 apiVersion: 1
 
 providers:
@@ -13,4 +13,4 @@ providers:
     disableDeletion: true
     allowUiUpdates: false
     options:
-      path: /var/lib/grafana/dashboards/ledger
+      path: /etc/grafana/provisioning/dashboards/json

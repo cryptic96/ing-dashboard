@@ -8,6 +8,7 @@
     <Project Path="Ledger.IntegrationTests/Ledger.IntegrationTests.csproj" />
     <Project Path="Ledger.UnitTests/Ledger.UnitTests.csproj" />
   </Folder>
+  <Project Path="Ledger.Dashboards/Ledger.Dashboards.csproj" />
   <Project Path="Ledger.Domain/Ledger.Domain.csproj" />
   <Project Path="Ledger.Repository/Ledger.Repository.csproj" />
   <Project Path="Ledger.Service/Ledger.Service.csproj" />
