@@ -42,7 +42,7 @@ public class LedgerStore(LedgerDbContext dbContext) : ILedgerStore
             .AsNoTracking()
             .Where(transaction => transaction.AccountId == accountId
                 && (from == null
-                    || transaction.Status == LedgerTransactionStatus.Pending
+                    || transaction.Status != LedgerTransactionStatus.Booked
                     || (transaction.BookingDate ?? transaction.TransactionDate ?? transaction.ValueDate) >= from));
 
         var rows = await transactions.ToListAsync(cancellationToken);
@@ -90,11 +90,12 @@ public class LedgerStore(LedgerDbContext dbContext) : ILedgerStore
             var updated = await ApplyUpdatesAsync(syncRunId, plan.Updates, observedAt, cancellationToken);
             var merged = await ApplyMergesAsync(accountId, syncRunId, plan.Merges, observedAt, cancellationToken);
             var flagged = await ApplyFlagsAsync(plan.FlagAmbiguous, observedAt, cancellationToken);
+            var dropped = await ApplyDropsAsync(plan.Drops, observedAt, cancellationToken);
 
             await dbContext.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
 
-            return new ApplyResult(inserted, updated, merged, flagged, 0);
+            return new ApplyResult(inserted, updated, merged, flagged, dropped);
         }
         catch
         {
@@ -263,10 +264,45 @@ public class LedgerStore(LedgerDbContext dbContext) : ILedgerStore
         return flagged;
     }
 
+    private async Task<int> ApplyDropsAsync(
+        IReadOnlyList<Guid> drops,
+        DateTimeOffset observedAt,
+        CancellationToken cancellationToken)
+    {
+        if (drops.Count == 0)
+        {
+            return 0;
+        }
+
+        var ids = drops.Distinct().ToList();
+        var entities = await dbContext.Transactions
+            .Where(transaction => ids.Contains(transaction.Id) && transaction.Status == LedgerTransactionStatus.Pending)
+            .ToListAsync(cancellationToken);
+
+        foreach (var entity in entities)
+        {
+            entity.Status = LedgerTransactionStatus.Dropped;
+            entity.DroppedAt = observedAt;
+            entity.UpdatedAt = observedAt;
+        }
+
+        return entities.Count;
+    }
+
     private static bool ApplyFields(LedgerTransactionEntity entity, PlannedUpdate update, DateTimeOffset observedAt)
     {
         var item = update.Item;
         var changed = false;
+
+        if (update.Restore && entity.Status == LedgerTransactionStatus.Dropped)
+        {
+            entity.Status = item.Status == ProviderTransactionStatus.Booked
+                ? LedgerTransactionStatus.Booked
+                : LedgerTransactionStatus.Pending;
+            entity.DroppedAt = null;
+            entity.BookedAt = entity.Status == LedgerTransactionStatus.Booked ? entity.BookedAt ?? observedAt : entity.BookedAt;
+            changed = true;
+        }
 
         changed |= Set(entity.BookingDate, item.BookingDate, value => entity.BookingDate = value);
         changed |= Set(entity.ValueDate, item.ValueDate, value => entity.ValueDate = value);
@@ -280,6 +316,12 @@ public class LedgerStore(LedgerDbContext dbContext) : ILedgerStore
         {
             entity.Status = LedgerTransactionStatus.Booked;
             entity.BookedAt = observedAt;
+            changed = true;
+        }
+
+        if (entity.Status == LedgerTransactionStatus.Booked && entity.MatchFlag is not null)
+        {
+            entity.MatchFlag = null;
             changed = true;
         }
 

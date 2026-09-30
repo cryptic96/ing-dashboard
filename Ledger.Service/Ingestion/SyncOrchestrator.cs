@@ -94,6 +94,7 @@ public class SyncOrchestrator(
         var query = ChooseQuery(trigger, window, settings.OverlapDays);
 
         var items = new List<ProviderTransaction>();
+        var complete = false;
         var accountRef = new ProviderAccountRef(sessionId, account.ProviderAccountUid);
 
         await foreach (var page in provider.GetTransactionsAsync(accountRef, query, context, cancellationToken))
@@ -102,13 +103,15 @@ public class SyncOrchestrator(
             items.AddRange(page.Transactions);
         }
 
+        complete = true;
+
         var stateFrom = query.DateFrom?.AddDays(-settings.MatchWindowDays);
         var existing = await ledgerStore.LoadStateAsync(account.AccountId, stateFrom, cancellationToken);
 
         var plan = TransactionReconciler.Plan(
             existing,
             items,
-            new FetchCoverage(query.DateFrom, true, items.Count),
+            new FetchCoverage(query.DateFrom, complete, items.Count),
             new ReconcilerOptions(settings.MatchWindowDays));
 
         var applied = await ledgerStore.ApplyAsync(
@@ -119,7 +122,7 @@ public class SyncOrchestrator(
             cancellationToken);
 
         progress.Inserted += applied.Inserted;
-        progress.Updated += applied.Updated;
+        progress.Updated += applied.Updated + applied.Merged;
         progress.Dropped += applied.Dropped;
         progress.Flagged += applied.Flagged;
     }

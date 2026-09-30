@@ -18,8 +18,10 @@ public static class TransactionReconciler
     /// <summary>
     /// Plans the changes for one account. Known references become updates and unknown references are matched against pending
     /// rows: a booked item that is certainly the booked version of exactly one pending row merges into it, a doubtful pairing
-    /// is stored separately and the pending rows are flagged, and everything else is inserted. A pending item never
-    /// downgrades a booked transaction, and items of any other status are ignored.
+    /// is stored separately and the pending rows are flagged, and everything else is inserted. A cancelled status drops a
+    /// known pending row, a dropped row the bank reports again is restored, and a pending row the bank no longer lists is
+    /// dropped only when the fetch was complete and returned at least one item. A pending item never downgrades a booked
+    /// transaction, and items of any other status are ignored.
     /// </summary>
     /// <exception cref="BankProviderException">An item has an amount, currency or payload that cannot be stored faithfully.</exception>
     public static ReconciliationPlan Plan(
@@ -39,16 +41,33 @@ public static class TransactionReconciler
 
         var updates = new List<PlannedUpdate>();
         var resolved = new HashSet<Guid>();
+        var drops = new List<Guid>();
         var unresolved = new List<(string Reference, ProviderTransaction Item)>();
 
         foreach (var (reference, item) in candidates)
         {
+            known.TryGetValue(reference, out var state);
+
+            if (item.Status == ProviderTransactionStatus.Cancelled)
+            {
+                if (state is not null)
+                {
+                    resolved.Add(state.Id);
+                    if (state.Status == LedgerTransactionStatus.Pending)
+                    {
+                        drops.Add(state.Id);
+                    }
+                }
+
+                continue;
+            }
+
             if (item.Status is not (ProviderTransactionStatus.Pending or ProviderTransactionStatus.Booked))
             {
                 continue;
             }
 
-            if (!known.TryGetValue(reference, out var state))
+            if (state is null)
             {
                 unresolved.Add((reference, item));
                 continue;
@@ -61,8 +80,14 @@ public static class TransactionReconciler
                 continue;
             }
 
-            var upgrade = state.Status == LedgerTransactionStatus.Pending && item.Status == ProviderTransactionStatus.Booked;
-            updates.Add(new PlannedUpdate(state.Id, item, upgrade));
+            var booked = item.Status == ProviderTransactionStatus.Booked;
+            if (state.Status == LedgerTransactionStatus.Dropped)
+            {
+                updates.Add(new PlannedUpdate(state.Id, item, booked, true));
+                continue;
+            }
+
+            updates.Add(new PlannedUpdate(state.Id, item, state.Status == LedgerTransactionStatus.Pending && booked));
         }
 
         var matches = MatchUnresolvedBookedItems(existing, resolved, unresolved, options);
@@ -83,7 +108,44 @@ public static class TransactionReconciler
             inserts.Add(new PlannedInsert(item, reference, MatchFlag.None));
         }
 
-        return new ReconciliationPlan(inserts, updates, merges, matches.Flagged, []);
+        AddDropsForAbsentPendingRows(existing, resolved, matches, coverage, drops);
+
+        return new ReconciliationPlan(inserts, updates, merges, matches.Flagged, drops);
+    }
+
+    private static void AddDropsForAbsentPendingRows(
+        IReadOnlyList<LedgerTransactionState> existing,
+        HashSet<Guid> resolved,
+        MatchOutcome matches,
+        FetchCoverage coverage,
+        List<Guid> drops)
+    {
+        if (!coverage.Complete || coverage.ItemCount <= 0)
+        {
+            return;
+        }
+
+        var unclear = new HashSet<Guid>(matches.MergeTargets.Values);
+        unclear.UnionWith(matches.Flagged);
+        unclear.UnionWith(resolved);
+
+        foreach (var state in existing)
+        {
+            if (state.Status != LedgerTransactionStatus.Pending
+                || state.Flag == MatchFlag.Ambiguous
+                || unclear.Contains(state.Id)
+                || drops.Contains(state.Id))
+            {
+                continue;
+            }
+
+            if (coverage.From is { } from && EffectiveDate(state) < from)
+            {
+                continue;
+            }
+
+            drops.Add(state.Id);
+        }
     }
 
     private static MatchOutcome MatchUnresolvedBookedItems(
