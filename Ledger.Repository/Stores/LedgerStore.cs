@@ -88,12 +88,13 @@ public class LedgerStore(LedgerDbContext dbContext) : ILedgerStore
 
             var inserted = AddInserts(accountId, syncRunId, plan.Inserts, observedAt);
             var updated = await ApplyUpdatesAsync(syncRunId, plan.Updates, observedAt, cancellationToken);
+            var merged = await ApplyMergesAsync(accountId, syncRunId, plan.Merges, observedAt, cancellationToken);
+            var flagged = await ApplyFlagsAsync(plan.FlagAmbiguous, observedAt, cancellationToken);
 
             await dbContext.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
 
-            var flagged = plan.Inserts.Count(insert => insert.Flag == MatchFlag.Ambiguous);
-            return new ApplyResult(inserted, updated, 0, flagged, 0);
+            return new ApplyResult(inserted, updated, merged, flagged, 0);
         }
         catch
         {
@@ -186,6 +187,80 @@ public class LedgerStore(LedgerDbContext dbContext) : ILedgerStore
         }
 
         return changedIds.Count;
+    }
+
+    private async Task<int> ApplyMergesAsync(
+        Guid accountId,
+        Guid syncRunId,
+        IReadOnlyList<PlannedMerge> merges,
+        DateTimeOffset observedAt,
+        CancellationToken cancellationToken)
+    {
+        if (merges.Count == 0)
+        {
+            return 0;
+        }
+
+        var ids = merges.Select(merge => merge.PendingTransactionId).ToList();
+        var entities = await dbContext.Transactions
+            .Where(transaction => ids.Contains(transaction.Id))
+            .ToDictionaryAsync(transaction => transaction.Id, cancellationToken);
+
+        foreach (var merge in merges)
+        {
+            var entity = entities[merge.PendingTransactionId];
+            var item = merge.BookedItem;
+
+            entity.Status = LedgerTransactionStatus.Booked;
+            entity.BookingDate = item.BookingDate;
+            entity.ValueDate = item.ValueDate;
+            entity.TransactionDate = item.TransactionDate;
+            entity.CounterpartyName = item.CounterpartyName;
+            entity.CounterpartyIban = item.CounterpartyIban;
+            entity.Description = item.Description;
+            entity.MatchFlag = null;
+            entity.BookedAt = observedAt;
+            entity.UpdatedAt = observedAt;
+
+            dbContext.TransactionRefs.Add(new TransactionRefEntity
+            {
+                AccountId = accountId,
+                Ref = merge.Ref,
+                TransactionId = entity.Id,
+                FirstStatus = LedgerTransactionStatus.Booked,
+                FirstSeenAt = observedAt
+            });
+
+            dbContext.TransactionPayloads.Add(NewPayload(entity.Id, syncRunId, item.RawJson, observedAt));
+        }
+
+        return merges.Count;
+    }
+
+    private async Task<int> ApplyFlagsAsync(
+        IReadOnlyList<Guid> flagAmbiguous,
+        DateTimeOffset observedAt,
+        CancellationToken cancellationToken)
+    {
+        if (flagAmbiguous.Count == 0)
+        {
+            return 0;
+        }
+
+        var ids = flagAmbiguous.Distinct().ToList();
+        var entities = await dbContext.Transactions
+            .Where(transaction => ids.Contains(transaction.Id) && transaction.Status == LedgerTransactionStatus.Pending)
+            .ToListAsync(cancellationToken);
+
+        var flagged = 0;
+        foreach (var entity in entities.Where(entity => entity.MatchFlag != MatchFlag.Ambiguous))
+        {
+            entity.MatchFlag = MatchFlag.Ambiguous;
+            entity.UpdatedAt = observedAt;
+            flagged++;
+        }
+
+        return flagged;
     }
 
     private static bool ApplyFields(LedgerTransactionEntity entity, PlannedUpdate update, DateTimeOffset observedAt)
