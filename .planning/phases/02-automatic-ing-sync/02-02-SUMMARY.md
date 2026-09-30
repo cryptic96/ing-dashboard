@@ -79,7 +79,7 @@ During the sandbox key check the operator's backup age secret key was echoed in 
 - The server backup recipients file was replaced; the orchestrator verified that it matches the spike recipient and that the host selfcheck's recipients line passes.
 - `SPIKE_RECIPIENT` in the spike environment file was updated.
 - Existing server backups made with the old key hold no bank data and are to be deleted once a backup under the new key succeeds (operator decision pending).
-- Open point: the sandbox captures hold mock data only. Whether the real initial captures were encrypted to the old or the new recipient was not established here (the age file header does not name the recipient). The exposure happened during the sandbox check, which came first, so if the rotation came after the real captures, those files are readable with the exposed key. The operator should confirm that the real captures decrypt with the new identity; if they only decrypt with the old one, re-capture or re-encrypt them and destroy the old key's copies.
+- Resolved by the orchestrator from timestamps: the sandbox captures (mock data only) were written at 19:22 UTC with the old recipient. The server recipients file was replaced at 19:29 UTC. spike.env was last edited at 19:42 UTC and holds the new recipient, which matches the server's. The real initial captures were written at 19:44 UTC. All real bank captures are therefore encrypted to the new key, and only the mock sandbox captures used the exposed one.
 
 Lesson: never route a secret through a visible terminal prompt whose output is pasted back.
 
