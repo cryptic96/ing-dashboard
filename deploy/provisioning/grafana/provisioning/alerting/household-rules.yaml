@@ -1,0 +1,327 @@
+# Household alert rules for the bank sync. Every rule queries the Prometheus
+# datasource (uid prometheus) and evaluates a threshold expression node. Titles
+# and summaries name only the condition; no query result is ever interpolated
+# into an alert, so no amount, balance, counterparty, account number or
+# account name can reach an alert email.
+#
+# The consent rules are bands, so the firing alert group changes and a new
+# email goes out at 14 days, at 7 days and when the consent has expired.
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: household
+    folder: Household
+    interval: 1m
+    rules:
+      - uid: ledger-bank-sync-failing
+        title: Bank sync is failing
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: max(ledger_sync_failing{reason="transient"})
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+                  operator:
+                    type: and
+                  query:
+                    params: [A]
+                  reducer:
+                    type: last
+                    params: []
+              refId: C
+        for: 0m
+        noDataState: OK
+        execErrState: Alerting
+        annotations:
+          summary: The bank sync failed and the day's retry did not fix it.
+        labels: {}
+
+      - uid: ledger-bank-sync-rate-limited
+        title: Bank sync was rate limited
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: max(ledger_sync_failing{reason="rate_limited"})
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+                  operator:
+                    type: and
+                  query:
+                    params: [A]
+                  reducer:
+                    type: last
+                    params: []
+              refId: C
+        for: 0m
+        noDataState: OK
+        execErrState: Alerting
+        annotations:
+          summary: The bank or aggregator refused the sync because a call allowance was used up.
+        labels: {}
+
+      - uid: ledger-bank-consent-rejected
+        title: Bank rejected the consent or credentials
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: max(ledger_sync_failing{reason=~"consent_rejected|provider_auth"})
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+                  operator:
+                    type: and
+                  query:
+                    params: [A]
+                  reducer:
+                    type: last
+                    params: []
+              refId: C
+        for: 0m
+        noDataState: OK
+        execErrState: Alerting
+        annotations:
+          summary: The bank or aggregator rejected the consent or the application's credentials.
+        labels: {}
+
+      - uid: ledger-bank-sync-stale
+        title: Bank sync is stale
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: time() - min(ledger_sync_last_success_timestamp_seconds)
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [93600]
+                  operator:
+                    type: and
+                  query:
+                    params: [A]
+                  reducer:
+                    type: last
+                    params: []
+              refId: C
+        for: 10m
+        noDataState: OK
+        execErrState: Alerting
+        annotations:
+          summary: No bank sync has succeeded for more than 26 hours.
+        labels: {}
+
+      - uid: ledger-bank-consent-expiring-14d
+        title: Bank consent expires within 14 days
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: (min(ledger_bank_consent_days_until_expiry) < bool 14) * (min(ledger_bank_consent_days_until_expiry) >= bool 7)
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+                  operator:
+                    type: and
+                  query:
+                    params: [A]
+                  reducer:
+                    type: last
+                    params: []
+              refId: C
+        for: 0m
+        noDataState: OK
+        execErrState: Alerting
+        annotations:
+          summary: A bank consent ends within 14 days; link the accounts again before it does.
+        labels: {}
+
+      - uid: ledger-bank-consent-expiring-7d
+        title: Bank consent expires within 7 days
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: (min(ledger_bank_consent_days_until_expiry) < bool 7) * (min(ledger_bank_consent_days_until_expiry) > bool 0)
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+                  operator:
+                    type: and
+                  query:
+                    params: [A]
+                  reducer:
+                    type: last
+                    params: []
+              refId: C
+        for: 0m
+        noDataState: OK
+        execErrState: Alerting
+        annotations:
+          summary: A bank consent ends within 7 days; link the accounts again now.
+        labels: {}
+
+      - uid: ledger-bank-consent-expired
+        title: Bank consent has expired
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: max(ledger_bank_consent_state{state="expired"})
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+                  operator:
+                    type: and
+                  query:
+                    params: [A]
+                  reducer:
+                    type: last
+                    params: []
+              refId: C
+        for: 0m
+        noDataState: OK
+        execErrState: Alerting
+        annotations:
+          summary: A bank consent has ended and no transactions can be fetched until the accounts are linked again.
+        labels: {}
+
+      - uid: ledger-balance-not-reconciled
+        title: Account balance does not reconcile
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: max(ledger_balance_reconciliation_drift)
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+                  operator:
+                    type: and
+                  query:
+                    params: [A]
+                  reducer:
+                    type: last
+                    params: []
+              refId: C
+        for: 0m
+        noDataState: OK
+        execErrState: Alerting
+        annotations:
+          summary: The latest balance reported by the bank does not match the stored transactions.
+        labels: {}
