@@ -8,7 +8,8 @@ namespace Ledger.Service.Ingestion;
 /// <summary>
 /// Runs one sync for one connection: for each selected account it reads every page from the provider, plans the changes
 /// against the ledger and applies them in a single database transaction. It stops at the first failure, so one failing
-/// account never leaves another half-applied.
+/// account never leaves another half-applied. After an account's first complete fetch of the local day it also reads the
+/// account's balances, stores them as the day's snapshot and reconciles the booked balance against the ledger.
 /// </summary>
 public class SyncOrchestrator(
     IBankDataProvider provider,
@@ -16,6 +17,7 @@ public class SyncOrchestrator(
     ILedgerStore ledgerStore,
     ISyncRunStore runStore,
     IProviderCallStore callStore,
+    IBalanceStore balanceStore,
     ISecretProtector secretProtector,
     IOptions<IngestionOptions> options,
     TimeProvider timeProvider,
@@ -144,6 +146,58 @@ public class SyncOrchestrator(
         progress.Updated += applied.Updated + applied.Merged;
         progress.Dropped += applied.Dropped;
         progress.Flagged += applied.Flagged;
+
+        await SnapshotBalancesAsync(account, accountRef, meteredContext, runId, progress, cancellationToken);
+    }
+
+    private async Task SnapshotBalancesAsync(
+        SyncAccount account,
+        ProviderAccountRef accountRef,
+        FetchContext meteredContext,
+        Guid runId,
+        RunProgress progress,
+        CancellationToken cancellationToken)
+    {
+        var settings = options.Value;
+        var localDate = SyncSchedule.LocalDate(timeProvider.GetUtcNow(), settings.ResolveTimeZone());
+
+        if (await balanceStore.HasSnapshotForDateAsync(account.AccountId, localDate, cancellationToken))
+        {
+            return;
+        }
+
+        var balances = await provider.GetBalancesAsync(accountRef, meteredContext, cancellationToken);
+        progress.CallsMade++;
+
+        var reconcilable = BalanceReconciler.SelectReconcilable(balances, settings.ReconcileBalanceKinds);
+        BalanceCheck? check = null;
+
+        if (reconcilable is { ReferenceDate: { } referenceDate })
+        {
+            var previous = await balanceStore.GetLatestBeforeAsync(
+                account.AccountId,
+                reconcilable.Kind,
+                localDate,
+                cancellationToken);
+
+            var bookedSum = previous?.ReferenceDate is { } previousDate
+                ? await balanceStore.SumBookedAsync(account.AccountId, previousDate, referenceDate, cancellationToken)
+                : 0m;
+
+            check = BalanceReconciler.Check(previous, reconcilable, bookedSum);
+        }
+
+        await balanceStore.SaveAsync(
+            account.AccountId,
+            runId,
+            localDate,
+            balances,
+            reconcilable?.Kind,
+            check,
+            timeProvider.GetUtcNow(),
+            cancellationToken);
+
+        progress.Reconciliation.Add(check?.Reconciled is { } reconciled ? (reconciled ? "true" : "false") : "unknown");
     }
 
     private static TransactionQuery ChooseQuery(SyncTrigger trigger, FetchWindow window, int overlapDays)
@@ -203,15 +257,18 @@ public class SyncOrchestrator(
         var level = outcome == SyncOutcome.Succeeded ? LogLevel.Information : LogLevel.Warning;
         logger.Log(
             level,
-            "Sync run {RunId} finished with outcome {Outcome} for accounts {AccountKeys}.",
+            "Sync run {RunId} finished with outcome {Outcome} for accounts {AccountKeys}, balances reconciled {Reconciled}.",
             runId,
             outcome,
-            string.Join(",", progress.AccountKeys));
+            string.Join(",", progress.AccountKeys),
+            progress.Reconciliation.Count == 0 ? "none" : string.Join(",", progress.Reconciliation));
     }
 
     private sealed class RunProgress
     {
         public List<string> AccountKeys { get; } = [];
+
+        public List<string> Reconciliation { get; } = [];
 
         public int CallsMade { get; set; }
 

@@ -76,9 +76,13 @@ public class DatabaseFixture : IAsyncLifetime
         await using var databaseConnection = new NpgsqlConnection(AdminConnectionStringForDatabase(databaseName));
         await databaseConnection.OpenAsync();
 
-        await using var bootstrapCommand = databaseConnection.CreateCommand();
-        bootstrapCommand.CommandText = bootstrapDatabaseSql;
-        await bootstrapCommand.ExecuteNonQueryAsync();
+        await using (var bootstrapCommand = databaseConnection.CreateCommand())
+        {
+            bootstrapCommand.CommandText = bootstrapDatabaseSql;
+            await bootstrapCommand.ExecuteNonQueryAsync();
+        }
+
+        NpgsqlConnection.ClearPool(databaseConnection);
 
         return databaseName;
     }
@@ -89,8 +93,13 @@ public class DatabaseFixture : IAsyncLifetime
         var optionsBuilder = new DbContextOptionsBuilder<LedgerDbContext>();
         optionsBuilder.UseNpgsql(ConnectionStringForDatabase(databaseName, "ledger_migrator"));
 
-        await using var context = new LedgerDbContext(optionsBuilder.Options);
-        await context.Database.MigrateAsync();
+        await using (var context = new LedgerDbContext(optionsBuilder.Options))
+        {
+            await context.Database.MigrateAsync();
+        }
+
+        await using var migratorConnection = new NpgsqlConnection(ConnectionStringForDatabase(databaseName, "ledger_migrator"));
+        NpgsqlConnection.ClearPool(migratorConnection);
     }
 
     private async Task RunBootstrapRolesAsync()

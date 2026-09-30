@@ -66,7 +66,7 @@ public class SchedulerAndQuotaTests(DatabaseFixture fixture)
         pageCalls.Should().Be(3);
 
         var ledger = await host.ReadCallLedgerAsync(selected.AccountKey);
-        ledger.Count.Should().Be(pageCalls);
+        ledger.Count.Should().Be(pageCalls + 1);
         ledger.AllBackground.Should().BeTrue();
         ledger.AllLinkedToARun.Should().BeTrue();
         (await host.ReadCallLedgerAsync(unselected.AccountKey)).Count.Should().Be(0);
@@ -201,8 +201,7 @@ public class SchedulerAndQuotaTests(DatabaseFixture fixture)
             linked.Accounts[0].Id,
             now.AddHours(-24),
             now.AddHours(-2),
-            now.AddHours(-1),
-            now.AddMinutes(-30));
+            now.AddHours(-1));
 
         (await host.RunDueAsync()).Should().Be(1);
 
@@ -309,7 +308,7 @@ public class SchedulerAndQuotaTests(DatabaseFixture fixture)
         runs[0].Outcome.Should().Be("succeeded");
 
         var ledger = await host.ReadCallLedgerAsync(linked.Accounts[0].AccountKey);
-        ledger.Count.Should().Be(2);
+        ledger.Count.Should().Be(3);
         ledger.NoneBackground.Should().BeTrue();
     }
 

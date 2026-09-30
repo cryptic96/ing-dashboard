@@ -1,4 +1,5 @@
 using System.Globalization;
+using Ledger.Domain.Banking;
 using Ledger.Domain.Ingestion;
 
 namespace Ledger.Service.Ingestion;
@@ -51,6 +52,12 @@ public class IngestionOptions
 
     /// <summary>How the quota window is measured: Rolling24Hours (the default, the conservative reading) or LocalCalendarDay.</summary>
     public QuotaWindow QuotaWindow { get; set; } = QuotaWindow.Rolling24Hours;
+
+    /// <summary>
+    /// The balance kinds the ledger reconciles against its booked transactions, in order of preference. The first one the bank
+    /// returns with a reference date is used.
+    /// </summary>
+    public List<BalanceKind> ReconcileBalanceKinds { get; set; } = [BalanceKind.ClosingBooked, BalanceKind.InterimBooked];
 
     /// <summary>Whether the background scheduler runs. Turning it off leaves operator-triggered syncs working.</summary>
     public bool SchedulerEnabled { get; set; } = true;

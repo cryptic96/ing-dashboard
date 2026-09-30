@@ -44,6 +44,9 @@ public class LedgerDbContext(DbContextOptions<LedgerDbContext> options)
     /// <summary>Every account-data call made to the bank, recorded before it was sent. Append-only.</summary>
     public DbSet<ProviderCallEntity> ProviderCalls { get; set; } = null!;
 
+    /// <summary>The balances the bank reported for each account on each local day, with the reconciliation result. Append-only.</summary>
+    public DbSet<BalanceSnapshotEntity> BalanceSnapshots { get; set; } = null!;
+
     /// <inheritdoc />
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -78,6 +81,7 @@ public class LedgerDbContext(DbContextOptions<LedgerDbContext> options)
         ConfigureSyncRuns(modelBuilder);
         ConfigureBankAuthorizations(modelBuilder);
         ConfigureProviderCalls(modelBuilder);
+        ConfigureBalanceSnapshots(modelBuilder);
 
         SnakeCaseNaming.Apply(modelBuilder);
     }
@@ -100,6 +104,47 @@ public class LedgerDbContext(DbContextOptions<LedgerDbContext> options)
             entity.ToTable(table => table.HasCheckConstraint(
                 "ck_provider_calls_kind",
                 $"kind IN ({EnumText.CheckList<ProviderCallKind>()})"));
+        });
+    }
+
+    private static void ConfigureBalanceSnapshots(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<BalanceSnapshotEntity>(entity =>
+        {
+            entity.HasKey(snapshot => snapshot.Id);
+            entity.Property(snapshot => snapshot.SnapshotDate).HasColumnType("date");
+            entity.Property(snapshot => snapshot.Kind)
+                .HasColumnName("balance_kind")
+                .HasConversion(new SnakeCaseEnumConverter<BalanceKind>())
+                .IsRequired();
+            entity.Property(snapshot => snapshot.ProviderType).IsRequired();
+            entity.Property(snapshot => snapshot.Amount).HasColumnType("numeric(19,4)");
+            entity.Property(snapshot => snapshot.Currency).HasMaxLength(3).IsFixedLength().IsRequired();
+            entity.Property(snapshot => snapshot.ReferenceDate).HasColumnType("date");
+            entity.Property(snapshot => snapshot.ExpectedAmount).HasColumnType("numeric(19,4)");
+            entity.Property(snapshot => snapshot.DriftAmount).HasColumnType("numeric(19,4)");
+            entity.HasIndex(snapshot => new { snapshot.AccountId, snapshot.SnapshotDate, snapshot.Kind })
+                .IsUnique()
+                .HasDatabaseName("ux_balance_snapshots_account_date_kind");
+            entity.HasIndex(snapshot => snapshot.SyncRunId);
+            entity.HasOne<LedgerAccountEntity>()
+                .WithMany()
+                .HasForeignKey(snapshot => snapshot.AccountId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<SyncRunEntity>()
+                .WithMany()
+                .HasForeignKey(snapshot => snapshot.SyncRunId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.ToTable(table =>
+            {
+                table.HasCheckConstraint(
+                    "ck_balance_snapshots_balance_kind",
+                    $"balance_kind IN ({EnumText.CheckList<BalanceKind>()})");
+                table.HasCheckConstraint("ck_balance_snapshots_currency", "currency ~ '^[A-Z]{3}$'");
+                table.HasCheckConstraint(
+                    "ck_balance_snapshots_verdict",
+                    "reconciled IS NULL OR (expected_amount IS NOT NULL AND drift_amount IS NOT NULL)");
+            });
         });
     }
 
