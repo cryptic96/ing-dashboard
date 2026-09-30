@@ -85,7 +85,7 @@ Plans:
   4. Both partners can open a Grafana dashboard showing sync status and recent transactions per account, in English or Dutch; both language versions are generated from one source. The dashboard reads through the SELECT-only reporting role, and the database rejects a write query attempted with that role.
   5. The bank connection is read-only, and no code path can initiate a payment. A synthetic test provider can feed the same pipeline with no changes outside ingestion.
 
-**Plans**: 2/15 plans executed
+**Plans**: 3/15 plans executed
 
 Plans:
 **Wave 1**
@@ -96,7 +96,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 02-04-PLAN.md — Ingestion core tracer: provider interface, ledger identity model and schema, idempotent apply with raw payloads, orchestrator, synthetic provider, reporting views read as grafana_reader
+- [x] 02-04-PLAN.md — Ingestion core tracer: provider interface, ledger identity model and schema, idempotent apply with raw payloads, orchestrator, synthetic provider, reporting views read as grafana_reader
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
@@ -215,7 +215,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Secure Platform & Release Pipeline | 12/12 | Complete    | 2026-09-29 |
-| 2. Automatic ING Sync | 2/15 | In Progress|  |
+| 2. Automatic ING Sync | 3/15 | In Progress|  |
 | 3. Claude Reads the Ledger | 0/TBD | Not started | - |
 | 4. Trustworthy Categorisation | 0/TBD | Not started | - |
 | 5. Budgets, Goals & Forecast | 0/TBD | Not started | - |
