@@ -1,0 +1,160 @@
+{
+  "uid": "ledger-sync-en",
+  "title": "Bank sync",
+  "tags": [
+    "household-ledger",
+    "en"
+  ],
+  "editable": false,
+  "schemaVersion": 41,
+  "timezone": "Europe/Amsterdam",
+  "time": {
+    "from": "now-30d",
+    "to": "now"
+  },
+  "links": [
+    {
+      "title": "Nederlands",
+      "type": "link",
+      "url": "/d/ledger-sync-nl"
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "account",
+        "label": "Account",
+        "type": "query",
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "ledger-reporting"
+        },
+        "query": "SELECT display_name AS __text, account_key AS __value FROM reporting.accounts ORDER BY display_name, account_key",
+        "refresh": 1,
+        "multi": true,
+        "includeAll": true,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "table",
+      "title": "Recent transactions",
+      "description": "Shows at most 500 transactions, newest first, for the selected accounts and time range. Narrow the time range to reach older transactions.",
+      "gridPos": {
+        "h": 16,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "ledger-reporting"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "ledger-reporting"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT effective_date, account_name, amount, currency, counterparty_name, description, status, match_flag\nFROM reporting.transactions\nWHERE account_key IN (${account:sqlstring}) AND $__timeFilter(effective_at)\nORDER BY effective_date DESC, first_seen_at DESC, transaction_id DESC\nLIMIT 500",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 2
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Status"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "booked": {
+                        "text": "Booked",
+                        "index": 1
+                      },
+                      "pending": {
+                        "text": "Pending",
+                        "color": "orange",
+                        "index": 0
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Match"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "ambiguous": {
+                        "text": "Unclear match",
+                        "color": "red",
+                        "index": 0
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "account_name": "Account",
+              "amount": "Amount",
+              "counterparty_name": "Counterparty",
+              "currency": "Currency",
+              "description": "Description",
+              "effective_date": "Date",
+              "match_flag": "Match",
+              "status": "Status"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

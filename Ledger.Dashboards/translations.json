@@ -1,0 +1,38 @@
+{
+  "en": {
+    "dashboard.title": "Bank sync",
+    "link.other_language": "Nederlands",
+    "variable.account": "Account",
+    "panel.recent.title": "Recent transactions",
+    "panel.recent.description": "Shows at most 500 transactions, newest first, for the selected accounts and time range. Narrow the time range to reach older transactions.",
+    "column.date": "Date",
+    "column.account": "Account",
+    "column.amount": "Amount",
+    "column.currency": "Currency",
+    "column.counterparty": "Counterparty",
+    "column.description": "Description",
+    "column.status": "Status",
+    "column.match": "Match",
+    "status.pending": "Pending",
+    "status.booked": "Booked",
+    "match.unclear": "Unclear match"
+  },
+  "nl": {
+    "dashboard.title": "Banksynchronisatie",
+    "link.other_language": "English",
+    "variable.account": "Rekening",
+    "panel.recent.title": "Recente transacties",
+    "panel.recent.description": "Toont maximaal 500 transacties, de nieuwste eerst, voor de gekozen rekeningen en periode. Kies een smallere periode om oudere transacties te bereiken.",
+    "column.date": "Datum",
+    "column.account": "Rekening",
+    "column.amount": "Bedrag",
+    "column.currency": "Valuta",
+    "column.counterparty": "Tegenpartij",
+    "column.description": "Omschrijving",
+    "column.status": "Status",
+    "column.match": "Koppeling",
+    "status.pending": "In behandeling",
+    "status.booked": "Verwerkt",
+    "match.unclear": "Onduidelijke koppeling"
+  }
+}
