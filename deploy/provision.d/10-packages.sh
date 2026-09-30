@@ -60,7 +60,7 @@ if [[ "${LEDGER_PROVISION_LIB_ONLY:-0}" != "1" ]]; then
   provision_log "Installing base packages"
   DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
     ca-certificates curl gnupg jq unzip openssl nftables age msmtp \
-    prometheus-node-exporter unattended-upgrades \
+    prometheus-node-exporter unattended-upgrades tzdata \
     "$DOTNET_RUNTIME_PACKAGE"
 
   # Some container templates ship a local MTA. Mail leaves this host only

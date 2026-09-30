@@ -1,0 +1,242 @@
+#!/usr/bin/env bash
+###
+### Creates and configures the aggregator key on the ledger host, so the
+### private key is generated where it is used and never travels.
+###
+### Usage:
+###   ledger-bank-key generate
+###   ledger-bank-key show-certificate
+###   ledger-bank-key configure --application-id UUID --redirect-url URL
+###
+### generate     creates a password-protected 4096-bit RSA key, a certificate
+###              and a public key under /etc/ledger, and writes the key path
+###              and the generated password into the env file. The password
+###              is never printed. An existing key is never overwritten.
+### show-certificate  prints the certificate and the public key, the parts
+###              that are uploaded to the aggregator's control panel.
+### configure   validates and writes the aggregator application id, the
+###              provider selection and the callback URL into the env file.
+###
+### Run as root. The key directory and the env file can be redirected with
+### LEDGER_BANK_KEY_DIR and LEDGER_ENV_FILE; LEDGER_BANK_KEY_LIB_ONLY=1
+### exposes the functions without running anything (used by the offline test).
+###
+set -euo pipefail
+
+readonly BANK_KEY_NAME="enablebanking-key.pem"
+readonly BANK_CERT_NAME="enablebanking-cert.pem"
+readonly BANK_PUBLIC_NAME="enablebanking-public.pem"
+readonly BANK_APPLICATION_ID_PATTERN='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+readonly BANK_REDIRECT_URL_PATTERN='^https://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?/api/v1/bank/callback$'
+
+bank_key_usage() {
+  echo "Usage: ledger-bank-key generate | show-certificate | configure --application-id UUID --redirect-url URL" >&2
+  exit 2
+}
+
+bank_key_log() {
+  printf '%s\n' "$*" >&2
+}
+
+bank_key_valid_application_id() {
+  [[ "$1" =~ $BANK_APPLICATION_ID_PATTERN ]]
+}
+
+bank_key_valid_redirect_url() {
+  [[ "$1" =~ $BANK_REDIRECT_URL_PATTERN ]]
+}
+
+###
+### Sets KEY to VALUE in FILE: replaces the first KEY= line, drops any later
+### duplicate, appends the line when absent, and leaves every other line
+### untouched. The result is written to a temporary file beside FILE and
+### renamed into place, mode 640 (owner root, group ledger when run as root).
+###
+bank_key_set_env_value() {
+  local file="$1" key="$2" value="$3"
+  local dir tmp line replaced=0
+
+  dir="$(dirname "$file")"
+  tmp="$(mktemp "${dir}/.$(basename "$file").XXXXXX")"
+
+  if [[ -f "$file" ]]; then
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      if [[ "$line" == "${key}="* ]]; then
+        if [[ "$replaced" -eq 0 ]]; then
+          printf '%s=%s\n' "$key" "$value" >> "$tmp"
+          replaced=1
+        fi
+        continue
+      fi
+      printf '%s\n' "$line" >> "$tmp"
+    done < "$file"
+  fi
+
+  if [[ "$replaced" -eq 0 ]]; then
+    printf '%s=%s\n' "$key" "$value" >> "$tmp"
+  fi
+
+  chmod 640 "$tmp"
+  if [[ "$(id -u)" -eq 0 ]]; then
+    chown root:ledger "$tmp"
+  fi
+  mv -f "$tmp" "$file"
+}
+
+###
+### Generates the password-protected key, the certificate and the public key
+### into DIR and records the key path and password in ENV_FILE. Refuses when
+### the key already exists. Prints the certificate and the public key and a
+### reminder; never prints the password.
+###
+bank_key_generate() {
+  local dir="$1" env_file="$2"
+  local key_path="${dir}/${BANK_KEY_NAME}"
+  local cert_path="${dir}/${BANK_CERT_NAME}"
+  local public_path="${dir}/${BANK_PUBLIC_NAME}"
+  local workdir old_umask
+
+  if [[ -e "$key_path" ]]; then
+    bank_key_log "The bank key ${key_path} already exists and is never overwritten."
+    return 1
+  fi
+
+  old_umask="$(umask)"
+  umask 077
+  workdir="$(mktemp -d)"
+
+  LEDGER_BANK_KEY_PASSWORD="$(openssl rand -base64 32)"
+  export LEDGER_BANK_KEY_PASSWORD
+
+  if ! {
+    openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096 -aes-256-cbc \
+      -pass env:LEDGER_BANK_KEY_PASSWORD -out "${workdir}/key.pem" \
+      && openssl req -x509 -new -sha256 -days 3650 \
+        -key "${workdir}/key.pem" -passin env:LEDGER_BANK_KEY_PASSWORD \
+        -subj "/CN=household-ledger-bank-link" -out "${workdir}/cert.pem" \
+      && openssl pkey -in "${workdir}/key.pem" -passin env:LEDGER_BANK_KEY_PASSWORD \
+        -pubout -out "${workdir}/public.pem"
+  } > /dev/null 2>&1; then
+    bank_key_log "Generating the bank key failed."
+    rm -rf "$workdir"
+    unset LEDGER_BANK_KEY_PASSWORD
+    umask "$old_umask"
+    return 1
+  fi
+  umask "$old_umask"
+
+  mkdir -p "$dir"
+  if [[ "$(id -u)" -eq 0 ]]; then
+    install -m 640 -o root -g ledger "${workdir}/key.pem" "$key_path"
+    install -m 644 -o root -g root "${workdir}/cert.pem" "$cert_path"
+    install -m 644 -o root -g root "${workdir}/public.pem" "$public_path"
+  else
+    install -m 640 "${workdir}/key.pem" "$key_path"
+    install -m 644 "${workdir}/cert.pem" "$cert_path"
+    install -m 644 "${workdir}/public.pem" "$public_path"
+  fi
+
+  bank_key_set_env_value "$env_file" EnableBanking__PrivateKeyPath "$key_path"
+  bank_key_set_env_value "$env_file" EnableBanking__PrivateKeyPassword "$LEDGER_BANK_KEY_PASSWORD"
+
+  shred -u "${workdir}/key.pem" 2> /dev/null || rm -f "${workdir}/key.pem"
+  rm -rf "$workdir"
+  unset LEDGER_BANK_KEY_PASSWORD
+
+  bank_key_print_public_parts "$dir"
+  bank_key_log ""
+  bank_key_log "Bank key: ${key_path}"
+  bank_key_log "Env file: ${env_file}"
+  bank_key_log "Copy both files into the password manager; neither is in the database backups and the password is not printed here."
+}
+
+bank_key_print_public_parts() {
+  local dir="$1"
+  cat "${dir}/${BANK_CERT_NAME}" "${dir}/${BANK_PUBLIC_NAME}"
+}
+
+bank_key_require_root() {
+  if [[ "$(id -u)" -ne 0 ]]; then
+    echo "ledger-bank-key must be run as root." >&2
+    exit 1
+  fi
+}
+
+bank_key_require_env_file() {
+  if [[ ! -f "$1" ]]; then
+    echo "The env file $1 does not exist; run provisioning first." >&2
+    exit 1
+  fi
+}
+
+bank_key_configure() {
+  local env_file="$1"
+  shift
+  local application_id="" redirect_url=""
+
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --application-id)
+        [[ "$#" -ge 2 ]] || bank_key_usage
+        application_id="$2"
+        shift 2
+        ;;
+      --redirect-url)
+        [[ "$#" -ge 2 ]] || bank_key_usage
+        redirect_url="$2"
+        shift 2
+        ;;
+      *) bank_key_usage ;;
+    esac
+  done
+
+  [[ -n "$application_id" && -n "$redirect_url" ]] || bank_key_usage
+
+  if ! bank_key_valid_application_id "$application_id"; then
+    echo "The application id must be a lowercase UUID." >&2
+    exit 1
+  fi
+  if ! bank_key_valid_redirect_url "$redirect_url"; then
+    echo "The redirect URL must be https://HOST/api/v1/bank/callback with no query string." >&2
+    exit 1
+  fi
+
+  bank_key_set_env_value "$env_file" EnableBanking__ApplicationId "$application_id"
+  bank_key_set_env_value "$env_file" Ingestion__Provider EnableBanking
+  bank_key_set_env_value "$env_file" BankLink__RedirectUrl "$redirect_url"
+  echo "Configuration written to ${env_file}. Restart the application for it to take effect: systemctl restart ledger.service"
+}
+
+bank_key_main() {
+  local key_dir="${LEDGER_BANK_KEY_DIR:-/etc/ledger}"
+  local env_file="${LEDGER_ENV_FILE:-/etc/ledger/ledger.env}"
+
+  [[ "$#" -ge 1 ]] || bank_key_usage
+  bank_key_require_root
+
+  case "$1" in
+    generate)
+      [[ "$#" -eq 1 ]] || bank_key_usage
+      bank_key_require_env_file "$env_file"
+      bank_key_generate "$key_dir" "$env_file"
+      ;;
+    show-certificate)
+      [[ "$#" -eq 1 ]] || bank_key_usage
+      if [[ ! -f "${key_dir}/${BANK_CERT_NAME}" ]]; then
+        echo "No certificate found; run ledger-bank-key generate first." >&2
+        exit 1
+      fi
+      bank_key_print_public_parts "$key_dir"
+      ;;
+    configure)
+      shift
+      bank_key_require_env_file "$env_file"
+      bank_key_configure "$env_file" "$@"
+      ;;
+    *) bank_key_usage ;;
+  esac
+}
+
+if [[ "${LEDGER_BANK_KEY_LIB_ONLY:-0}" != "1" ]]; then
+  bank_key_main "$@"
+fi
