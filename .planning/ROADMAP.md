@@ -85,7 +85,7 @@ Plans:
   4. Both partners can open a Grafana dashboard showing sync status and recent transactions per account, in English or Dutch; both language versions are generated from one source. The dashboard reads through the SELECT-only reporting role, and the database rejects a write query attempted with that role.
   5. The bank connection is read-only, and no code path can initiate a payment. A synthetic test provider can feed the same pipeline with no changes outside ingestion.
 
-**Plans**: 5/15 plans executed
+**Plans**: 6/15 plans executed
 
 Plans:
 **Wave 1**
@@ -102,7 +102,7 @@ Plans:
 
 - [x] 02-05-PLAN.md — Pending-to-booked reconciliation: certain-match merges, unclear-match flags, drops only after complete fetches, restores
 - [x] 02-06-PLAN.md — Dashboard generator (C#, EN/NL from one source), recent-transactions dashboard, provider path fix, drift and read-only tests
-- [ ] 02-07-PLAN.md — Guided consent flow over REST: link, one-time-state callback, account selection, consent state, renewal keeping history, revoke
+- [x] 02-07-PLAN.md — Guided consent flow over REST: link, one-time-state callback, account selection, consent state, renewal keeping history, revoke
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
@@ -215,7 +215,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Secure Platform & Release Pipeline | 12/12 | Complete    | 2026-09-29 |
-| 2. Automatic ING Sync | 5/15 | In Progress|  |
+| 2. Automatic ING Sync | 6/15 | In Progress|  |
 | 3. Claude Reads the Ledger | 0/TBD | Not started | - |
 | 4. Trustworthy Categorisation | 0/TBD | Not started | - |
 | 5. Budgets, Goals & Forecast | 0/TBD | Not started | - |
