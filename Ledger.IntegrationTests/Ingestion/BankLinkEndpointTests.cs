@@ -3,13 +3,17 @@ using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Web;
 using FluentAssertions;
 using Ledger.Domain.Banking;
+using Ledger.Domain.Ingestion;
 using Ledger.IntegrationTests.Infrastructure;
 using Ledger.Repository;
 using Ledger.Repository.Stores;
 using Ledger.Service.Ingestion.Synthetic;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Routing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
@@ -91,6 +95,150 @@ public class BankLinkEndpointTests(DatabaseFixture fixture)
         var rows = await host.ReadAsync("SELECT t::text FROM public.bank_authorizations t");
         rows.Should().NotContain(row => row.Contains(state, StringComparison.Ordinal));
     }
+
+    [Fact]
+    public async Task Every_callback_failure_returns_the_same_status_and_body_with_no_store_and_no_referrer_headers()
+    {
+        var scenario = SyntheticBankScenario.Create();
+        scenario.AddAccount(AccountKind.Current);
+
+        await using var host = await BankLinkTestHost.StartAsync(fixture, scenario);
+
+        var reusedState = await host.StartLinkAsync();
+        using (var first = await host.CallbackAsync(reusedState, scenario.AuthorizationCode))
+        {
+            first.StatusCode.Should().Be(HttpStatusCode.OK);
+            AssertHardenedHeaders(first);
+        }
+
+        var wrongCodeState = await host.StartLinkAsync();
+        var errorState = await host.StartLinkAsync();
+        var expiredState = await host.StoreExpiredStateAsync();
+        var unknownState = LinkStateToken.Generate().State;
+
+        var failures = new List<(string Name, HttpStatusCode Status, string Body)>
+        {
+            await Capture("reused", host.CallbackAsync(reusedState, scenario.AuthorizationCode)),
+            await Capture("unknown", host.CallbackAsync(unknownState, scenario.AuthorizationCode)),
+            await Capture("malformed", host.CallbackAsync("not-a-state", scenario.AuthorizationCode)),
+            await Capture("expired", host.CallbackAsync(expiredState, scenario.AuthorizationCode)),
+            await Capture("wrong code", host.CallbackAsync(wrongCodeState, "a-code-the-bank-never-issued")),
+            await Capture(
+                "cancelled",
+                host.SendAsync(HttpMethod.Get, $"/api/v1/bank/callback?state={errorState}&error=access_denied", withKey: false)),
+            await Capture("missing parameters", host.SendAsync(HttpMethod.Get, "/api/v1/bank/callback", withKey: false)),
+            await Capture(
+                "oversized code",
+                host.CallbackAsync(LinkStateToken.Generate().State, new string('c', 2049)))
+        };
+
+        failures.Select(failure => failure.Status).Distinct().Should().ContainSingle().Which.Should().Be(HttpStatusCode.BadRequest);
+        failures.Select(failure => failure.Body).Distinct().Should().ContainSingle();
+        failures[0].Body.Should().NotContain(reusedState).And.NotContain(scenario.AuthorizationCode);
+
+        using var afterCancel = await host.CallbackAsync(errorState, scenario.AuthorizationCode);
+        afterCancel.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+
+        static async Task<(string, HttpStatusCode, string)> Capture(string name, Task<HttpResponseMessage> pending)
+        {
+            using var response = await pending;
+            AssertHardenedHeaders(response);
+            return (name, response.StatusCode, await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+        }
+    }
+
+    [Fact]
+    public async Task A_session_without_accounts_gets_a_distinct_safe_message_about_the_control_panel()
+    {
+        var scenario = SyntheticBankScenario.Create();
+
+        await using var host = await BankLinkTestHost.StartAsync(fixture, scenario);
+
+        var state = await host.StartLinkAsync();
+        using var response = await host.CallbackAsync(state, scenario.AuthorizationCode);
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        AssertHardenedHeaders(response);
+        var body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        body.Should().Contain("control panel").And.NotContain(state);
+    }
+
+    [Fact]
+    public async Task Only_the_bank_callback_endpoint_allows_anonymous_access()
+    {
+        var scenario = SyntheticBankScenario.Create();
+
+        await using var host = await BankLinkTestHost.StartAsync(fixture, scenario);
+
+        var endpoints = host.Factory.Services.GetRequiredService<EndpointDataSource>().Endpoints.OfType<RouteEndpoint>().ToList();
+
+        var anonymous = endpoints.Where(endpoint => endpoint.Metadata.GetMetadata<IAllowAnonymous>() is not null).ToList();
+        anonymous.Should().ContainSingle().Which.RoutePattern.RawText.Should().Be("/api/v1/bank/callback");
+
+        var bankRoutes = endpoints.Where(endpoint => endpoint.RoutePattern.RawText!.StartsWith("/api/v1/bank", StringComparison.Ordinal))
+            .Where(endpoint => endpoint.RoutePattern.RawText != "/api/v1/bank/callback")
+            .ToList();
+        bankRoutes.Should().HaveCountGreaterThanOrEqualTo(4);
+
+        foreach (var endpoint in bankRoutes)
+        {
+            var method = endpoint.Metadata.GetMetadata<HttpMethodMetadata>()!.HttpMethods.First();
+            var path = Regex.Replace(endpoint.RoutePattern.RawText!, @"\{[^}]+\}", "placeholder");
+
+            using var response = await host.SendAsync(new HttpMethod(method), path, withKey: false);
+            response.StatusCode.Should().Be(HttpStatusCode.Unauthorized, $"{method} {path} must need a key");
+        }
+    }
+
+    [Fact]
+    public async Task Without_a_configured_provider_starting_a_link_answers_that_bank_linking_is_not_configured()
+    {
+        await using var host = await BankLinkTestHost.StartWithoutProviderAsync(fixture);
+
+        using var response = await host.SendAsync(HttpMethod.Post, "/api/v1/bank/connections/link");
+
+        response.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
+        response.Content.Headers.ContentType?.MediaType.Should().Be("application/problem+json");
+        var body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        body.Should().Contain("not configured");
+    }
+
+    [Fact]
+    public async Task The_synthetic_provider_selected_by_configuration_links_a_demo_bank()
+    {
+        await using var host = await BankLinkTestHost.StartWithProviderSettingAsync(fixture, "Synthetic");
+
+        var state = await host.StartLinkAsync();
+        using var response = await host.CallbackAsync(state, "any-code-works-for-the-demo");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).Should().Contain("2 accounts");
+    }
+
+    [Theory]
+    [InlineData("EnableBanking")]
+    [InlineData("NotAProviderSentinel")]
+    public void An_unusable_provider_value_stops_startup_naming_only_the_key(string provider)
+    {
+        var act = () => BankLinkTestHost.CreateFactoryWithProviderSetting(fixture, provider);
+
+        var thrown = act.Should().Throw<Exception>().Which;
+        var messages = new List<string>();
+        for (Exception? exception = thrown; exception is not null; exception = exception.InnerException)
+        {
+            messages.Add(exception.Message);
+        }
+
+        messages.Should().Contain(message => message.Contains("Ingestion:Provider"));
+        messages.Should().NotContain(message => message.Contains("NotAProviderSentinel"));
+    }
+
+    private static void AssertHardenedHeaders(HttpResponseMessage response)
+    {
+        response.Headers.CacheControl.Should().NotBeNull();
+        response.Headers.CacheControl!.NoStore.Should().BeTrue();
+        response.Headers.GetValues("Referrer-Policy").Should().ContainSingle().Which.Should().Be("no-referrer");
+    }
 }
 
 /// <summary>A running host wired to a synthetic provider, with helpers that speak the bank link API the way an operator client does.</summary>
@@ -159,6 +307,38 @@ public sealed class BankLinkTestHost : IAsyncDisposable
         return host;
     }
 
+    /// <summary>
+    /// Boots a host whose provider is chosen by the Ingestion:Provider setting. The setting is read while services are
+    /// registered, before the factory's configuration overrides apply, so it is passed as an environment value for the
+    /// duration of startup only.
+    /// </summary>
+    public static async Task<BankLinkTestHost> StartWithProviderSettingAsync(DatabaseFixture fixture, string provider)
+    {
+        var factory = CreateFactoryWithProviderSetting(fixture, provider);
+        var token = await CreateKeyAsync(fixture);
+        var host = new BankLinkTestHost(fixture, factory, token);
+        await host.WaitUntilReadyAsync();
+        return host;
+    }
+
+    /// <summary>Creates the factory with Ingestion:Provider set as an environment value only while the host starts.</summary>
+    public static LedgerWebApplicationFactory CreateFactoryWithProviderSetting(DatabaseFixture fixture, string provider)
+    {
+        const string name = "Ingestion__Provider";
+        Environment.SetEnvironmentVariable(name, provider);
+
+        try
+        {
+            return new LedgerWebApplicationFactory(
+                fixture.ConnectionStringFor("ledger_runtime"),
+                additionalConfiguration: new Dictionary<string, string?> { ["BankLink:RedirectUrl"] = RedirectUrl });
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(name, null);
+        }
+    }
+
     /// <summary>Sends a request to the API port, with the host's key unless told otherwise.</summary>
     public async Task<HttpResponseMessage> SendAsync(HttpMethod method, string path, object? body = null, bool withKey = true)
     {
@@ -202,6 +382,24 @@ public sealed class BankLinkTestHost : IAsyncDisposable
             HttpMethod.Get,
             $"/api/v1/bank/callback?state={Uri.EscapeDataString(state)}&code={Uri.EscapeDataString(code)}",
             withKey: false);
+    }
+
+    /// <summary>Stores a pending authorisation whose lifetime already ended and returns its state.</summary>
+    public async Task<string> StoreExpiredStateAsync()
+    {
+        var optionsBuilder = new DbContextOptionsBuilder<LedgerDbContext>();
+        optionsBuilder.UseNpgsql(_fixture.ConnectionStringFor("ledger_runtime"));
+
+        await using var context = new LedgerDbContext(optionsBuilder.Options);
+        var store = new BankAuthorizationStore(context);
+        var (state, sha256) = LinkStateToken.Generate();
+        var now = DateTimeOffset.UtcNow;
+
+        await store.CreateAsync(
+            new PendingAuthorization(sha256, AuthorizationPurposes.Link, null, "expired-attempt", now.AddHours(-2), now.AddHours(-1)),
+            TestContext.Current.CancellationToken);
+
+        return state;
     }
 
     /// <summary>Returns the key of the most recently created connection.</summary>
