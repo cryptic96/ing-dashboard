@@ -15,6 +15,7 @@ public class SyncOrchestrator(
     IBankConnectionStore connectionStore,
     ILedgerStore ledgerStore,
     ISyncRunStore runStore,
+    IProviderCallStore callStore,
     ISecretProtector secretProtector,
     IOptions<IngestionOptions> options,
     TimeProvider timeProvider,
@@ -96,8 +97,12 @@ public class SyncOrchestrator(
         var items = new List<ProviderTransaction>();
         var complete = false;
         var accountRef = new ProviderAccountRef(sessionId, account.ProviderAccountUid);
+        var meteredContext = context with
+        {
+            Meter = new ProviderCallMeter(account.AccountId, runId, context.IsBackground, callStore, timeProvider)
+        };
 
-        await foreach (var page in provider.GetTransactionsAsync(accountRef, query, context, cancellationToken))
+        await foreach (var page in provider.GetTransactionsAsync(accountRef, query, meteredContext, cancellationToken))
         {
             progress.CallsMade++;
             items.AddRange(page.Transactions);

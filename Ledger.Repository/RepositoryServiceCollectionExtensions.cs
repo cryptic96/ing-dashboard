@@ -26,6 +26,7 @@ public static class RepositoryServiceCollectionExtensions
         services.AddScoped<IBankAuthorizationStore, BankAuthorizationStore>();
         services.AddScoped<ILedgerStore, LedgerStore>();
         services.AddScoped<ISyncRunStore, SyncRunStore>();
+        services.AddScoped<IProviderCallStore, ProviderCallStore>();
 
         return services;
     }
