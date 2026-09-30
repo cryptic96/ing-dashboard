@@ -101,6 +101,21 @@ public class SyntheticBankScenario
         }
     }
 
+    /// <summary>Removes the transaction at the given feed position, as a bank does when it stops reporting a pending item.</summary>
+    public void Remove(SyntheticAccount account, int index)
+    {
+        lock (_gate)
+        {
+            account.Transactions.RemoveAt(index);
+        }
+    }
+
+    /// <summary>Returns a copy of the transaction carrying another entry reference, or none, as a bank does when it re-identifies a payment.</summary>
+    public ProviderTransaction WithReference(ProviderTransaction item, string? entryReference)
+    {
+        return item with { EntryReference = entryReference };
+    }
+
     /// <summary>Sets the balances the account reports.</summary>
     public void SetBalances(SyntheticAccount account, IReadOnlyList<ProviderBalance> balances)
     {
