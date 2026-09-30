@@ -85,7 +85,7 @@ Plans:
   4. Both partners can open a Grafana dashboard showing sync status and recent transactions per account, in English or Dutch; both language versions are generated from one source. The dashboard reads through the SELECT-only reporting role, and the database rejects a write query attempted with that role.
   5. The bank connection is read-only, and no code path can initiate a payment. A synthetic test provider can feed the same pipeline with no changes outside ingestion.
 
-**Plans**: 7/15 plans executed
+**Plans**: 8/15 plans executed
 
 Plans:
 **Wave 1**
@@ -110,7 +110,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 02-09-PLAN.md — Daily balance snapshots and to-the-cent balance reconciliation
+- [x] 02-09-PLAN.md — Daily balance snapshots and to-the-cent balance reconciliation
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
@@ -215,7 +215,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Secure Platform & Release Pipeline | 12/12 | Complete    | 2026-09-29 |
-| 2. Automatic ING Sync | 7/15 | In Progress|  |
+| 2. Automatic ING Sync | 8/15 | In Progress|  |
 | 3. Claude Reads the Ledger | 0/TBD | Not started | - |
 | 4. Trustworthy Categorisation | 0/TBD | Not started | - |
 | 5. Budgets, Goals & Forecast | 0/TBD | Not started | - |
