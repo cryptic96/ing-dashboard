@@ -88,6 +88,22 @@ public class DatabaseRoleTests(DatabaseFixture fixture)
 
     [Fact]
     [Trait("Category", "DatabaseRoles")]
+    public async Task Runtime_role_can_only_append_to_the_balance_snapshots()
+    {
+        await AssertDeniedAsync("ledger_runtime", "UPDATE public.balance_snapshots SET amount = amount", "42501");
+        await AssertDeniedAsync("ledger_runtime", "DELETE FROM public.balance_snapshots", "42501");
+        await AssertDeniedAsync("ledger_runtime", "TRUNCATE public.balance_snapshots", "42501");
+
+        var granted = await QueryNamesAsync("""
+            SELECT 'insert' WHERE has_table_privilege('ledger_runtime', 'public.balance_snapshots', 'INSERT')
+            UNION ALL
+            SELECT 'select' WHERE has_table_privilege('ledger_runtime', 'public.balance_snapshots', 'SELECT')
+            """);
+        granted.Should().BeEquivalentTo(["insert", "select"]);
+    }
+
+    [Fact]
+    [Trait("Category", "DatabaseRoles")]
     public async Task Grafana_reader_has_only_select_on_every_reporting_object_and_nothing_in_public()
     {
         var writable = await QueryNamesAsync("""
