@@ -58,7 +58,7 @@ public static class TransactionReconciler
             updates.Add(new PlannedUpdate(state.Id, item, upgrade));
         }
 
-        return new ReconciliationPlan(inserts, updates);
+        return new ReconciliationPlan(inserts, updates, [], [], []);
     }
 
     private static Dictionary<string, LedgerTransactionState> IndexByReference(IReadOnlyList<LedgerTransactionState> existing)

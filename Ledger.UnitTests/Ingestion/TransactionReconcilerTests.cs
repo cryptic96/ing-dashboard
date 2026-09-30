@@ -216,6 +216,193 @@ public class TransactionReconcilerTests
         TextNormalizer.ForMatching(null).Should().BeNull();
     }
 
+    private static readonly DateOnly Day = new(2026, 9, 20);
+
+    [Fact]
+    public void Booked_item_with_a_new_reference_merges_into_the_single_certain_pending_row()
+    {
+        var pending = PendingState("er:A", Day);
+        var booked = BookedItem("B", Day.AddDays(2));
+
+        var plan = TransactionReconciler.Plan([pending], [booked], Coverage, Options);
+
+        plan.Inserts.Should().BeEmpty();
+        plan.FlagAmbiguous.Should().BeEmpty();
+        plan.Merges.Should().ContainSingle()
+            .Which.Should().Be(new PlannedMerge(pending.Id, booked, "er:B"));
+    }
+
+    [Theory]
+    [InlineData(0, true)]
+    [InlineData(5, true)]
+    [InlineData(6, false)]
+    [InlineData(-5, true)]
+    [InlineData(-6, false)]
+    public void Match_window_is_inclusive_at_five_days_and_closed_at_six(int offsetDays, bool merges)
+    {
+        var pending = PendingState("er:A", Day);
+        var booked = BookedItem("B", Day.AddDays(offsetDays));
+
+        var plan = TransactionReconciler.Plan([pending], [booked], Coverage, Options);
+
+        plan.Merges.Should().HaveCount(merges ? 1 : 0);
+        plan.Inserts.Should().HaveCount(merges ? 0 : 1);
+        plan.FlagAmbiguous.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Two_pending_candidates_for_one_booked_item_are_flagged_and_nothing_merges()
+    {
+        var first = PendingState("er:A1", Day);
+        var second = PendingState("er:A2", Day.AddDays(1));
+        var booked = BookedItem("B", Day.AddDays(2));
+
+        var plan = TransactionReconciler.Plan([first, second], [booked], Coverage, Options);
+
+        plan.Merges.Should().BeEmpty();
+        plan.Inserts.Should().ContainSingle().Which.Flag.Should().Be(MatchFlag.None);
+        plan.FlagAmbiguous.Should().BeEquivalentTo([first.Id, second.Id]);
+    }
+
+    [Fact]
+    public void One_pending_candidate_for_two_booked_items_is_flagged_and_both_items_are_inserted()
+    {
+        var pending = PendingState("er:A", Day);
+        var firstBooked = BookedItem("B1", Day.AddDays(1));
+        var secondBooked = BookedItem("B2", Day.AddDays(2));
+
+        var plan = TransactionReconciler.Plan([pending], [firstBooked, secondBooked], Coverage, Options);
+
+        plan.Merges.Should().BeEmpty();
+        plan.Inserts.Should().HaveCount(2);
+        plan.FlagAmbiguous.Should().ContainSingle().Which.Should().Be(pending.Id);
+    }
+
+    [Fact]
+    public void Pending_candidate_without_a_counterparty_is_flagged_and_never_merged()
+    {
+        var pending = PendingState("er:A", Day, counterparty: null);
+        var booked = BookedItem("B", Day.AddDays(1));
+
+        var plan = TransactionReconciler.Plan([pending], [booked], Coverage, Options);
+
+        plan.Merges.Should().BeEmpty();
+        plan.Inserts.Should().ContainSingle();
+        plan.FlagAmbiguous.Should().ContainSingle().Which.Should().Be(pending.Id);
+    }
+
+    [Fact]
+    public void Booked_item_without_a_counterparty_is_flagged_against_a_pending_candidate_and_never_merged()
+    {
+        var pending = PendingState("er:A", Day);
+        var booked = BookedItem("B", Day.AddDays(1), counterparty: null);
+
+        var plan = TransactionReconciler.Plan([pending], [booked], Coverage, Options);
+
+        plan.Merges.Should().BeEmpty();
+        plan.Inserts.Should().ContainSingle();
+        plan.FlagAmbiguous.Should().ContainSingle().Which.Should().Be(pending.Id);
+    }
+
+    [Fact]
+    public void Different_currency_or_amount_or_counterparty_is_no_candidate_at_all()
+    {
+        var pending = PendingState("er:A", Day);
+
+        var otherCurrency = TransactionReconciler.Plan([pending], [BookedItem("B", Day, currency: "USD")], Coverage, Options);
+        var otherAmount = TransactionReconciler.Plan([pending], [BookedItem("C", Day, amount: -12.51m)], Coverage, Options);
+        var otherCounterparty = TransactionReconciler.Plan([pending], [BookedItem("D", Day, counterparty: "Example Bakery")], Coverage, Options);
+
+        foreach (var plan in new[] { otherCurrency, otherAmount, otherCounterparty })
+        {
+            plan.Merges.Should().BeEmpty();
+            plan.FlagAmbiguous.Should().BeEmpty();
+            plan.Inserts.Should().ContainSingle();
+        }
+    }
+
+    [Fact]
+    public void Counterparty_comparison_ignores_case_and_spacing()
+    {
+        var pending = PendingState("er:A", Day, counterparty: "Example Grocer");
+        var booked = BookedItem("B", Day, counterparty: "  example   GROCER ");
+
+        var plan = TransactionReconciler.Plan([pending], [booked], Coverage, Options);
+
+        plan.Merges.Should().ContainSingle();
+    }
+
+    [Fact]
+    public void Pending_row_resolved_by_its_own_reference_is_never_a_merge_candidate()
+    {
+        var pending = PendingState("er:A", Day);
+        var stillPending = BookedItem("A", Day, status: ProviderTransactionStatus.Pending);
+        var booked = BookedItem("B", Day.AddDays(1));
+
+        var plan = TransactionReconciler.Plan([pending], [stillPending, booked], Coverage, Options);
+
+        plan.Merges.Should().BeEmpty();
+        plan.FlagAmbiguous.Should().BeEmpty();
+        plan.Inserts.Should().ContainSingle();
+    }
+
+    [Fact]
+    public void Identical_booked_items_without_references_never_merge_with_each_other()
+    {
+        var first = BookedItem(null, Day);
+        var second = BookedItem(null, Day);
+
+        var plan = TransactionReconciler.Plan([], [first, second], Coverage, Options);
+
+        plan.Merges.Should().BeEmpty();
+        plan.Inserts.Should().HaveCount(2);
+        plan.Inserts.Select(insert => insert.Ref).Distinct().Should().HaveCount(2);
+    }
+
+    private static ProviderTransaction BookedItem(
+        string? entryReference,
+        DateOnly date,
+        ProviderTransactionStatus status = ProviderTransactionStatus.Booked,
+        decimal amount = -12.50m,
+        string currency = "EUR",
+        string? counterparty = "Example Grocer")
+    {
+        return new ProviderTransaction(
+            entryReference,
+            status,
+            amount,
+            currency,
+            status == ProviderTransactionStatus.Booked ? date : null,
+            status == ProviderTransactionStatus.Booked ? date : null,
+            date,
+            counterparty,
+            counterparty is null ? null : "XX00SYNT0000000001",
+            "Groceries",
+            "{}");
+    }
+
+    private static LedgerTransactionState PendingState(
+        string reference,
+        DateOnly transactionDate,
+        string? counterparty = "Example Grocer",
+        decimal amount = -12.50m,
+        string currency = "EUR")
+    {
+        return new LedgerTransactionState(
+            Guid.CreateVersion7(),
+            LedgerTransactionStatus.Pending,
+            [reference],
+            amount,
+            currency,
+            null,
+            null,
+            transactionDate,
+            counterparty,
+            "Groceries",
+            MatchFlag.None,
+            new DateTimeOffset(2026, 9, 20, 6, 30, 0, TimeSpan.Zero));
+    }
+
     private static ProviderTransaction Item(
         string? entryReference,
         ProviderTransactionStatus status = ProviderTransactionStatus.Booked,
