@@ -43,6 +43,8 @@ Both entries list the psu types business and personal. ING therefore requires th
 | initial, longest strategy, with PSU header, minutes after authorisation | first account | 25, all HTTP 200 (100 per page, last page 71) | 2471 | 2024-09-30 | 2026-09-30 |
 | initial, longest strategy, with PSU header, minutes after authorisation | second account | 11, all HTTP 200 | 1009 | 2024-09-30 | 2026-09-29 |
 | after-2h | both | not captured | not captured | not captured | not captured |
+| next-morning, longest strategy, no PSU header, about 12 hours after authorisation | first account | 7, all HTTP 200 (per page 0, 0, 0, 0, 100, 100, 77) | 277 | 2026-07-03 | 2026-10-01 |
+| next-morning, longest strategy, no PSU header, about 12 hours after authorisation | second account | 6, all HTTP 200 (per page 0, 0, 0, 0, 100, 41) | 141 | 2026-07-03 | 2026-09-29 |
 
 Findings:
 
@@ -51,7 +53,11 @@ Findings:
 - Every transaction carries an entry reference. The transaction id field is absent on all of them, so the entry reference is the only provider-supplied identifier available for deduplication.
 - Every transaction had status BOOK (booked). See "Pending transactions so far".
 - Amount strings carry at most 2 decimals, none is negative (direction comes from the credit or debit indicator), currency EUR throughout.
-- The "after-2h" capture, which would show whether full history is still available more than one hour after authorisation, could not be made two hours after authentication. It is replaced by a next-morning capture (see below).
+- The "after-2h" capture could not be made two hours after authentication. It was replaced by a next-morning capture at 2026-10-01 07:52 UTC, about 12 hours after authorisation.
+- **Full history is only available right after authorisation.** The next-morning longest capture reached back only to 2026-07-03 (90 days) on both accounts, against 24 months in the initial capture. ING applies the usual rule: more than 90 days of history only shortly after strong customer authentication. The ledger's post-link sync must therefore fetch the full history immediately after linking (and after each renewal if a gap ever needs filling); a later sync can never recover it.
+- **Header-less calls were admitted.** All 15 next-morning calls (2 balances, 13 transaction pages) were sent without the PSU IP header and every one returned HTTP 200, with no rate-limit error. Either transaction pages are not counted one by one against ING's background quota, or the quota is higher than four per account per day. The quota probe settles which.
+- **Leading empty pages.** Under the longest strategy without the header, both accounts first returned four empty pages that still carried a continuation key, then the data. If the daily window (10 days) shows the same, one scheduled sync costs several calls, which matters for the ledger's per-account call budget (it counts every page).
+- A transaction booked on the capture day (2026-10-01) was already present as booked on the first account. Still no pending items.
 
 ## Balance types
 
@@ -89,7 +95,8 @@ Labels and dates only. All captures are age-encrypted files in the operator's wo
 | 2026-09-30 | initial | first account: balances plus 25 transaction pages, longest strategy, with PSU header | 26 |
 | 2026-09-30 | initial | second account: balances plus 11 transaction pages, longest strategy, with PSU header | 12 |
 | not done | after-2h | longest capture two hours after authorisation | 0 |
-| pending | next-morning | longest capture without PSU header, see below | not yet |
+| 2026-10-01 | next-morning | first account: balances plus 7 transaction pages, longest strategy, no PSU header | 8 |
+| 2026-10-01 | next-morning | second account: balances plus 6 transaction pages, longest strategy, no PSU header | 7 |
 | pending | day-N | daily captures without the longest strategy | not yet |
 
 ## Security notes
@@ -99,12 +106,12 @@ Labels and dates only. All captures are age-encrypted files in the operator's wo
 
 ## Open questions for the spike completion
 
-1. **Next-morning capture.** The operator runs `capture next-morning --longest` without `--psu`. It answers two things: is full history still available more than one hour after authorisation, and is a call without the PSU IP header admitted as a background call. Replaces the missed after-2h capture.
+1. **Next-morning capture.** Done on 2026-10-01: history beyond 90 days is only available right after authorisation, and header-less calls are admitted (15 of 15 returned HTTP 200). See "History depth".
 2. **Daily pending captures.** On at least three mornings, after a card purchase and an iDEAL payment the day before, run `capture day-N` (no longest strategy). Needed to see whether ING exposes pending items, their reference presence and booking date presence, and how pending items turn into booked ones. The initial capture had none.
-3. **Rate-limit quota probe.** The real background-call quota (commonly about four per day per account) has not been probed. The next-morning and daily captures count towards it; plan the probe so it does not trigger a limit error on the day the server first syncs.
+3. **Rate-limit quota probe.** The real background-call quota has not been probed. The next-morning capture made 8 and 7 header-less calls per account without a rate-limit error, so either pages are not counted individually or the quota is above four. The probe must establish what counts as a call, because the ledger's call budget (default 4 per account, every page counted) would refuse a sync that ING itself admits, especially if the daily window also returns leading empty pages.
 4. **Balance types and reconciliation.** ING returns only XPCD without a reference date. Decide for the adapter whether reconciliation maps XPCD to a usable balance (with a documented, weaker meaning), compares against the booked running total instead, or reports unknown for ING. This changes the reconciliation defaults and the adapter plan.
 5. **Two joint accounts.** Both accounts will be synced, and transfers between them appear on both. Categorisation needs an internal-transfer rule, and deduplication must stay per account so the two sides of a transfer are not collapsed.
-6. **History window.** Confirm whether the 24-month earliest date is a fixed window (for example by comparing the next-morning capture's earliest date with the initial one) before the first server sync relies on it.
+6. **History window.** Answered in part: outside the window right after authorisation ING returns 90 days. Whether the 24-month depth right after authorisation is a fixed window still needs no action, since the post-link sync takes whatever is offered.
 7. **Consent renewal and control panel link.** Confirm that the Control Panel link persists across renewals and that a renewal also grants the full advertised validity.
 8. **Deletion of old server backups.** Existing server backups made with the previous backup key hold no bank data and are to be deleted once a backup under the new key has succeeded (operator decision pending).
 9. **Spike teardown.** When the spike ends, run `revoke`, delete the spike key and confirm the session is closed.
