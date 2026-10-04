@@ -69,6 +69,8 @@ Impact: the balance reconciliation was built with closed-booked and interim-book
 
 ## Pending transactions so far
 
+Day-1 capture (2026-10-04 10:45 UTC, Sunday, 10-day window, no PSU header): one page per account, all HTTP 200, 47 and 16 transactions, every one booked (BOOK), entry reference on all, no transaction id, booking dates 2026-09-24 to 2026-10-03 and 2026-10-04. Still no pending item on either account. The 10-day window returned no leading empty pages: one balances call and one transaction page per account, so a normal daily sync costs two calls per account.
+
 None. The initial capture held only booked transactions (status BOOK: 2471 on the first account, 1009 on the second; no pending items on either). The daily captures will show whether ING exposes pending items at all, and if so how a pending item relates to its later booked version (reference presence, booking date on pending items).
 
 ## Key format accepted
@@ -97,7 +99,9 @@ Labels and dates only. All captures are age-encrypted files in the operator's wo
 | not done | after-2h | longest capture two hours after authorisation | 0 |
 | 2026-10-01 | next-morning | first account: balances plus 7 transaction pages, longest strategy, no PSU header | 8 |
 | 2026-10-01 | next-morning | second account: balances plus 6 transaction pages, longest strategy, no PSU header | 7 |
-| pending | day-N | daily captures without the longest strategy | not yet |
+| 2026-10-04 | day-1 | first account: balances plus 1 transaction page, 10-day window, no PSU header | 2 |
+| 2026-10-04 | day-1 | second account: balances plus 1 transaction page, 10-day window, no PSU header | 2 |
+| pending | day-2, day-3 | further daily captures without the longest strategy | not yet |
 
 ## Security notes
 
