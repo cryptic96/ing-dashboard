@@ -71,6 +71,8 @@ Impact: the balance reconciliation was built with closed-booked and interim-book
 
 Day-1 capture (2026-10-04 10:45 UTC, Sunday, 10-day window, no PSU header): one page per account, all HTTP 200, 47 and 16 transactions, every one booked (BOOK), entry reference on all, no transaction id, booking dates 2026-09-24 to 2026-10-03 and 2026-10-04. Still no pending item on either account. The 10-day window returned no leading empty pages: one balances call and one transaction page per account, so a normal daily sync costs two calls per account.
 
+Operator observation for day-1: an iDEAL payment was made on Friday and a card payment (mobile wallet) on Saturday. In the ING app the Saturday card payment already shows as processed, not pending. Card payments therefore book within a day, and the API shows no pending state for them. This points to the adapter treating ING transactions as booked-only. Day-2 and day-3 on weekdays should confirm it.
+
 None. The initial capture held only booked transactions (status BOOK: 2471 on the first account, 1009 on the second; no pending items on either). The daily captures will show whether ING exposes pending items at all, and if so how a pending item relates to its later booked version (reference presence, booking date on pending items).
 
 ## Key format accepted
