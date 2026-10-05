@@ -179,9 +179,36 @@ if [ ! -f "$PROMETHEUS_YML" ]; then
   exit 1
 fi
 
+ALERTING_DIR="$PROVISIONING_DIR/alerting"
+HOUSEHOLD_RULES="$ALERTING_DIR/household-rules.yaml"
+SYNC_METRICS_SOURCE="$REPO_ROOT/Ledger.Service/Metrics/SyncMetrics.cs"
+
+echo "Asserting no alert rule file contains a template marker"
+for rule_file in "$ALERTING_DIR"/*.yaml; do
+  if grep -qF '{{' "$rule_file"; then
+    echo "$rule_file contains a template marker; alert text must not interpolate anything" >&2
+    status=1
+  fi
+done
+
+echo "Asserting every metric the household rules query exists in the application's metrics code"
+household_metrics="$(grep -oE 'ledger_[a-z_]+' "$HOUSEHOLD_RULES" | sort -u || true)"
+if [ -z "$household_metrics" ]; then
+  echo "no ledger_ metric names found in $HOUSEHOLD_RULES" >&2
+  status=1
+fi
+for metric in $household_metrics; do
+  if ! grep -qF "\"$metric\"" "$SYNC_METRICS_SOURCE"; then
+    echo "household rules query $metric, which $SYNC_METRICS_SOURCE does not define" >&2
+    status=1
+  fi
+done
+
 # Boot the real, digest-pinned Grafana image with the repository's own
-# grafana.ini and provisioning directory, mounted read-only exactly as
-# compose.yaml already does for the whole repo. GF_SERVER_ENFORCE_DOMAIN is
+# grafana.ini, with the repository provisioning tree mounted read-only at
+# /etc/grafana/provisioning exactly where the installer puts it, so the
+# dashboard provider path resolves as it does on the host. The repository is
+# mounted as compose.yaml already does. GF_SERVER_ENFORCE_DOMAIN is
 # relaxed only for this ephemeral, loopback-published container so curl can
 # reach it by IP; the shipped grafana.ini itself still has enforce_domain
 # true, which is what the assertions above already checked.
@@ -209,7 +236,8 @@ GRAFANA_CID="$($LINT_COMPOSE -d \
   -e GF_SERVER_ENFORCE_DOMAIN=false \
   -e LEDGER_ALERT_EMAIL=alerts@example.com \
   -e GF_PATHS_CONFIG=/repo/deploy/provisioning/grafana/grafana.ini \
-  -e GF_PATHS_PROVISIONING=/repo/deploy/provisioning/grafana/provisioning \
+  -v "$PROVISIONING_DIR:/etc/grafana/provisioning:ro" \
+  -e GF_PATHS_PROVISIONING=/etc/grafana/provisioning \
   --entrypoint /run.sh \
   grafana)"
 
@@ -262,9 +290,35 @@ for uid in ledger-reporting prometheus; do
 done
 
 alert_rules_json="$(curl -s -u "admin:${ADMIN_PASSWORD}" "$BASE_URL/api/v1/provisioning/alert-rules")"
-alert_rule_count="$(grep -oE '"uid":"ledger-[a-z-]+"' <<<"$(tr -d ' \n' <<<"$alert_rules_json")" | sort -u | wc -l)"
-if [ "$alert_rule_count" -ne 8 ]; then
-  echo "expected 8 provisioned alert rule uids, found $alert_rule_count" >&2
+alert_rule_uids="$(grep -oE '"uid":"ledger-[a-z0-9-]+"' <<<"$(tr -d ' \n' <<<"$alert_rules_json")" | sort -u)"
+alert_rule_count="$(grep -c . <<<"$alert_rule_uids" || true)"
+if [ "$alert_rule_count" -ne 16 ]; then
+  echo "expected 16 provisioned alert rule uids, found $alert_rule_count" >&2
+  status=1
+fi
+
+household_uids=(
+  ledger-bank-sync-failing
+  ledger-bank-sync-rate-limited
+  ledger-bank-consent-rejected
+  ledger-bank-sync-stale
+  ledger-bank-consent-expiring-14d
+  ledger-bank-consent-expiring-7d
+  ledger-bank-consent-expired
+  ledger-balance-not-reconciled
+)
+for uid in "${household_uids[@]}"; do
+  if ! grep -qF "\"uid\":\"${uid}\"" <<<"$alert_rule_uids"; then
+    echo "household alert rule uid $uid is not provisioned" >&2
+    status=1
+  fi
+done
+
+policies_json="$(tr -d ' \n' <<<"$(curl -s -u "admin:${ADMIN_PASSWORD}" "$BASE_URL/api/v1/provisioning/policies")")"
+if ! grep -q '"grafana_folder","=","Household"' <<<"$policies_json" \
+  || ! grep -q '"repeat_interval":"1d"' <<<"$policies_json" \
+  || ! grep -q '"repeat_interval":"12h"' <<<"$policies_json"; then
+  echo "notification policy does not hold the 12h root route and the daily Household child route" >&2
   status=1
 fi
 
@@ -273,5 +327,20 @@ if ! grep -q "operator-email" <<<"$contact_points_json"; then
   echo "contact point operator-email not found in /api/v1/provisioning/contact-points" >&2
   status=1
 fi
+
+echo "Asserting provisioned dashboards"
+dashboards_json="$(tr -d ' \n' <<<"$(curl -s -u "admin:${ADMIN_PASSWORD}" "$BASE_URL/api/search?type=dash-db")")"
+for uid in ledger-sync-en ledger-sync-nl; do
+  if ! grep -qE "\"uid\":\"${uid}\"[^}]*\"folderTitle\":\"HouseholdLedger\"|\"folderTitle\":\"HouseholdLedger\"[^}]*\"uid\":\"${uid}\"" <<<"$dashboards_json"; then
+    echo "dashboard uid $uid is not listed in the Household Ledger folder" >&2
+    status=1
+  fi
+
+  dashboard_json="$(tr -d ' \n' <<<"$(curl -s -u "admin:${ADMIN_PASSWORD}" "$BASE_URL/api/dashboards/uid/${uid}")")"
+  if ! grep -q '"provisioned":true' <<<"$dashboard_json"; then
+    echo "dashboard $uid is not reported as provisioned" >&2
+    status=1
+  fi
+done
 
 exit "$status"

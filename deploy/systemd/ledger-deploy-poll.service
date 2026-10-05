@@ -6,5 +6,19 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 ExecStart=/usr/local/sbin/ledger-deploy poll
+RuntimeDirectory=ledger-deploy
+RuntimeDirectoryPreserve=yes
+
+NoNewPrivileges=yes
 PrivateTmp=yes
+ProtectSystem=strict
 ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+SystemCallArchitectures=native
+ReadWritePaths=/opt/ledger /etc/grafana /etc/prometheus /var/lib/prometheus/node-exporter /var/lib/ledger-deploy -/var/log/msmtp.log

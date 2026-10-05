@@ -1,9 +1,9 @@
 ---
 created: 2026-09-28T22:05:00.000Z
-title: Remove temporary Claude SSH access before real bank data
+title: Remove temporary Claude SSH access before /mcp goes public
 area: security
 severity: major
-resolves_phase: 2
+resolves_phase: 3
 files:
   - deploy/bin/ledger-selfcheck
 ---
@@ -19,9 +19,16 @@ Both use one key, which lives unencrypted on the operator's workstation and is r
 
 The operator chose to keep the access while the project is in development. It must be gone before the automatic bank sync delivers real transactions.
 
+**Update 2026-09-29 (Phase 2 discussion, D-04):** the operator decided to keep the access through the automatic-sync phase, even once real bank data is on the host, to speed up LXC development. Agreed mitigations:
+
+- **During Phase 2:** put a passphrase on the key and load it into `ssh-agent` for sessions, so the key file on the workstation is useless on its own.
+- **Hard removal point:** before `/mcp` goes public in Phase 3, when the host gets its first internet-facing surface.
+
 ## Solution
 
-Before the phase that brings real bank data goes live (the automatic sync):
+Passphrase-protect the key now (`ssh-keygen -p`), then load it with `ssh-add` per session.
+
+Before `/mcp` goes public (Phase 3):
 
 1. On the ledger host: delete the login and its sudoers drop-in.
 2. On the reverse proxy: delete the login and remove its directory ACLs.

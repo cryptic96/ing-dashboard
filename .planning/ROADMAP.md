@@ -13,7 +13,7 @@ The build starts with a secure platform, so no real financial data ever lands on
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Secure Platform & Release Pipeline** - Hardened tag-to-deploy pipeline and a locked-down LXC (app, Prometheus, Grafana) ready to hold financial data
+- [x] **Phase 1: Secure Platform & Release Pipeline** - Hardened tag-to-deploy pipeline and a locked-down LXC (app, Prometheus, Grafana) ready to hold financial data (completed 2026-09-29)
 - [ ] **Phase 2: Automatic ING Sync** - Link ING once; real transactions arrive daily, deduplicated, with consent expiry never silent
 - [ ] **Phase 3: Claude Reads the Ledger** - Claude (desktop, Code, claude.ai web and mobile) answers grounded spending questions over a secured MCP endpoint
 - [ ] **Phase 4: Trustworthy Categorisation** - Rules, review queue and Claude-assisted corrections with audit and undo; category drill-down and history comparison
@@ -85,7 +85,52 @@ Plans:
   4. Both partners can open a Grafana dashboard showing sync status and recent transactions per account, in English or Dutch; both language versions are generated from one source. The dashboard reads through the SELECT-only reporting role, and the database rejects a write query attempted with that role.
   5. The bank connection is read-only, and no code path can initiate a payment. A synthetic test provider can feed the same pipeline with no changes outside ingestion.
 
-**Plans**: TBD
+**Plans**: 15/16 plans executed
+
+Plans:
+**Wave 1**
+
+- [x] 02-01-PLAN.md — Test platform moved to Microsoft.Testing.Platform (xunit.v3 4.x), proven with the DST-safe Amsterdam schedule math
+- [x] 02-02-PLAN.md — Real-consent spike kickoff (operator): encrypted, structure-only spike tool; savings coverage, consent limits, history window; daily captures start; SSH key passphrase
+- [x] 02-03-PLAN.md — Host hardening: selfcheck log secret scan, sandboxed installer unit and apikey wrapper, tzdata, ledger-bank-key for the password-protected aggregator key
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 02-04-PLAN.md — Ingestion core tracer: provider interface, ledger identity model and schema, idempotent apply with raw payloads, orchestrator, synthetic provider, reporting views read as grafana_reader
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 02-05-PLAN.md — Pending-to-booked reconciliation: certain-match merges, unclear-match flags, drops only after complete fetches, restores
+- [x] 02-06-PLAN.md — Dashboard generator (C#, EN/NL from one source), recent-transactions dashboard, provider path fix, drift and read-only tests
+- [x] 02-07-PLAN.md — Guided consent flow over REST: link, one-time-state callback, account selection, consent state, renewal keeping history, revoke
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 02-08-PLAN.md — Daily Amsterdam scheduler with one safe retry, per-account call budget and call ledger, sync now with last-call refusal
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [x] 02-09-PLAN.md — Daily balance snapshots and to-the-cent balance reconciliation
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [x] 02-10-PLAN.md — Operational metrics seeded from the database and household alert rules (operator-only, daily reminder route)
+- [x] 02-11-PLAN.md — Dashboard status row from reporting.account_status (sync, consent, balance, reconciliation, unclear matches)
+- [x] 02-12-PLAN.md — Spike completion (operator): pair analysis, quota probe, spike consent revoked, adapter values chosen
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
+- [x] 02-13-PLAN.md — Enable Banking adapter behind the provider interface: client token, AIS-only outbound allow-list, paging, errors, PSU headers, exact amounts
+- [x] 02-16-PLAN.md — Balance reconciliation on ING's undated expected balance (fetch-time window) and drift flagged only when it persists two snapshots
+
+**Wave 8** *(blocked on Wave 7 completion)*
+
+- [x] 02-14-PLAN.md — Production readiness: replay of real captured pairs through the real code, spike data deleted, bank config validation, log redaction, runbook
+
+**Wave 9** *(blocked on Wave 8 completion)*
+
+- [ ] 02-15-PLAN.md — Go-live: release, sandboxed installer proof, server's aggregator application and key, first real link, next-morning automatic sync
+
 **UI hint**: yes
 **Research flags**: Spike first: confirm with a real consent that Enable Banking's ING NL link includes the savings accounts (Salt Edge is the fallback). Also confirm the aggregator's rate limits and actual consent duration. Validate pending-to-booked reconciliation against real captured transaction pairs kept outside the repository; only synthetic fixtures are committed.
 
@@ -170,8 +215,8 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Secure Platform & Release Pipeline | 12/12 | In Progress|  |
-| 2. Automatic ING Sync | 0/TBD | Not started | - |
+| 1. Secure Platform & Release Pipeline | 12/12 | Complete    | 2026-09-29 |
+| 2. Automatic ING Sync | 15/16 | In Progress|  |
 | 3. Claude Reads the Ledger | 0/TBD | Not started | - |
 | 4. Trustworthy Categorisation | 0/TBD | Not started | - |
 | 5. Budgets, Goals & Forecast | 0/TBD | Not started | - |

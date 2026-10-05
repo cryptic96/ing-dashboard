@@ -51,7 +51,7 @@ jobs:
         run: build/package-release.sh --version 0.0.0 --commit "$GITHUB_SHA" --output artifacts/release
 
       - name: Run tests
-        run: dotnet test Ledger.slnx --no-restore
+        run: dotnet test --solution Ledger.slnx --no-restore
         env:
           ConnectionStrings__TestAdmin: Host=localhost;Port=5432;Username=postgres
           LEDGER_EFBUNDLE: ${{ github.workspace }}/artifacts/release/stage/efbundle

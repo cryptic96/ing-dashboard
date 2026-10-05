@@ -152,8 +152,12 @@ printf 'FAKE-DATABASE-DUMP-CONTENT\n'
 EOF_STUB
 chmod +x "${STUB_BIN}/pg_dump"
 
+# Like the real age, the stub reads its whole input before it exits; a stub
+# that exits first can close the pipe before pg_dump writes, which kills
+# pg_dump with SIGPIPE and makes the success case fail at random.
 cat > "${STUB_BIN}/age" <<'EOF_STUB'
 #!/usr/bin/env bash
+cat > /dev/null
 if [ "${FAKE_AGE_FAIL:-0}" = "1" ]; then
   exit 1
 fi

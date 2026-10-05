@@ -21,7 +21,7 @@ source "${LIB_DIR}/common.sh"
 source "${LIB_DIR}/deploy.sh"
 
 DEPLOY_ROOT="${LEDGER_DEPLOY_ROOT:-}"
-LOCK_PATH="${DEPLOY_ROOT}/run/ledger-deploy.lock"
+LOCK_PATH="${DEPLOY_ROOT}/run/ledger-deploy/deploy.lock"
 DOWNLOAD_DIR="${DEPLOY_ROOT}/var/lib/ledger-deploy/downloads"
 STATE_DIR="${DEPLOY_ROOT}/var/lib/ledger-deploy/state"
 RELEASES_DIR="${DEPLOY_ROOT}/opt/ledger/releases"

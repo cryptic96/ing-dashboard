@@ -1,0 +1,107 @@
+using Ledger.Domain.Banking;
+
+namespace Ledger.Domain.Ingestion;
+
+/// <summary>Stores linked bank connections, their accounts and which accounts the operator chose to sync.</summary>
+public interface IBankConnectionStore
+{
+    /// <summary>
+    /// Records a newly approved connection and its accounts. The session id is stored only in protected form. An account the
+    /// ledger already knows by its stable identification hash keeps its row and its selection.
+    /// </summary>
+    Task<LinkedConnection> AddConnectionAsync(
+        string provider,
+        string aspspName,
+        string aspspCountry,
+        ProviderSession session,
+        string protectedSessionId,
+        DateTimeOffset authorizedAt,
+        CancellationToken cancellationToken);
+
+    /// <summary>Sets the display name and sync flag of accounts of a connection, identified by their opaque keys.</summary>
+    Task SetAccountSelectionAsync(
+        Guid connectionId,
+        IReadOnlyList<AccountSelection> selections,
+        CancellationToken cancellationToken);
+
+    /// <summary>Returns what a sync needs for the connection, or null when the connection does not exist.</summary>
+    Task<SyncTarget?> GetSyncTargetAsync(Guid connectionId, CancellationToken cancellationToken);
+
+    /// <summary>Lists every connection, newest first, without any session material.</summary>
+    Task<IReadOnlyList<ConnectionSummary>> ListConnectionsAsync(CancellationToken cancellationToken);
+
+    /// <summary>Finds a connection by its opaque key, or returns null when there is none.</summary>
+    Task<ConnectionSummary?> FindConnectionAsync(string connectionKey, CancellationToken cancellationToken);
+
+    /// <summary>Lists the accounts currently read through the connection, in creation order.</summary>
+    Task<IReadOnlyList<LinkedAccount>> ListAccountsAsync(Guid connectionId, CancellationToken cancellationToken);
+
+    /// <summary>Returns whether any sync run, finished or not, was ever recorded for the connection.</summary>
+    Task<bool> HasAnySyncRunAsync(Guid connectionId, CancellationToken cancellationToken);
+
+    /// <summary>Returns the protected session id of the connection, or null when the connection does not exist.</summary>
+    Task<string?> GetProtectedSessionIdAsync(Guid connectionId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Replaces a connection's consent with a renewed one in a single database transaction. Accounts the ledger already knows by
+    /// their stable identification hash move to the new connection with their ids, display names and selection intact, accounts
+    /// seen for the first time are recorded unselected, and the old connection becomes superseded. The old session is left
+    /// untouched at the provider.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The connection to replace is revoked, already superseded or unknown.</exception>
+    Task<RenewalResult> ApplyRenewalAsync(
+        Guid supersededConnectionId,
+        string provider,
+        string aspspName,
+        string aspspCountry,
+        ProviderSession session,
+        string protectedSessionId,
+        DateTimeOffset authorizedAt,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Sets the stored status of a connection, recording the closing time for a revoked one. Marking a connection provider-expired
+    /// only applies to an active connection, so a revoked or superseded one is never changed back to expired.
+    /// </summary>
+    Task MarkStatusAsync(Guid connectionId, ConnectionStatus status, DateTimeOffset at, CancellationToken cancellationToken);
+}
+
+/// <summary>What a renewal did: the new connection, how many accounts kept their ledger identity and how many were new.</summary>
+public record RenewalResult(LinkedConnection Connection, int MappedAccounts, int NewAccounts);
+
+/// <summary>A connection as listed to the operator. It carries no session material.</summary>
+public record ConnectionSummary(
+    Guid Id,
+    string ConnectionKey,
+    string Provider,
+    ConnectionStatus Status,
+    DateTimeOffset AuthorizedAt,
+    DateTimeOffset ValidUntil);
+
+/// <summary>A connection as returned after linking.</summary>
+public record LinkedConnection(Guid Id, string ConnectionKey, IReadOnlyList<LinkedAccount> Accounts);
+
+/// <summary>An account of a linked connection, without any secret.</summary>
+public record LinkedAccount(
+    Guid Id,
+    string AccountKey,
+    string? Iban,
+    string? ProviderName,
+    AccountKind Kind,
+    string Currency,
+    string? DisplayName,
+    bool SyncEnabled);
+
+/// <summary>The operator's choice for one account.</summary>
+public record AccountSelection(string AccountKey, string? DisplayName, bool SyncEnabled);
+
+/// <summary>Everything a sync run needs to know about one connection.</summary>
+public record SyncTarget(
+    Guid ConnectionId,
+    string ConnectionKey,
+    string Provider,
+    string ProtectedSessionId,
+    IReadOnlyList<SyncAccount> Accounts);
+
+/// <summary>A selected account to sync, with the provider's current identifier for it.</summary>
+public record SyncAccount(Guid AccountId, string AccountKey, string ProviderAccountUid);

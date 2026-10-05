@@ -1,0 +1,341 @@
+{
+  "uid": "ledger-sync-nl",
+  "title": "Banksynchronisatie",
+  "tags": [
+    "household-ledger",
+    "nl"
+  ],
+  "editable": false,
+  "schemaVersion": 41,
+  "timezone": "Europe/Amsterdam",
+  "time": {
+    "from": "now-30d",
+    "to": "now"
+  },
+  "links": [
+    {
+      "title": "English",
+      "type": "link",
+      "url": "/d/ledger-sync-en"
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "account",
+        "label": "Rekening",
+        "type": "query",
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "ledger-reporting"
+        },
+        "query": "SELECT display_name AS __text, account_key AS __value FROM reporting.accounts ORDER BY display_name, account_key",
+        "refresh": 1,
+        "multi": true,
+        "includeAll": true,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "table",
+      "title": "Synchronisatiestatus",
+      "description": "Eén rij per gekozen rekening: wanneer er voor het laatst gegevens binnenkwamen, hoeveel dagen de toestemming van de bank nog loopt, het laatste saldo en of dat aansluit op de transacties, en hoeveel transacties in behandeling een onduidelijke koppeling hebben.",
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "ledger-reporting"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "ledger-reporting"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT account_name, last_success_at, consent_state, consent_days_left, balance_amount, balance_currency, balance_date, balance_reconciled, flagged_count\nFROM reporting.account_status\nWHERE account_key IN (${account:sqlstring})\nORDER BY account_name, account_key",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Toestemming"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "expired": {
+                        "text": "Verlopen",
+                        "color": "red",
+                        "index": 2
+                      },
+                      "expiring": {
+                        "text": "Verloopt binnenkort",
+                        "color": "orange",
+                        "index": 1
+                      },
+                      "linked": {
+                        "text": "Gekoppeld",
+                        "color": "green",
+                        "index": 0
+                      },
+                      "revoked": {
+                        "text": "Ingetrokken",
+                        "color": "red",
+                        "index": 3
+                      },
+                      "superseded": {
+                        "text": "Vervangen",
+                        "color": "blue",
+                        "index": 4
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Saldo"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Sluit aan"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "no": {
+                        "text": "Sluit niet aan",
+                        "color": "red",
+                        "index": 1
+                      },
+                      "unknown": {
+                        "text": "Onbekend",
+                        "color": "orange",
+                        "index": 2
+                      },
+                      "yes": {
+                        "text": "Sluit aan",
+                        "color": "green",
+                        "index": 0
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Onduidelijke koppelingen"
+            },
+            "properties": [
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green"
+                    },
+                    {
+                      "color": "red",
+                      "value": 1
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "account_name": "Rekening",
+              "balance_amount": "Saldo",
+              "balance_currency": "Valuta",
+              "balance_date": "Saldodatum",
+              "balance_reconciled": "Sluit aan",
+              "consent_days_left": "Dagen resterend",
+              "consent_state": "Toestemming",
+              "flagged_count": "Onduidelijke koppelingen",
+              "last_success_at": "Laatste geslaagde synchronisatie"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "table",
+      "title": "Recente transacties",
+      "description": "Toont maximaal 500 transacties, de nieuwste eerst, voor de gekozen rekeningen en periode. Kies een smallere periode om oudere transacties te bereiken.",
+      "gridPos": {
+        "h": 16,
+        "w": 24,
+        "x": 0,
+        "y": 6
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "ledger-reporting"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "ledger-reporting"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT effective_date, account_name, amount, currency, counterparty_name, description, status, match_flag\nFROM reporting.transactions\nWHERE account_key IN (${account:sqlstring}) AND $__timeFilter(effective_at)\nORDER BY effective_date DESC, first_seen_at DESC, transaction_id DESC\nLIMIT 500",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 2
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Status"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "booked": {
+                        "text": "Verwerkt",
+                        "index": 1
+                      },
+                      "pending": {
+                        "text": "In behandeling",
+                        "color": "orange",
+                        "index": 0
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Koppeling"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "ambiguous": {
+                        "text": "Onduidelijke koppeling",
+                        "color": "red",
+                        "index": 0
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "account_name": "Rekening",
+              "amount": "Bedrag",
+              "counterparty_name": "Tegenpartij",
+              "currency": "Valuta",
+              "description": "Omschrijving",
+              "effective_date": "Datum",
+              "match_flag": "Koppeling",
+              "status": "Status"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -166,8 +166,9 @@ ledger-selfcheck --grafana-admin --restart-check
 
 This proves the running container end to end: services and timers,
 PostgreSQL's socket-only and per-role isolation, file permissions,
-secrets hygiene (no GitHub credential, no stored backup identity), the
-firewall, the app's health and authentication, backup freshness, Grafana's
+secrets hygiene (no GitHub credential, no stored backup identity, no
+secret-shaped text in the journal or `/var/log`), the bank key file's
+permissions, the Amsterdam time zone data, the firewall, the app's health and authentication, backup freshness, Grafana's
 lockdown and account roles, and every Prometheus target. `--restart-check`
 also restarts the application and requires it to stay healthy, proving the
 Data Protection key ring survives a restart.
@@ -218,6 +219,52 @@ never overwrites the Data Protection certificate, the application
 environment file, or the backup recipients file once they exist, and it
 only re-runs the Grafana account setup when explicitly asked with
 `--only 60-grafana-accounts`.
+
+## Bank link key
+
+The application reads bank transactions through an account-information
+aggregator. The aggregator identifies the application by a private key that
+signs each request, so the key has to exist on the container before the bank
+accounts can be linked. It is generated on the container itself and never
+travels.
+
+Run these as root on the container:
+
+```bash
+ledger-bank-key generate
+ledger-bank-key show-certificate
+ledger-bank-key configure --application-id 00000000-0000-0000-0000-000000000000 \
+  --redirect-url https://ledger.example.com/api/v1/bank/callback
+```
+
+- `generate` creates a 4096-bit RSA key protected by a random password, a
+  ten-year self-signed certificate and the matching public key. It prints
+  the certificate and the public key, never the password, and refuses to
+  run when a key already exists, so an existing key is never overwritten.
+- `show-certificate` prints the certificate and the public key again. The
+  certificate (or the public key, depending on what the aggregator's control
+  panel asks for) is what you upload there when registering the application.
+  The private key is never uploaded.
+- `configure` validates and stores the application id the control panel
+  shows, selects the aggregator as the transaction source and stores the
+  callback URL. The URL must be `https` and end in `/api/v1/bank/callback`
+  on the hostname the API is reached through. Restart the application
+  afterwards with `systemctl restart ledger.service`.
+
+The files live in `/etc/ledger`:
+
+| File | Mode | Content |
+| --- | --- | --- |
+| `enablebanking-key.pem` | 640, `root:ledger` | the password-protected private key |
+| `enablebanking-cert.pem` | 644 | the certificate |
+| `enablebanking-public.pem` | 644 | the public key |
+
+The key's password is written to `/etc/ledger/ledger.env` next to the key's
+path. Copy the key file and the env file into the password manager right
+after generating them, exactly like the Data Protection certificate in step
+4: database backups never contain either, on purpose. `ledger-selfcheck`
+checks the key file's mode and owner and looks for the key, its password and
+every other secret shape in the journal and under `/var/log`.
 
 ## What this guide never does
 

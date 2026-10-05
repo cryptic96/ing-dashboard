@@ -19,6 +19,7 @@ public class LedgerWebApplicationFactory : WebApplicationFactory<Program>
     private readonly string _ledgerConnectionString;
     private readonly string? _contentRootOverride;
     private readonly Action<IServiceCollection>? _configureTestServices;
+    private readonly IReadOnlyDictionary<string, string?>? _additionalConfiguration;
     private readonly CapturingLoggerProvider _loggerProvider = new();
     private IHost? _realHost;
 
@@ -28,11 +29,13 @@ public class LedgerWebApplicationFactory : WebApplicationFactory<Program>
         string? contentRootOverride = null,
         string? certificatePath = null,
         string? certificatePassword = null,
-        Action<IServiceCollection>? configureTestServices = null)
+        Action<IServiceCollection>? configureTestServices = null,
+        IReadOnlyDictionary<string, string?>? additionalConfiguration = null)
     {
         _ledgerConnectionString = ledgerConnectionString;
         _contentRootOverride = contentRootOverride;
         _configureTestServices = configureTestServices;
+        _additionalConfiguration = additionalConfiguration;
         ApiPort = GetFreeLoopbackPort();
         OpsPort = GetFreeLoopbackPort();
 
@@ -72,8 +75,14 @@ public class LedgerWebApplicationFactory : WebApplicationFactory<Program>
             {
                 ["ConnectionStrings:Ledger"] = _ledgerConnectionString,
                 ["Kestrel:Endpoints:Api:Url"] = $"http://127.0.0.1:{ApiPort}",
-                ["Kestrel:Endpoints:Ops:Url"] = $"http://127.0.0.1:{OpsPort}"
+                ["Kestrel:Endpoints:Ops:Url"] = $"http://127.0.0.1:{OpsPort}",
+                ["Ingestion:SchedulerEnabled"] = "false"
             });
+
+            if (_additionalConfiguration is not null)
+            {
+                configurationBuilder.AddInMemoryCollection(_additionalConfiguration);
+            }
         });
 
         builder.ConfigureLogging(logging => logging.AddProvider(_loggerProvider));
