@@ -12,6 +12,8 @@ public class BalanceReconcilerTests
     private static readonly DateOnly DayTwo = new(2026, 10, 21);
 
     private static readonly BalanceKind[] Preferred = [BalanceKind.ClosingBooked, BalanceKind.InterimBooked];
+    private static readonly BalanceKind[] PreferredWithExpected = [BalanceKind.ClosingBooked, BalanceKind.InterimBooked, BalanceKind.Expected];
+    private static readonly DateTimeOffset FetchedDayOne = new(2026, 10, 20, 12, 0, 0, TimeSpan.Zero);
 
     [Fact]
     public void A_booked_balance_equal_to_the_previous_balance_plus_the_booked_transactions_reconciles()
@@ -133,6 +135,74 @@ public class BalanceReconcilerTests
         };
 
         BalanceReconciler.SelectReconcilable(balances, Preferred).Should().BeNull();
+    }
+
+    [Fact]
+    public void With_undated_balances_allowed_an_expected_balance_without_a_reference_date_is_selected()
+    {
+        var balances = new[] { Balance(BalanceKind.Expected, 2m, null), Balance(BalanceKind.InterimAvailable, 1m, null) };
+
+        BalanceReconciler.SelectReconcilable(balances, PreferredWithExpected, allowUndated: true)!.Kind.Should().Be(BalanceKind.Expected);
+    }
+
+    [Fact]
+    public void With_undated_balances_not_allowed_an_expected_balance_without_a_reference_date_is_not_selected()
+    {
+        var balances = new[] { Balance(BalanceKind.Expected, 2m, null) };
+
+        BalanceReconciler.SelectReconcilable(balances, PreferredWithExpected).Should().BeNull();
+        BalanceReconciler.SelectReconcilable(balances, PreferredWithExpected, allowUndated: false).Should().BeNull();
+    }
+
+    [Fact]
+    public void A_dated_booked_balance_still_wins_over_an_undated_one_when_undated_balances_are_allowed()
+    {
+        var balances = new[]
+        {
+            Balance(BalanceKind.Expected, 2m, null),
+            Balance(BalanceKind.InterimBooked, 1m, DayTwo)
+        };
+
+        BalanceReconciler.SelectReconcilable(balances, PreferredWithExpected, allowUndated: true)!.Kind.Should().Be(BalanceKind.InterimBooked);
+    }
+
+    [Fact]
+    public void Undated_balances_reconcile_exactly_on_the_sum_since_the_previous_fetch()
+    {
+        var previous = UndatedPrevious(1000.00m);
+
+        var matching = BalanceReconciler.CheckUndated(previous, Undated(1150.11m), 250.10m - 99.99m);
+
+        matching.Reconciled.Should().BeTrue();
+        matching.Expected.Should().Be(1150.11m);
+        matching.Drift.Should().Be(0m);
+
+        var off = BalanceReconciler.CheckUndated(previous, Undated(1150.12m), 250.10m - 99.99m);
+
+        off.Reconciled.Should().BeFalse();
+        off.Drift.Should().Be(0.01m);
+    }
+
+    [Fact]
+    public void An_undated_check_without_a_comparable_previous_balance_is_unknown()
+    {
+        var unknown = new BalanceCheck(null, null, null);
+
+        BalanceReconciler.CheckUndated(null, Undated(10m), 0m).Should().Be(unknown);
+        BalanceReconciler.CheckUndated(UndatedPrevious(10m) with { FetchedAt = null }, Undated(10m), 0m).Should().Be(unknown);
+        BalanceReconciler.CheckUndated(UndatedPrevious(10m) with { ReferenceDate = DayOne }, Undated(10m), 0m).Should().Be(unknown);
+        BalanceReconciler.CheckUndated(UndatedPrevious(10m) with { Currency = "USD" }, Undated(10m), 0m).Should().Be(unknown);
+        BalanceReconciler.CheckUndated(UndatedPrevious(10m), Undated(10m) with { ReferenceDate = DayTwo }, 0m).Should().Be(unknown);
+    }
+
+    private static BalanceSnapshotState UndatedPrevious(decimal amount)
+    {
+        return new BalanceSnapshotState(BalanceKind.Expected, amount, "EUR", null, DayOne, FetchedDayOne);
+    }
+
+    private static ProviderBalance Undated(decimal amount)
+    {
+        return Balance(BalanceKind.Expected, amount, null);
     }
 
     private static BalanceSnapshotState Previous(decimal amount, DateOnly? referenceDate)

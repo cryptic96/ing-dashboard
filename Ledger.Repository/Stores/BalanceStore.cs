@@ -27,12 +27,14 @@ public class BalanceStore(LedgerDbContext dbContext) : IBalanceStore
             .AsNoTracking()
             .Where(snapshot => snapshot.AccountId == accountId && snapshot.Kind == kind && snapshot.SnapshotDate < localDate)
             .OrderByDescending(snapshot => snapshot.SnapshotDate)
+            .ThenByDescending(snapshot => snapshot.CreatedAt)
             .Select(snapshot => new BalanceSnapshotState(
                 snapshot.Kind,
                 snapshot.Amount,
                 snapshot.Currency,
                 snapshot.ReferenceDate,
-                snapshot.SnapshotDate))
+                snapshot.SnapshotDate,
+                snapshot.CreatedAt))
             .FirstOrDefaultAsync(cancellationToken);
     }
 
@@ -49,6 +51,24 @@ public class BalanceStore(LedgerDbContext dbContext) : IBalanceStore
                 && transaction.Status == LedgerTransactionStatus.Booked
                 && transaction.BookingDate > afterExclusive
                 && transaction.BookingDate <= toInclusive)
+            .SumAsync(transaction => (decimal?)transaction.Amount, cancellationToken);
+
+        return sum ?? 0m;
+    }
+
+    /// <inheritdoc />
+    public async Task<decimal> SumBookedSinceAsync(
+        Guid accountId,
+        DateTimeOffset afterExclusive,
+        DateTimeOffset toInclusive,
+        CancellationToken cancellationToken)
+    {
+        var sum = await dbContext.Transactions
+            .AsNoTracking()
+            .Where(transaction => transaction.AccountId == accountId
+                && transaction.Status == LedgerTransactionStatus.Booked
+                && transaction.BookedAt > afterExclusive
+                && transaction.BookedAt <= toInclusive)
             .SumAsync(transaction => (decimal?)transaction.Amount, cancellationToken);
 
         return sum ?? 0m;

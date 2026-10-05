@@ -55,9 +55,17 @@ public class IngestionOptions
 
     /// <summary>
     /// The balance kinds the ledger reconciles against its booked transactions, in order of preference. The first one the bank
-    /// returns with a reference date is used.
+    /// returns with a reference date is used. When <see cref="ReconcileUndatedBalances"/> is on and none has a reference date,
+    /// the first one the bank returns without one is used.
     /// </summary>
     public List<BalanceKind> ReconcileBalanceKinds { get; set; } = [BalanceKind.ClosingBooked, BalanceKind.InterimBooked];
+
+    /// <summary>
+    /// Whether a balance without a reference date is still reconciled, using the time the ledger fetched it as the reference
+    /// point: the window is the booked transactions first seen after the previous balance of that kind was fetched. Off by
+    /// default so a provider with dated booked balances keeps the booking-date window.
+    /// </summary>
+    public bool ReconcileUndatedBalances { get; set; }
 
     /// <summary>Whether the background scheduler runs. Turning it off leaves operator-triggered syncs working.</summary>
     public bool SchedulerEnabled { get; set; } = true;
