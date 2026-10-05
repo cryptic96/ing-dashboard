@@ -76,6 +76,7 @@ public static class IngestionServiceCollectionExtensions
         services.Configure<EnableBankingOptions>(configuration.GetSection(EnableBankingOptions.SectionName));
         services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<EnableBankingTokenMinter>();
+        services.AddSingleton<AspspRequirementsCache>();
         services.AddTransient<AisOnlyGuardHandler>();
 
         services.AddHttpClient<EnableBankingClient>((provider, client) =>
