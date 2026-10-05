@@ -1,8 +1,8 @@
-# Phase 2 Spike: first half of the real-consent protocol
+# Phase 2 Spike: real-consent protocol, findings and decisions
 
-Structural findings only. No value from the bank (names, account numbers, amounts, descriptions, identifiers, hostnames) appears here; the raw responses exist only as age-encrypted files on the operator's workstation, outside the repository. Recorded 2026-09-30.
+Structural findings only. No value from the bank (names, account numbers, amounts, descriptions, identifiers, hostnames) appears here; the raw responses exist only as age-encrypted files on the operator's workstation, outside the repository. First half recorded 2026-09-30, second half and decisions recorded 2026-10-05.
 
-Status: first half done (sandbox proof, spike production application, linking observation, first authorisation, initial longest capture). Second half pending (see "Open questions for the spike completion").
+Status: complete. Sandbox proof, spike production application, linking observation, first authorisation, initial longest capture, next-morning capture, two daily captures, quota probe, pending-to-booked analysis and session revocation are done. The operator chose the values the adapter applies (see "Decisions"). Two cleanup steps remain with the operator (see "Spike cleanup").
 
 ## Savings account offered
 
@@ -25,7 +25,7 @@ Both linked accounts are joint accounts and both will be synced. The plan assume
 | Advertised maximum consent validity | 180 days | 180 days |
 | valid_until returned for the session | about +180 days | 2027-03-29 (authorised on 2026-09-30, so the full 180 days were granted) |
 
-ING's advertised maximum is 180 days and Enable Banking granted the full 180 days on the first authorisation. The roughly 90-day real-world cap reported by community sources did not show up at session creation. Whether renewal and re-authorisation behave the same way is still to be observed in practice.
+**Confirmed.** ING advertised 180 days and the spike session was granted the full 180 days. The roughly 90-day real-world cap reported by community sources did not show up at session creation. The consent expiry window the ledger alerts on needs no change. Whether a renewal also grants the full advertised validity has not been observed and is left to the first real renewal.
 
 ## Required PSU headers
 
@@ -109,8 +109,6 @@ Day-2 capture (2026-10-05 15:04 UTC, Monday afternoon; whether a card payment wa
 
 Conclusion on pending items (weak-evidence caveat): across the initial, next-morning, day-1 and day-2 captures no pending item appeared on either account, and the operator saw a weekend card payment already processed by the next day. ING almost certainly does not expose pending items through this connection, but this was not proven with a payment that the bank app showed as pending at the moment of a capture. Zero pending-to-booked pairs were observed. The ledger's pending-to-booked reconciliation stays in place as a safety net. The day-3 capture was skipped by the operator.
 
-None. The initial capture held only booked transactions (status BOOK: 2471 on the first account, 1009 on the second; no pending items on either). The daily captures will show whether ING exposes pending items at all, and if so how a pending item relates to its later booked version (reference presence, booking date on pending items).
-
 ## Key format accepted
 
 A PEM public key, pasted into the Enable Banking Control Panel, was accepted for both the sandbox application and the spike production application. A self-signed certificate was not needed.
@@ -148,14 +146,52 @@ Labels and dates only. All captures are age-encrypted files in the operator's wo
 - The temporary SSH key used by Claude for the ledger host and the reverse proxy is now passphrase protected and loaded through ssh-agent for sessions. Stripping the passphrase (`ssh-keygen -y` with an empty passphrase) fails, as required.
 - The backup age key of the operator was exposed once in a terminal during the sandbox check and was rotated the same day. The spike recipient and the server backup recipient now use the new key.
 
+## Decision table
+
+Each row of the research's spike outcome table, with what was observed and the branch taken.
+
+| Spike outcome | Observed | Branch taken |
+| --- | --- | --- |
+| Savings account absent | Observed. Only two joint current accounts were offered. | Ship with the joint current accounts only. Keep the cash account type column and the generic dashboard; no savings balance snapshots exist. Savings need a manual or non-PSD2 route later. |
+| Bank sends no entry reference | Not observed. Entry reference is on 100% of booked items, unique and stable across fetches. | Entry reference stays the primary identifier. The fingerprint fallback with occurrence index stays only for items that lack a reference, which ING never does. |
+| Stable entry reference from pending to booked | Not observable. No pending item ever appeared, so no pending-to-booked pair exists. | The reference-based step does all the work. The match-window reconciliation stays as a safety net for banks that change references. |
+| Bank returns no pending transactions | Observed, with a weak-evidence caveat (no payment shown as pending by the bank app at the moment of a capture). 27 new items arrived directly as booked. | Pending support (schema, dashboard marker, reconciler) is kept but is exercised only by synthetic tests. Treat ING as booked-only. |
+| Full history is only 90 days after about one hour | Observed. 24 months right after authorisation, 90 days about 12 hours later. | Confirms the sync-immediately design. The post-link sync is never skipped or deferred. A missed window means renewing again to obtain the full history. |
+| Quota counts every page | Not observed. 44 header-less calls on one account in one day, all HTTP 200, no 429. | The call budget default is raised (see "Decisions"). Operator-triggered syncs still send PSU headers. A daily sync costs 2 calls per account. |
+| Quota is a calendar day rather than a rolling 24 hours | Not observed. No limit was hit, so the reset behaviour is unknown. | Keep the rolling 24 hours window. |
+| Maximum consent validity about 90 days | Not observed. ING advertised 180 days and the full 180 days were granted. | The expiring window of 14 days still fits and the alert cadence is unchanged. |
+| Balance types include the closed-booked or interim-booked kinds | Not observed. ING returns only the expected balance (XPCD), with no reference date. | Reconcile on the expected balance with a fetch-time reference date and a two-snapshot drift rule (see "Decisions", item 4). |
+
+## Decisions
+
+The operator chose the measured values with specific choices. The adapter plan applies exactly these.
+
+1. **Background calls per day.** `Ingestion:BackgroundCallsPerDay` = 12 (was 4). No limit was observed up to 44 calls in a day; a daily sync costs 2 calls per account; 12 leaves headroom while staying well under the observed behaviour.
+2. **Quota window.** `Ingestion:QuotaWindow` = Rolling24Hours, unchanged. Reset behaviour is unobserved because no limit was hit.
+3. **PSU headers on operator syncs.** `Ingestion:PsuHeadersOnOperatorSyncs` = true, unchanged. ING lists `psu-ip-address` as required.
+4. **Balance reconciliation for ING (required code change, not only a config value).** Reconcile on the expected balance (XPCD), dated at fetch time because ING sends no reference date, and flag drift only when it persists across two consecutive daily snapshots, so a card payment still in progress cannot raise a false alarm. The current reconciler returns unknown without a reference date and has no persistence rule. The adapter plan (or a small reconciler change within it) must therefore add: an XPCD balance kind mapping, a fetch-time reference date for providers that send none, and the two-consecutive-snapshots drift rule.
+5. **Match window.** `Ingestion:MatchWindowDays` = 5 and the pending-to-booked reconciliation stay as a safety net, even though ING sends no pending items.
+6. **Deduplication.** The entry reference stays the primary identifier. The fingerprint fallback applies only when a reference is absent, which ING never does (identical same-day payments would otherwise collide).
+7. **Post-link and post-renewal sync.** Run immediately after linking, with PSU headers and the longest strategy. Full history is only available right after authorisation; afterwards ING returns 90 days. The adapter must never skip or defer this sync.
+8. **Savings.** Joint accounts only. Recorded, not re-asked.
+
+Unchanged and not re-decided: `Ingestion:ReconcileBalanceKinds` is superseded for ING by item 4; `Ingestion:OverlapDays` keeps its default.
+
+## Spike cleanup
+
+- Session revocation: done on 2026-10-05. The revoke call returned HTTP 200 and the session state file was deleted (`test ! -e` on the state file passes).
+- Plaintext captures: none. A check of the captures directory for files that are not age files prints nothing. The encrypted captures are kept until the replay against the real adapter, then deleted.
+- Private keys of the spike and sandbox applications: pending (operator). Both key files were still present at the time of this check. The operator deletes them.
+- ING app check that the aggregator's access is gone from the consents overview: pending (operator).
+
 ## Open questions for the spike completion
 
-1. **Next-morning capture.** Done on 2026-10-01: history beyond 90 days is only available right after authorisation, and header-less calls are admitted (15 of 15 returned HTTP 200). See "History depth".
-2. **Daily pending captures.** On at least three mornings, after a card purchase and an iDEAL payment the day before, run `capture day-N` (no longest strategy). Needed to see whether ING exposes pending items, their reference presence and booking date presence, and how pending items turn into booked ones. The initial capture had none.
-3. **Rate-limit quota probe.** The real background-call quota has not been probed. The next-morning capture made 8 and 7 header-less calls per account without a rate-limit error, so either pages are not counted individually or the quota is above four. The probe must establish what counts as a call, because the ledger's call budget (default 4 per account, every page counted) would refuse a sync that ING itself admits, especially if the daily window also returns leading empty pages.
-4. **Balance types and reconciliation.** ING returns only XPCD without a reference date. Decide for the adapter whether reconciliation maps XPCD to a usable balance (with a documented, weaker meaning), compares against the booked running total instead, or reports unknown for ING. This changes the reconciliation defaults and the adapter plan.
-5. **Two joint accounts.** Both accounts will be synced, and transfers between them appear on both. Categorisation needs an internal-transfer rule, and deduplication must stay per account so the two sides of a transfer are not collapsed.
-6. **History window.** Answered in part: outside the window right after authorisation ING returns 90 days. Whether the 24-month depth right after authorisation is a fixed window still needs no action, since the post-link sync takes whatever is offered.
-7. **Consent renewal and control panel link.** Confirm that the Control Panel link persists across renewals and that a renewal also grants the full advertised validity.
+1. **Next-morning capture.** Answered on 2026-10-01: history beyond 90 days is only available right after authorisation, and header-less calls are admitted (15 of 15 returned HTTP 200). See "History depth".
+2. **Daily pending captures.** Answered with a weak-evidence caveat: two daily captures (day-1, day-2) plus the initial and next-morning captures showed no pending item; day-3 was skipped. See "Pending transactions so far".
+3. **Rate-limit quota probe.** Answered: 44 header-less calls on one account in one day, no rejection. See "Rate limit". Reset behaviour stays unobserved.
+4. **Balance types and reconciliation.** Answered: reconcile on the expected balance with a fetch-time date and a two-snapshot drift rule. See "Decisions", item 4.
+5. **Two joint accounts.** Open for the adapter and categorisation work: both accounts are synced, transfers between them appear on both sides, categorisation needs an internal-transfer rule, and deduplication stays per account so the two sides of a transfer are not collapsed.
+6. **History window.** Answered: 24 months right after authorisation, 90 days afterwards. The post-link sync takes whatever is offered.
+7. **Consent renewal and control panel link.** Open: confirm at the first real renewal that the Control Panel link persists and that a renewal also grants the full advertised validity. The initial 180 days are confirmed.
 8. **Deletion of old server backups.** Done on 2026-10-01. The nightly backup at 02:43 UTC succeeded under the new key. The operator then deleted the five older backups made with the exposed key. The orchestrator confirmed that only the new backup remains and that the host self-check backup lines all pass.
-9. **Spike teardown.** When the spike ends, run `revoke`, delete the spike key and confirm the session is closed.
+9. **Spike teardown.** Mostly done: session revoked and state deleted on 2026-10-05. Key deletion and the ING app check are pending (operator). See "Spike cleanup".
