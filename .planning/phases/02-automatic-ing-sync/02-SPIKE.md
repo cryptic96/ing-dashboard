@@ -73,6 +73,8 @@ Day-1 capture (2026-10-04 10:45 UTC, Sunday, 10-day window, no PSU header): one 
 
 Operator observation for day-1: an iDEAL payment was made on Friday and a card payment (mobile wallet) on Saturday. In the ING app the Saturday card payment already shows as processed, not pending. Card payments therefore book within a day, and the API shows no pending state for them. This points to the adapter treating ING transactions as booked-only. Day-2 and day-3 on weekdays should confirm it.
 
+Day-2 capture (2026-10-05 15:04 UTC, Monday morning, after a card payment on Sunday): one page per account, all HTTP 200, 45 and 14 transactions, every one booked, entry reference on all, no transaction id, latest booking date 2026-10-05 on both accounts. Still no pending item.
+
 None. The initial capture held only booked transactions (status BOOK: 2471 on the first account, 1009 on the second; no pending items on either). The daily captures will show whether ING exposes pending items at all, and if so how a pending item relates to its later booked version (reference presence, booking date on pending items).
 
 ## Key format accepted
@@ -103,7 +105,9 @@ Labels and dates only. All captures are age-encrypted files in the operator's wo
 | 2026-10-01 | next-morning | second account: balances plus 6 transaction pages, longest strategy, no PSU header | 7 |
 | 2026-10-04 | day-1 | first account: balances plus 1 transaction page, 10-day window, no PSU header | 2 |
 | 2026-10-04 | day-1 | second account: balances plus 1 transaction page, 10-day window, no PSU header | 2 |
-| pending | day-2, day-3 | further daily captures without the longest strategy | not yet |
+| 2026-10-05 | day-2 | first account: balances plus 1 transaction page, 10-day window, no PSU header | 2 |
+| 2026-10-05 | day-2 | second account: balances plus 1 transaction page, 10-day window, no PSU header | 2 |
+| pending | day-3 | further daily capture without the longest strategy | not yet |
 
 ## Security notes
 
