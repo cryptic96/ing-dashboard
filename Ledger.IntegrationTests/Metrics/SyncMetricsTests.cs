@@ -22,6 +22,7 @@ public class SyncMetricsTests(DatabaseFixture fixture)
     private static readonly TimeZoneInfo Amsterdam = TimeZoneInfo.FindSystemTimeZoneById("Europe/Amsterdam");
     private static readonly DateOnly Monday = new(2026, 10, 26);
     private static readonly DateOnly Tuesday = new(2026, 10, 27);
+    private static readonly DateOnly Wednesday = new(2026, 10, 28);
     private static readonly DateOnly BookingDay = new(2026, 10, 20);
     private static readonly string[] Reasons = ["transient", "rate_limited", "consent_rejected", "provider_auth"];
 
@@ -197,7 +198,7 @@ public class SyncMetricsTests(DatabaseFixture fixture)
     }
 
     [Fact]
-    public async Task A_balance_that_did_not_reconcile_raises_the_drift_flag_for_that_account_only()
+    public async Task A_balance_that_did_not_reconcile_on_two_consecutive_snapshots_raises_the_drift_flag_for_that_account_only()
     {
         var scenario = Scenario(sessionEndsAfterDays: 90);
         var account = scenario.Accounts[0];
@@ -205,17 +206,50 @@ public class SyncMetricsTests(DatabaseFixture fixture)
         await using var host = await StartAsync(scenario, At(Monday, 14, 0));
         var linked = await host.LinkAsync(selectFirstAccountOnly: true);
         var accountKey = linked.Accounts[0].AccountKey;
+        var series = $"ledger_balance_reconciliation_drift{{account=\"{accountKey}\"}}";
 
         await SyncAsync(host, linked.Id);
         await RefreshAsync(host);
-        ValueOf(await ScrapeAsync(host), $"ledger_balance_reconciliation_drift{{account=\"{accountKey}\"}}").Should().Be(0);
+        ValueOf(await ScrapeAsync(host), series).Should().Be(0);
 
         scenario.SetBalances(account, Balances(9999.99m, Monday));
         host.Clock.SetUtcNow(At(Tuesday, 14, 0));
         await SyncAsync(host, linked.Id);
         await RefreshAsync(host);
+        ValueOf(await ScrapeAsync(host), series).Should().Be(0);
 
-        ValueOf(await ScrapeAsync(host), $"ledger_balance_reconciliation_drift{{account=\"{accountKey}\"}}").Should().Be(1);
+        scenario.SetBalances(account, Balances(10000.00m, Tuesday));
+        host.Clock.SetUtcNow(At(Wednesday, 14, 0));
+        await SyncAsync(host, linked.Id);
+        await RefreshAsync(host);
+
+        ValueOf(await ScrapeAsync(host), series).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task A_single_mismatch_followed_by_a_match_never_raises_the_drift_flag()
+    {
+        var scenario = Scenario(sessionEndsAfterDays: 90);
+        var account = scenario.Accounts[0];
+        scenario.SetBalances(account, Balances(1000.00m, Monday.AddDays(-1)));
+        await using var host = await StartAsync(scenario, At(Monday, 14, 0));
+        var linked = await host.LinkAsync(selectFirstAccountOnly: true);
+        var series = $"ledger_balance_reconciliation_drift{{account=\"{linked.Accounts[0].AccountKey}\"}}";
+
+        await SyncAsync(host, linked.Id);
+
+        scenario.SetBalances(account, Balances(9999.99m, Monday));
+        host.Clock.SetUtcNow(At(Tuesday, 14, 0));
+        await SyncAsync(host, linked.Id);
+        await RefreshAsync(host);
+        ValueOf(await ScrapeAsync(host), series).Should().Be(0);
+
+        scenario.SetBalances(account, Balances(9999.99m, Tuesday));
+        host.Clock.SetUtcNow(At(Wednesday, 14, 0));
+        await SyncAsync(host, linked.Id);
+        await RefreshAsync(host);
+
+        ValueOf(await ScrapeAsync(host), series).Should().Be(0);
     }
 
     [Fact]

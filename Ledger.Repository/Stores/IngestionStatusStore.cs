@@ -85,13 +85,7 @@ public class IngestionStatusStore(LedgerDbContext dbContext) : IIngestionStatusS
 
         foreach (var account in accounts)
         {
-            var latestReconciled = await dbContext.BalanceSnapshots
-                .AsNoTracking()
-                .Where(snapshot => snapshot.AccountId == account.Id && snapshot.Reconciled != null)
-                .OrderByDescending(snapshot => snapshot.SnapshotDate)
-                .ThenByDescending(snapshot => snapshot.CreatedAt)
-                .Select(snapshot => snapshot.Reconciled)
-                .FirstOrDefaultAsync(cancellationToken);
+            var latestReconciled = await ReadFlaggedReconciliationAsync(account.Id, cancellationToken);
 
             accountHealth.Add(new AccountHealth(
                 account.AccountKey,
@@ -120,5 +114,46 @@ public class IngestionStatusStore(LedgerDbContext dbContext) : IIngestionStatusS
         }
 
         return new IngestionStatus(connectionHealth, accountHealth, failedByReason);
+    }
+
+    /// <summary>
+    /// Reads the account's reconciliation as the metric and the dashboard show it. The latest snapshot with a verdict decides:
+    /// a match is true, and a mismatch is false only when the previous snapshot with a verdict of the same kind also
+    /// mismatched. A first mismatch is reported as null, an unconfirmed result, because the bank's expected balance can include
+    /// a card payment that books the next day. The snapshots themselves keep their exact result either way.
+    /// </summary>
+    private async Task<bool?> ReadFlaggedReconciliationAsync(Guid accountId, CancellationToken cancellationToken)
+    {
+        var latest = await dbContext.BalanceSnapshots
+            .AsNoTracking()
+            .Where(snapshot => snapshot.AccountId == accountId && snapshot.Reconciled != null)
+            .OrderByDescending(snapshot => snapshot.SnapshotDate)
+            .ThenByDescending(snapshot => snapshot.CreatedAt)
+            .Select(snapshot => new { snapshot.Kind, snapshot.SnapshotDate, snapshot.CreatedAt, snapshot.Reconciled })
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (latest?.Reconciled is not { } reconciled)
+        {
+            return null;
+        }
+
+        if (reconciled)
+        {
+            return true;
+        }
+
+        var previous = await dbContext.BalanceSnapshots
+            .AsNoTracking()
+            .Where(snapshot => snapshot.AccountId == accountId
+                && snapshot.Kind == latest.Kind
+                && snapshot.Reconciled != null
+                && (snapshot.SnapshotDate < latest.SnapshotDate
+                    || (snapshot.SnapshotDate == latest.SnapshotDate && snapshot.CreatedAt < latest.CreatedAt)))
+            .OrderByDescending(snapshot => snapshot.SnapshotDate)
+            .ThenByDescending(snapshot => snapshot.CreatedAt)
+            .Select(snapshot => snapshot.Reconciled)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        return previous == false ? false : null;
     }
 }

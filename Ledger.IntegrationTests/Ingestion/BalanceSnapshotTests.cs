@@ -22,6 +22,12 @@ public class BalanceSnapshotTests(DatabaseFixture fixture)
     private static readonly DateOnly DayTwo = new(2026, 10, 27);
     private static readonly DateOnly Yesterday = new(2026, 10, 25);
 
+    private static readonly IReadOnlyDictionary<string, string?> UndatedConfiguration = new Dictionary<string, string?>
+    {
+        ["Ingestion:ReconcileBalanceKinds:0"] = "Expected",
+        ["Ingestion:ReconcileUndatedBalances"] = "true"
+    };
+
     [Fact]
     public async Task The_first_sync_of_a_day_stores_every_returned_balance_as_an_unverified_baseline_and_a_second_sync_reads_none()
     {
@@ -203,6 +209,187 @@ public class BalanceSnapshotTests(DatabaseFixture fixture)
         var snapshots = await ReadSnapshotsAsync(host, connection.Accounts[0].AccountKey);
         snapshots.Should().HaveCount(2);
         snapshots.Should().OnlyContain(snapshot => snapshot.Reconciled == null && snapshot.Expected == null);
+    }
+
+    [Fact]
+    public async Task An_undated_expected_balance_reconciles_to_the_cent_on_the_window_between_the_two_fetches()
+    {
+        var (scenario, account) = ScenarioWithUndatedBalance(1000.00m);
+        await using var host = await StartAsync(scenario, DayOne, UndatedConfiguration);
+        var connection = await host.LinkAsync(selectFirstAccountOnly: false);
+        var accountKey = connection.Accounts[0].AccountKey;
+        await SyncAsync(host, connection.Id);
+
+        var baseline = (await ReadSnapshotsAsync(host, accountKey)).Single();
+        baseline.Kind.Should().Be("expected");
+        baseline.ReferenceDate.Should().BeNull();
+        baseline.Reconciled.Should().BeNull();
+
+        AddDayOneBookings(scenario, account);
+        scenario.SetBalances(account, UndatedBalances(1150.11m));
+        host.Clock.SetUtcNow(InstantFor(DayTwo));
+        await SyncAsync(host, connection.Id);
+
+        var expected = (await ReadSnapshotsAsync(host, accountKey)).Single(snapshot => snapshot.SnapshotDate == DayTwo);
+        expected.Reconciled.Should().BeTrue();
+        expected.Expected.Should().Be(1150.11m);
+        expected.Drift.Should().Be(0m);
+        expected.ReferenceDate.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task An_undated_expected_balance_one_cent_off_is_recorded_with_the_exact_drift()
+    {
+        var (scenario, account) = ScenarioWithUndatedBalance(1000.00m);
+        await using var host = await StartAsync(scenario, DayOne, UndatedConfiguration);
+        var connection = await host.LinkAsync(selectFirstAccountOnly: false);
+        var accountKey = connection.Accounts[0].AccountKey;
+        await SyncAsync(host, connection.Id);
+
+        AddDayOneBookings(scenario, account);
+        scenario.SetBalances(account, UndatedBalances(1150.12m));
+        host.Clock.SetUtcNow(InstantFor(DayTwo));
+        await SyncAsync(host, connection.Id);
+
+        var expected = (await ReadSnapshotsAsync(host, accountKey)).Single(snapshot => snapshot.SnapshotDate == DayTwo);
+        expected.Reconciled.Should().BeFalse();
+        expected.Expected.Should().Be(1150.11m);
+        expected.Drift.Should().Be(0.01m);
+    }
+
+    [Fact]
+    public async Task A_transaction_first_booked_after_the_first_fetch_is_counted_in_the_next_window_exactly_once()
+    {
+        var (scenario, account) = ScenarioWithUndatedBalance(1000.00m);
+        await using var host = await StartAsync(scenario, DayOne, UndatedConfiguration);
+        var connection = await host.LinkAsync(selectFirstAccountOnly: false);
+        var accountKey = connection.Accounts[0].AccountKey;
+        await SyncAsync(host, connection.Id);
+
+        host.Clock.Advance(TimeSpan.FromHours(3));
+        scenario.AddTransaction(account, IngestionTestSupport.Booked("entry-late", -40.00m, DayOne));
+        await SyncAsync(host, connection.Id);
+
+        scenario.SetBalances(account, UndatedBalances(960.00m));
+        host.Clock.SetUtcNow(InstantFor(DayTwo));
+        await SyncAsync(host, connection.Id);
+
+        host.Clock.SetUtcNow(InstantFor(DayTwo.AddDays(1)));
+        await SyncAsync(host, connection.Id);
+
+        var snapshots = await ReadSnapshotsAsync(host, accountKey);
+        snapshots.Single(snapshot => snapshot.SnapshotDate == DayTwo).Reconciled.Should().BeTrue();
+        var dayThree = snapshots.Single(snapshot => snapshot.SnapshotDate == DayTwo.AddDays(1));
+        dayThree.Reconciled.Should().BeTrue();
+        dayThree.Expected.Should().Be(960.00m);
+    }
+
+    [Fact]
+    public async Task Pending_and_dropped_transactions_never_enter_the_undated_window()
+    {
+        var (scenario, account) = ScenarioWithUndatedBalance(1000.00m);
+        scenario.AddTransaction(account, IngestionTestSupport.Pending("entry-soon-dropped", -70.00m, DayOne) with { BookingDate = DayOne });
+        await using var host = await StartAsync(scenario, DayOne, UndatedConfiguration);
+        var connection = await host.LinkAsync(selectFirstAccountOnly: false);
+        var accountKey = connection.Accounts[0].AccountKey;
+        await SyncAsync(host, connection.Id);
+
+        scenario.Remove(account, account.Transactions.Count - 1);
+        scenario.AddTransaction(account, IngestionTestSupport.Pending("entry-still-pending", -30.00m, DayOne) with { BookingDate = DayOne });
+        scenario.AddTransaction(account, IngestionTestSupport.Booked("entry-counted", -10.00m, DayTwo));
+        scenario.SetBalances(account, UndatedBalances(990.00m));
+        host.Clock.SetUtcNow(InstantFor(DayTwo));
+        await SyncAsync(host, connection.Id);
+
+        (await ReadTransactionStatusesAsync(host, accountKey)).Should().Contain(["dropped", "pending", "booked"]);
+        var expected = (await ReadSnapshotsAsync(host, accountKey)).Single(snapshot => snapshot.SnapshotDate == DayTwo);
+        expected.Reconciled.Should().BeTrue();
+        expected.Drift.Should().Be(0m);
+    }
+
+    [Fact]
+    public async Task A_card_payment_in_progress_shows_as_one_recorded_drift_that_resolves_when_it_books()
+    {
+        var (scenario, account) = ScenarioWithUndatedBalance(1000.00m);
+        await using var host = await StartAsync(scenario, DayOne, UndatedConfiguration);
+        var connection = await host.LinkAsync(selectFirstAccountOnly: false);
+        var accountKey = connection.Accounts[0].AccountKey;
+        await SyncAsync(host, connection.Id);
+
+        scenario.SetBalances(account, UndatedBalances(950.00m));
+        host.Clock.SetUtcNow(InstantFor(DayTwo));
+        await SyncAsync(host, connection.Id);
+
+        scenario.AddTransaction(account, IngestionTestSupport.Booked("entry-card-payment", -50.00m, DayTwo));
+        host.Clock.SetUtcNow(InstantFor(DayTwo.AddDays(1)));
+        await SyncAsync(host, connection.Id);
+
+        var snapshots = await ReadSnapshotsAsync(host, accountKey);
+        var dayTwo = snapshots.Single(snapshot => snapshot.SnapshotDate == DayTwo);
+        dayTwo.Reconciled.Should().BeFalse();
+        dayTwo.Drift.Should().Be(-50.00m);
+        var dayThree = snapshots.Single(snapshot => snapshot.SnapshotDate == DayTwo.AddDays(1));
+        dayThree.Reconciled.Should().BeTrue();
+        dayThree.Drift.Should().Be(0m);
+    }
+
+    [Fact]
+    public async Task A_difference_that_nothing_explains_keeps_showing_as_the_same_exact_drift_on_the_following_days()
+    {
+        var (scenario, account) = ScenarioWithUndatedBalance(1000.00m);
+        await using var host = await StartAsync(scenario, DayOne, UndatedConfiguration);
+        var connection = await host.LinkAsync(selectFirstAccountOnly: false);
+        var accountKey = connection.Accounts[0].AccountKey;
+        await SyncAsync(host, connection.Id);
+
+        scenario.SetBalances(account, UndatedBalances(1000.01m));
+        host.Clock.SetUtcNow(InstantFor(DayTwo));
+        await SyncAsync(host, connection.Id);
+        host.Clock.SetUtcNow(InstantFor(DayTwo.AddDays(1)));
+        await SyncAsync(host, connection.Id);
+
+        var snapshots = await ReadSnapshotsAsync(host, accountKey);
+        snapshots.Where(snapshot => snapshot.SnapshotDate > DayOne)
+            .Should().OnlyContain(snapshot => snapshot.Reconciled == false && snapshot.Drift == 0.01m && snapshot.Expected == 1000.00m);
+    }
+
+    [Fact]
+    public async Task Without_the_undated_option_an_undated_expected_balance_stays_unknown()
+    {
+        var (scenario, account) = ScenarioWithUndatedBalance(1000.00m);
+        await using var host = await StartAsync(
+            scenario,
+            DayOne,
+            new Dictionary<string, string?> { ["Ingestion:ReconcileBalanceKinds:0"] = "Expected" });
+        var connection = await host.LinkAsync(selectFirstAccountOnly: false);
+        await SyncAsync(host, connection.Id);
+
+        AddDayOneBookings(scenario, account);
+        scenario.SetBalances(account, UndatedBalances(1150.11m));
+        host.Clock.SetUtcNow(InstantFor(DayTwo));
+        await SyncAsync(host, connection.Id);
+
+        (await ReadSnapshotsAsync(host, connection.Accounts[0].AccountKey)).Should().OnlyContain(snapshot => snapshot.Reconciled == null);
+    }
+
+    private static (SyntheticBankScenario Scenario, SyntheticAccount Account) ScenarioWithUndatedBalance(decimal expected)
+    {
+        var scenario = SyntheticBankScenario.Create();
+        var account = scenario.AddAccount(AccountKind.Current);
+        scenario.AddTransaction(account, IngestionTestSupport.Booked("entry-opening", 500.00m, Yesterday.AddDays(-1)));
+        scenario.SetBalances(account, UndatedBalances(expected));
+        return (scenario, account);
+    }
+
+    private static IReadOnlyList<ProviderBalance> UndatedBalances(decimal expected)
+    {
+        return [new ProviderBalance(BalanceKind.Expected, "XPCD", expected, "EUR", null)];
+    }
+
+    private static void AddDayOneBookings(SyntheticBankScenario scenario, SyntheticAccount account)
+    {
+        scenario.AddTransaction(account, IngestionTestSupport.Booked("entry-income", 250.10m, DayOne));
+        scenario.AddTransaction(account, IngestionTestSupport.Booked("entry-groceries", -99.99m, DayOne));
     }
 
     private async Task<SchedulerTestHost> StartAsync(

@@ -22,6 +22,17 @@ public interface IBalanceStore
     Task<decimal> SumBookedAsync(Guid accountId, DateOnly afterExclusive, DateOnly toInclusive, CancellationToken cancellationToken);
 
     /// <summary>
+    /// Sums the signed amounts of the account's booked transactions that the ledger first saw as booked after the first instant
+    /// and up to and including the second. This places transactions on the timeline of the ledger's own fetches, for balances the
+    /// bank reports without a reference date. Pending and dropped transactions never count. Returns zero when there are none.
+    /// </summary>
+    Task<decimal> SumBookedSinceAsync(
+        Guid accountId,
+        DateTimeOffset afterExclusive,
+        DateTimeOffset toInclusive,
+        CancellationToken cancellationToken);
+
+    /// <summary>
     /// Saves one snapshot row per returned balance kind for the local date. The check is attached to the row of the reconciled
     /// kind only; every other row records an unknown result.
     /// </summary>
