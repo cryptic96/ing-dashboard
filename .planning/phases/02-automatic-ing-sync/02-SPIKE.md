@@ -67,6 +67,28 @@ The sandbox returned OTHR, ITAV and ITBD, all with reference dates, which does n
 
 Impact: the balance reconciliation was built with closed-booked and interim-booked types as its defaults. Against ING it will find neither type and will report the balance as unknown. See the open questions.
 
+## Pending to booked (analyze)
+
+The operator ran `analyze` on 2026-10-05 with the identity at the hidden prompt. It used 53 transaction files and skipped 1 sandbox file. 4 of 4 snapshots per account were complete, from the initial, next-morning, day-1 and day-2 captures.
+
+| Measure | First account | Second account | Total |
+| --- | --- | --- | --- |
+| Distinct booked items | 2491 | 1016 | 3507 |
+| Distinct pending items | 0 | 0 | 0 |
+| Pending-to-booked pairs (any kind) | 0 | 0 | 0 |
+| Booked items first seen after the first snapshot, with no earlier pending | 20 | 7 | 27 |
+| Identical same-day booked groups (items) | 25 (50) | 12 (25) | 37 (75) |
+| Booked reference repeated within one snapshot | 0 | 0 | 0 |
+| Entry reference present on booked | 100% | 100% | 100% |
+| Transaction id present | 0 | 0 | 0 |
+
+Findings:
+
+- **ING exposes booked transactions only.** Not one pending item appeared in any snapshot, and 27 new transactions arrived directly as booked with no pending stage. Together with the operator's observation that card payments are processed within a day, the adapter can treat ING as booked-only. The pending-to-booked reconciliation stays as a safety net.
+- **The entry reference is unique and stable across fetches.** The distinct booked count equals the initial count plus the later new items exactly (first account 2471 + 20 = 2491, second 1009 + 7 = 1016). Re-fetching the same transactions in later snapshots never produced a new reference. No reference repeats within a snapshot. Deduplication by entry reference per account is sound.
+- **Fingerprints would collide.** 37 groups (75 items) are identical on amount, day and counterparty. A fingerprint built from those fields would wrongly merge real, distinct payments, so the entry reference must stay the primary identifier, and the fingerprint fallback must only apply when no reference is present (which ING never does).
+- `bank_transaction_code` change at booking and transaction-id stability are not applicable: there are no pairs and no transaction ids.
+
 ## Rate limit
 
 Quota probe on 2026-10-05, first account only, run by the orchestrator at the operator's request. Probe 1 ran from 15:07:40 to 15:07:48 UTC with a maximum of 12 calls. Probe 2 ran from 15:07:54 to 15:08:13 UTC with a maximum of 30 calls. Each call was a header-less single-page transactions fetch with date_from today. That day the account had already received two header-less calls from the day-2 capture at 15:04 UTC. All 42 probe calls returned HTTP 200 and none was rejected, so 44 header-less calls reached the account that day with no rate-limit error.
