@@ -28,7 +28,9 @@ public record ConnectionHealth(
 
 /// <summary>
 /// A selected account's sync state. The last success is that of its current connection and is null before the first success.
-/// The reconciliation result is null while no balance has been checked. The flagged count is the pending transactions whose
+/// The reconciliation result is true when the latest checked balance matched, false only when it mismatched and the previous
+/// checked balance of the same kind mismatched too, and null while no balance has been checked or a first mismatch awaits
+/// confirmation. The flagged count is the pending transactions whose
 /// matching was ambiguous.
 /// </summary>
 public record AccountHealth(

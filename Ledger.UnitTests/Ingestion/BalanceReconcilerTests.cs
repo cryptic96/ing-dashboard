@@ -195,6 +195,23 @@ public class BalanceReconcilerTests
         BalanceReconciler.CheckUndated(UndatedPrevious(10m), Undated(10m) with { ReferenceDate = DayTwo }, 0m).Should().Be(unknown);
     }
 
+    [Fact]
+    public void An_undated_check_carries_the_ledger_expectation_forward_so_a_gap_persists_and_a_booked_reservation_resolves()
+    {
+        var checkedPrevious = UndatedPrevious(950.00m) with { ExpectedAmount = 1000.00m };
+
+        var persistentGap = BalanceReconciler.CheckUndated(checkedPrevious, Undated(950.00m), 0m);
+
+        persistentGap.Reconciled.Should().BeFalse();
+        persistentGap.Expected.Should().Be(1000.00m);
+        persistentGap.Drift.Should().Be(-50.00m);
+
+        var bookedReservation = BalanceReconciler.CheckUndated(checkedPrevious, Undated(950.00m), -50.00m);
+
+        bookedReservation.Reconciled.Should().BeTrue();
+        bookedReservation.Drift.Should().Be(0m);
+    }
+
     private static BalanceSnapshotState UndatedPrevious(decimal amount)
     {
         return new BalanceSnapshotState(BalanceKind.Expected, amount, "EUR", null, DayOne, FetchedDayOne);

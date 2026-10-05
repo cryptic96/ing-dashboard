@@ -308,6 +308,52 @@ public class BalanceSnapshotTests(DatabaseFixture fixture)
     }
 
     [Fact]
+    public async Task A_card_payment_in_progress_shows_as_one_recorded_drift_that_resolves_when_it_books()
+    {
+        var (scenario, account) = ScenarioWithUndatedBalance(1000.00m);
+        await using var host = await StartAsync(scenario, DayOne, UndatedConfiguration);
+        var connection = await host.LinkAsync(selectFirstAccountOnly: false);
+        var accountKey = connection.Accounts[0].AccountKey;
+        await SyncAsync(host, connection.Id);
+
+        scenario.SetBalances(account, UndatedBalances(950.00m));
+        host.Clock.SetUtcNow(InstantFor(DayTwo));
+        await SyncAsync(host, connection.Id);
+
+        scenario.AddTransaction(account, IngestionTestSupport.Booked("entry-card-payment", -50.00m, DayTwo));
+        host.Clock.SetUtcNow(InstantFor(DayTwo.AddDays(1)));
+        await SyncAsync(host, connection.Id);
+
+        var snapshots = await ReadSnapshotsAsync(host, accountKey);
+        var dayTwo = snapshots.Single(snapshot => snapshot.SnapshotDate == DayTwo);
+        dayTwo.Reconciled.Should().BeFalse();
+        dayTwo.Drift.Should().Be(-50.00m);
+        var dayThree = snapshots.Single(snapshot => snapshot.SnapshotDate == DayTwo.AddDays(1));
+        dayThree.Reconciled.Should().BeTrue();
+        dayThree.Drift.Should().Be(0m);
+    }
+
+    [Fact]
+    public async Task A_difference_that_nothing_explains_keeps_showing_as_the_same_exact_drift_on_the_following_days()
+    {
+        var (scenario, account) = ScenarioWithUndatedBalance(1000.00m);
+        await using var host = await StartAsync(scenario, DayOne, UndatedConfiguration);
+        var connection = await host.LinkAsync(selectFirstAccountOnly: false);
+        var accountKey = connection.Accounts[0].AccountKey;
+        await SyncAsync(host, connection.Id);
+
+        scenario.SetBalances(account, UndatedBalances(1000.01m));
+        host.Clock.SetUtcNow(InstantFor(DayTwo));
+        await SyncAsync(host, connection.Id);
+        host.Clock.SetUtcNow(InstantFor(DayTwo.AddDays(1)));
+        await SyncAsync(host, connection.Id);
+
+        var snapshots = await ReadSnapshotsAsync(host, accountKey);
+        snapshots.Where(snapshot => snapshot.SnapshotDate > DayOne)
+            .Should().OnlyContain(snapshot => snapshot.Reconciled == false && snapshot.Drift == 0.01m && snapshot.Expected == 1000.00m);
+    }
+
+    [Fact]
     public async Task Without_the_undated_option_an_undated_expected_balance_stays_unknown()
     {
         var (scenario, account) = ScenarioWithUndatedBalance(1000.00m);

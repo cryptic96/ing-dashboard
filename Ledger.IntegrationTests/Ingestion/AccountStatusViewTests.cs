@@ -141,14 +141,80 @@ public class AccountStatusViewTests(DatabaseFixture fixture)
 
     [Theory]
     [InlineData(true, "yes")]
-    [InlineData(false, "no")]
+    [InlineData(false, "unknown")]
     [InlineData(null, "unknown")]
-    public async Task The_reconciliation_verdict_of_the_shown_balance_is_reported_as_yes_no_or_unknown(bool? reconciled, string expected)
+    public async Task The_reconciliation_verdict_of_a_single_checked_snapshot_is_reported_as_yes_or_unknown_never_as_no(bool? reconciled, string expected)
     {
         var seeded = await SeedAsync();
         await InsertSnapshotAsync(seeded.AccountKey, new DateOnly(2026, 10, 20), "closing_booked", 70.00m, reconciled);
 
         (await ReadStatusAsync(seeded.AccountKey)).BalanceReconciled.Should().Be(expected);
+    }
+
+    [Fact]
+    public async Task A_mismatch_on_two_consecutive_checked_snapshots_of_the_same_kind_is_reported_as_no()
+    {
+        var seeded = await SeedAsync();
+        await InsertSnapshotAsync(seeded.AccountKey, new DateOnly(2026, 10, 20), "expected", 70.00m, reconciled: false);
+        await InsertSnapshotAsync(seeded.AccountKey, new DateOnly(2026, 10, 21), "expected", 71.00m, reconciled: false);
+
+        (await ReadStatusAsync(seeded.AccountKey)).BalanceReconciled.Should().Be("no");
+    }
+
+    [Fact]
+    public async Task A_mismatch_that_the_next_snapshot_resolves_is_never_reported_as_no()
+    {
+        var seeded = await SeedAsync();
+        await InsertSnapshotAsync(seeded.AccountKey, new DateOnly(2026, 10, 20), "expected", 70.00m, reconciled: false);
+
+        (await ReadStatusAsync(seeded.AccountKey)).BalanceReconciled.Should().Be("unknown");
+
+        await InsertSnapshotAsync(seeded.AccountKey, new DateOnly(2026, 10, 21), "expected", 71.00m, reconciled: true);
+
+        (await ReadStatusAsync(seeded.AccountKey)).BalanceReconciled.Should().Be("yes");
+    }
+
+    [Fact]
+    public async Task A_mismatch_after_a_match_is_a_first_mismatch_and_not_reported_as_no()
+    {
+        var seeded = await SeedAsync();
+        await InsertSnapshotAsync(seeded.AccountKey, new DateOnly(2026, 10, 20), "expected", 70.00m, reconciled: false);
+        await InsertSnapshotAsync(seeded.AccountKey, new DateOnly(2026, 10, 21), "expected", 71.00m, reconciled: true);
+        await InsertSnapshotAsync(seeded.AccountKey, new DateOnly(2026, 10, 22), "expected", 72.00m, reconciled: false);
+
+        (await ReadStatusAsync(seeded.AccountKey)).BalanceReconciled.Should().Be("unknown");
+    }
+
+    [Fact]
+    public async Task Snapshots_without_a_verdict_between_two_mismatches_do_not_break_the_consecutive_pair()
+    {
+        var seeded = await SeedAsync();
+        await InsertSnapshotAsync(seeded.AccountKey, new DateOnly(2026, 10, 20), "expected", 70.00m, reconciled: false);
+        await InsertSnapshotAsync(seeded.AccountKey, new DateOnly(2026, 10, 21), "expected", 71.00m, reconciled: null);
+        await InsertSnapshotAsync(seeded.AccountKey, new DateOnly(2026, 10, 22), "expected", 72.00m, reconciled: false);
+
+        (await ReadStatusAsync(seeded.AccountKey)).BalanceReconciled.Should().Be("no");
+    }
+
+    [Fact]
+    public async Task The_grafana_reader_can_select_the_view_and_has_no_write_privilege_on_it()
+    {
+        await using var connection = new NpgsqlConnection(fixture.ConnectionStringFor("grafana_reader"));
+        await connection.OpenAsync(TestContext.Current.CancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT has_table_privilege('grafana_reader', 'reporting.account_status', 'SELECT'),
+                   has_table_privilege('grafana_reader', 'reporting.account_status', 'INSERT')
+                   OR has_table_privilege('grafana_reader', 'reporting.account_status', 'UPDATE')
+                   OR has_table_privilege('grafana_reader', 'reporting.account_status', 'DELETE')
+                   OR has_table_privilege('grafana_reader', 'reporting.account_status', 'TRUNCATE')
+            """;
+
+        await using var reader = await command.ExecuteReaderAsync(TestContext.Current.CancellationToken);
+        (await reader.ReadAsync(TestContext.Current.CancellationToken)).Should().BeTrue();
+        reader.GetBoolean(0).Should().BeTrue();
+        reader.GetBoolean(1).Should().BeFalse();
     }
 
     [Fact]

@@ -34,7 +34,8 @@ public class BalanceStore(LedgerDbContext dbContext) : IBalanceStore
                 snapshot.Currency,
                 snapshot.ReferenceDate,
                 snapshot.SnapshotDate,
-                snapshot.CreatedAt))
+                snapshot.CreatedAt,
+                snapshot.ExpectedAmount))
             .FirstOrDefaultAsync(cancellationToken);
     }
 
