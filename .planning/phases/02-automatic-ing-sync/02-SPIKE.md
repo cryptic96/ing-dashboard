@@ -177,11 +177,51 @@ The operator chose the measured values with specific choices. The adapter plan a
 
 Unchanged and not re-decided: `Ingestion:ReconcileBalanceKinds` is superseded for ING by item 4; `Ingestion:OverlapDays` keeps its default.
 
+## Replay against the real adapter
+
+Run on 2026-10-05, split between the operator and the orchestrator. The orchestrator created a mode 700 directory on the in-memory filesystem. The operator decrypted the 53 non-sandbox transaction pages into it with the age identity at a hidden prompt, then unset the identity. The orchestrator never saw the identity or any decrypted content. The orchestrator ran the replay test (category Replay) through the real Enable Banking mapping and the real reconciler, and displayed only the test summary and a counts-only report line.
+
+Test run: 8 passed, 0 failed, 0 skipped.
+
+Counts (the report line, validated against a label=number pattern before display):
+
+| Measure | Value |
+| --- | --- |
+| Accounts | 2 |
+| Captures | 8 |
+| Pages | 53 |
+| Items | 4020 |
+| Rows after reconciliation | 3507 |
+| Inserted | 3507 |
+| Merged | 0 |
+| Upgraded | 0 |
+| Flagged | 0 |
+| Dropped | 0 |
+| Restored | 0 |
+| Live pending | 0 |
+| Live booked | 3507 |
+| Rows with two references | 0 |
+| References on more than one row | 0 |
+| Unreadable pages | 0 |
+| Incomplete captures | 0 |
+| Excluded sandbox pages | 0 |
+| Changes when re-applying every snapshot | 0 |
+
+Interpretation: all invariants held.
+
+- The row count of 3507 equals the distinct booked count from the analyze step exactly.
+- Every row is booked and every item was inserted once. Nothing was merged, upgraded, flagged, dropped or restored, which matches ING exposing booked transactions only.
+- No row carries two references and no reference sits on more than one row, so deduplication by entry reference is sound on real data.
+- Re-applying every snapshot changed nothing, so the reconciliation is idempotent.
+- No page was unreadable and no capture was incomplete. The sandbox pages were excluded by the operator before decryption, so the excluded count is 0.
+
+No reconciler fix is needed before the real link.
+
 ## Spike cleanup
 
 - Session revocation: done on 2026-10-05. The revoke call returned HTTP 200 and the session state file was deleted (`test ! -e` on the state file passes).
-- Plaintext captures: none. A check of the captures directory for files that are not age files prints nothing. The encrypted captures are kept until the replay against the real adapter, then deleted.
-- Private keys of the spike and sandbox applications: pending (operator). Both key files were still present at the time of this check. The operator deletes them.
+- Plaintext captures: none. A check of the captures directory for files that are not age files printed nothing.
+- All real spike data, keys and captures deleted on 2026-10-05 (verified). After the replay the operator removed the decrypted replay directory, the replay report and run log, and the whole spike directory in the home directory. That removed the spike and sandbox private keys and every encrypted capture. The orchestrator verified that the spike directory and the replay directory no longer exist.
 - ING app check that the aggregator's access is gone from the consents overview: pending (operator).
 
 ## Open questions for the spike completion
@@ -194,4 +234,4 @@ Unchanged and not re-decided: `Ingestion:ReconcileBalanceKinds` is superseded fo
 6. **History window.** Answered: 24 months right after authorisation, 90 days afterwards. The post-link sync takes whatever is offered.
 7. **Consent renewal and control panel link.** Open: confirm at the first real renewal that the Control Panel link persists and that a renewal also grants the full advertised validity. The initial 180 days are confirmed.
 8. **Deletion of old server backups.** Done on 2026-10-01. The nightly backup at 02:43 UTC succeeded under the new key. The operator then deleted the five older backups made with the exposed key. The orchestrator confirmed that only the new backup remains and that the host self-check backup lines all pass.
-9. **Spike teardown.** Mostly done: session revoked and state deleted on 2026-10-05. Key deletion and the ING app check are pending (operator). See "Spike cleanup".
+9. **Spike teardown.** Mostly done: session revoked and state deleted on 2026-10-05, and all real spike data, keys and captures deleted the same day after the replay. Only the ING app check is pending (operator). See "Spike cleanup".
