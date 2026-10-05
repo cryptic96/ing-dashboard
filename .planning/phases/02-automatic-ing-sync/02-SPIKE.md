@@ -73,7 +73,7 @@ Day-1 capture (2026-10-04 10:45 UTC, Sunday, 10-day window, no PSU header): one 
 
 Operator observation for day-1: an iDEAL payment was made on Friday and a card payment (mobile wallet) on Saturday. In the ING app the Saturday card payment already shows as processed, not pending. Card payments therefore book within a day, and the API shows no pending state for them. This points to the adapter treating ING transactions as booked-only. Day-2 and day-3 on weekdays should confirm it.
 
-Day-2 capture (2026-10-05 15:04 UTC, Monday morning, after a card payment on Sunday): one page per account, all HTTP 200, 45 and 14 transactions, every one booked, entry reference on all, no transaction id, latest booking date 2026-10-05 on both accounts. Still no pending item.
+Day-2 capture (2026-10-05 15:04 UTC, Monday afternoon; whether a card payment was made on Sunday is not yet confirmed): one page per account, all HTTP 200, 45 and 14 transactions, every one booked, entry reference on all, no transaction id, latest booking date 2026-10-05 on both accounts. Still no pending item.
 
 None. The initial capture held only booked transactions (status BOOK: 2471 on the first account, 1009 on the second; no pending items on either). The daily captures will show whether ING exposes pending items at all, and if so how a pending item relates to its later booked version (reference presence, booking date on pending items).
 
