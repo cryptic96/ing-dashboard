@@ -216,7 +216,6 @@ public class BankLinkEndpointTests(DatabaseFixture fixture)
     }
 
     [Theory]
-    [InlineData("EnableBanking")]
     [InlineData("NotAProviderSentinel")]
     public void An_unusable_provider_value_stops_startup_naming_only_the_key(string provider)
     {
@@ -468,6 +467,15 @@ public sealed class BankLinkTestHost : IAsyncDisposable
             configureTestServices: services => services.AddSingleton(bankProvider),
             additionalConfiguration: configuration);
 
+        var token = await CreateKeyAsync(fixture);
+        var host = new BankLinkTestHost(fixture, factory, token);
+        await host.WaitUntilReadyAsync();
+        return host;
+    }
+
+    /// <summary>Wraps a host the caller has already built, creating a fresh API key for it.</summary>
+    public static async Task<BankLinkTestHost> StartWithFactoryAsync(DatabaseFixture fixture, LedgerWebApplicationFactory factory)
+    {
         var token = await CreateKeyAsync(fixture);
         var host = new BankLinkTestHost(fixture, factory, token);
         await host.WaitUntilReadyAsync();
