@@ -75,6 +75,8 @@ Operator observation for day-1: an iDEAL payment was made on Friday and a card p
 
 Day-2 capture (2026-10-05 15:04 UTC, Monday afternoon; whether a card payment was made on Sunday is not yet confirmed): one page per account, all HTTP 200, 45 and 14 transactions, every one booked, entry reference on all, no transaction id, latest booking date 2026-10-05 on both accounts. Still no pending item.
 
+Conclusion on pending items (weak-evidence caveat): across the initial, next-morning, day-1 and day-2 captures no pending item appeared on either account, and the operator saw a weekend card payment already processed by the next day. ING almost certainly does not expose pending items through this connection, but this was not proven with a payment that the bank app showed as pending at the moment of a capture. Zero pending-to-booked pairs were observed. The ledger's pending-to-booked reconciliation stays in place as a safety net. The day-3 capture was skipped by the operator.
+
 None. The initial capture held only booked transactions (status BOOK: 2471 on the first account, 1009 on the second; no pending items on either). The daily captures will show whether ING exposes pending items at all, and if so how a pending item relates to its later booked version (reference presence, booking date on pending items).
 
 ## Key format accepted
@@ -107,7 +109,7 @@ Labels and dates only. All captures are age-encrypted files in the operator's wo
 | 2026-10-04 | day-1 | second account: balances plus 1 transaction page, 10-day window, no PSU header | 2 |
 | 2026-10-05 | day-2 | first account: balances plus 1 transaction page, 10-day window, no PSU header | 2 |
 | 2026-10-05 | day-2 | second account: balances plus 1 transaction page, 10-day window, no PSU header | 2 |
-| pending | day-3 | further daily capture without the longest strategy | not yet |
+| skipped | day-3 | operator could not capture shortly after a fresh card payment; evidence judged sufficient | 0 |
 
 ## Security notes
 
