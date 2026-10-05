@@ -67,6 +67,16 @@ The sandbox returned OTHR, ITAV and ITBD, all with reference dates, which does n
 
 Impact: the balance reconciliation was built with closed-booked and interim-booked types as its defaults. Against ING it will find neither type and will report the balance as unknown. See the open questions.
 
+## Rate limit
+
+Quota probe on 2026-10-05, first account only, run by the orchestrator at the operator's request. Probe 1 ran from 15:07:40 to 15:07:48 UTC with a maximum of 12 calls. Probe 2 ran from 15:07:54 to 15:08:13 UTC with a maximum of 30 calls. Each call was a header-less single-page transactions fetch with date_from today. That day the account had already received two header-less calls from the day-2 capture at 15:04 UTC. All 42 probe calls returned HTTP 200 and none was rejected, so 44 header-less calls reached the account that day with no rate-limit error.
+
+Findings:
+
+- Neither ING nor Enable Banking enforces a background-call limit of about four per account per day for this restricted application, at least not for transaction fetches and not within about 30 seconds. Whether a limit exists further up (per day above 44, or on balances or details) was not probed.
+- The ledger's call budget (default 4 background calls per account per rolling 24 hours, every page counted) is therefore far stricter than the observed bank behaviour. A daily sync costs 2 calls per account, so the default still allows the scheduled sync plus its single retry. It mainly constrains sync-now without PSU headers, which the ledger avoids anyway by sending PSU headers on operator-triggered syncs.
+- The after-reset capture lost its purpose because no rejection occurred, so it is not needed.
+
 ## Pending transactions so far
 
 Day-1 capture (2026-10-04 10:45 UTC, Sunday, 10-day window, no PSU header): one page per account, all HTTP 200, 47 and 16 transactions, every one booked (BOOK), entry reference on all, no transaction id, booking dates 2026-09-24 to 2026-10-03 and 2026-10-04. Still no pending item on either account. The 10-day window returned no leading empty pages: one balances call and one transaction page per account, so a normal daily sync costs two calls per account.
