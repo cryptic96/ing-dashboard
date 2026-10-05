@@ -85,7 +85,7 @@ Plans:
   4. Both partners can open a Grafana dashboard showing sync status and recent transactions per account, in English or Dutch; both language versions are generated from one source. The dashboard reads through the SELECT-only reporting role, and the database rejects a write query attempted with that role.
   5. The bank connection is read-only, and no code path can initiate a payment. A synthetic test provider can feed the same pipeline with no changes outside ingestion.
 
-**Plans**: 12/15 plans executed
+**Plans**: 12/16 plans executed
 
 Plans:
 **Wave 1**
@@ -121,6 +121,7 @@ Plans:
 **Wave 7** *(blocked on Wave 6 completion)*
 
 - [ ] 02-13-PLAN.md — Enable Banking adapter behind the provider interface: client token, AIS-only outbound allow-list, paging, errors, PSU headers, exact amounts
+- [ ] 02-16-PLAN.md — Balance reconciliation on ING's undated expected balance (fetch-time window) and drift flagged only when it persists two snapshots
 
 **Wave 8** *(blocked on Wave 7 completion)*
 
