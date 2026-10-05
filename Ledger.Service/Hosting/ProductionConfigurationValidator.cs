@@ -14,6 +14,9 @@ public static class ProductionConfigurationValidator
     private const string ConnectionStringKey = "ConnectionStrings:Ledger";
     private const string ProviderKey = "Ingestion:Provider";
     private const string RedirectUrlKey = "BankLink:RedirectUrl";
+    private const string ApplicationIdKey = "EnableBanking:ApplicationId";
+    private const string PrivateKeyPathKey = "EnableBanking:PrivateKeyPath";
+    private const string PrivateKeyPasswordKey = "EnableBanking:PrivateKeyPassword";
     private const string TimeZoneKey = "Ingestion:TimeZone";
     private const string ScheduleLocalTimeKey = "Ingestion:ScheduleLocalTime";
 
@@ -116,6 +119,27 @@ public static class ProductionConfigurationValidator
         if (!isHttps)
         {
             offendingKeys.Add(RedirectUrlKey);
+        }
+
+        AddAggregatorCredentialProblems(configuration, offendingKeys);
+    }
+
+    private static void AddAggregatorCredentialProblems(IConfiguration configuration, List<string> offendingKeys)
+    {
+        if (!Guid.TryParse(configuration[ApplicationIdKey], out _))
+        {
+            offendingKeys.Add(ApplicationIdKey);
+        }
+
+        var keyPath = configuration[PrivateKeyPathKey];
+        if (string.IsNullOrWhiteSpace(keyPath) || !File.Exists(keyPath))
+        {
+            offendingKeys.Add(PrivateKeyPathKey);
+        }
+
+        if (string.IsNullOrWhiteSpace(configuration[PrivateKeyPasswordKey]))
+        {
+            offendingKeys.Add(PrivateKeyPasswordKey);
         }
     }
 }

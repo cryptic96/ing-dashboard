@@ -360,7 +360,11 @@ public class BalanceSnapshotTests(DatabaseFixture fixture)
         await using var host = await StartAsync(
             scenario,
             DayOne,
-            new Dictionary<string, string?> { ["Ingestion:ReconcileBalanceKinds:0"] = "Expected" });
+            new Dictionary<string, string?>
+            {
+                ["Ingestion:ReconcileBalanceKinds:0"] = "Expected",
+                ["Ingestion:ReconcileUndatedBalances"] = "false"
+            });
         var connection = await host.LinkAsync(selectFirstAccountOnly: false);
         await SyncAsync(host, connection.Id);
 

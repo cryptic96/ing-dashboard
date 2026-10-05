@@ -29,6 +29,11 @@ public class SchedulerAndQuotaTests(DatabaseFixture fixture)
     private static readonly DateOnly Monday = new(2026, 10, 26);
     private static readonly DateOnly BookingDay = new(2026, 10, 20);
 
+    private static readonly IReadOnlyDictionary<string, string?> SmallCallBudget = new Dictionary<string, string?>
+    {
+        ["Ingestion:BackgroundCallsPerDay"] = "4"
+    };
+
     [Fact]
     public async Task The_scheduler_starts_exactly_one_scheduled_run_at_half_past_six_Amsterdam_time()
     {
@@ -166,7 +171,7 @@ public class SchedulerAndQuotaTests(DatabaseFixture fixture)
     public async Task A_run_that_would_exceed_the_call_budget_stops_before_calling_and_applies_nothing()
     {
         var scenario = SyntheticScenario(pagesForFirstAccount: 2);
-        await using var host = await SchedulerTestHost.StartAsync(fixture, scenario, AmsterdamInstant(Monday, 6, 30));
+        await using var host = await SchedulerTestHost.StartAsync(fixture, scenario, AmsterdamInstant(Monday, 6, 30), SmallCallBudget);
         var linked = await host.LinkAsync(selectFirstAccountOnly: true);
         var account = linked.Accounts[0];
 
@@ -193,7 +198,7 @@ public class SchedulerAndQuotaTests(DatabaseFixture fixture)
     public async Task A_call_made_exactly_twenty_four_hours_ago_no_longer_counts_against_the_budget()
     {
         var scenario = SyntheticScenario(pagesForFirstAccount: 1);
-        await using var host = await SchedulerTestHost.StartAsync(fixture, scenario, AmsterdamInstant(Monday, 6, 30));
+        await using var host = await SchedulerTestHost.StartAsync(fixture, scenario, AmsterdamInstant(Monday, 6, 30), SmallCallBudget);
         var linked = await host.LinkAsync(selectFirstAccountOnly: true);
         var now = host.Clock.GetUtcNow();
 
@@ -325,7 +330,11 @@ public class SchedulerAndQuotaTests(DatabaseFixture fixture)
             fixture,
             scenario,
             AmsterdamInstant(Monday, 14, 0),
-            new Dictionary<string, string?> { ["Ingestion:PsuHeadersOnOperatorSyncs"] = "false" });
+            new Dictionary<string, string?>
+            {
+                ["Ingestion:PsuHeadersOnOperatorSyncs"] = "false",
+                ["Ingestion:BackgroundCallsPerDay"] = "4"
+            });
         var linked = await host.LinkAsync(selectFirstAccountOnly: true);
         var now = host.Clock.GetUtcNow();
 
