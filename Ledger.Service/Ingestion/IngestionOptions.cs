@@ -47,8 +47,12 @@ public class IngestionOptions
     /// <summary>How many hours after a failed scheduled run the single same-day retry may happen.</summary>
     public int RetryDelayHours { get; set; } = 4;
 
-    /// <summary>How many background calls the bank allows per account in the quota window. Every page and balances read counts.</summary>
-    public int BackgroundCallsPerDay { get; set; } = 4;
+    /// <summary>
+    /// How many background calls the ledger allows itself per account in the quota window. Every page and balances read counts.
+    /// A daily sync costs two calls per account, so the default leaves room for the retry and for header-less sync-now calls
+    /// while staying far below what the bank was observed to accept.
+    /// </summary>
+    public int BackgroundCallsPerDay { get; set; } = 12;
 
     /// <summary>How the quota window is measured: Rolling24Hours (the default, the conservative reading) or LocalCalendarDay.</summary>
     public QuotaWindow QuotaWindow { get; set; } = QuotaWindow.Rolling24Hours;
@@ -56,16 +60,17 @@ public class IngestionOptions
     /// <summary>
     /// The balance kinds the ledger reconciles against its booked transactions, in order of preference. The first one the bank
     /// returns with a reference date is used. When <see cref="ReconcileUndatedBalances"/> is on and none has a reference date,
-    /// the first one the bank returns without one is used.
+    /// the first one the bank returns without one is used. The expected balance comes last because it is the only kind some
+    /// banks send, and it never has a reference date.
     /// </summary>
-    public List<BalanceKind> ReconcileBalanceKinds { get; set; } = [BalanceKind.ClosingBooked, BalanceKind.InterimBooked];
+    public List<BalanceKind> ReconcileBalanceKinds { get; set; } = [BalanceKind.ClosingBooked, BalanceKind.InterimBooked, BalanceKind.Expected];
 
     /// <summary>
     /// Whether a balance without a reference date is still reconciled, using the time the ledger fetched it as the reference
-    /// point: the window is the booked transactions first seen after the previous balance of that kind was fetched. Off by
-    /// default so a provider with dated booked balances keeps the booking-date window.
+    /// point: the window is the booked transactions first seen after the previous balance of that kind was fetched. On by
+    /// default; an undated balance is used only when the bank sends no dated booked balance, because dated kinds are preferred.
     /// </summary>
-    public bool ReconcileUndatedBalances { get; set; }
+    public bool ReconcileUndatedBalances { get; set; } = true;
 
     /// <summary>Whether the background scheduler runs. Turning it off leaves operator-triggered syncs working.</summary>
     public bool SchedulerEnabled { get; set; } = true;

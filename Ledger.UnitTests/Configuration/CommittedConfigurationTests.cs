@@ -1,5 +1,8 @@
 using System.Text.Json;
 using FluentAssertions;
+using Ledger.Domain.Banking;
+using Ledger.Domain.Ingestion;
+using Ledger.Service.Ingestion;
 
 namespace Ledger.UnitTests.Configuration;
 
@@ -27,6 +30,36 @@ public class CommittedConfigurationTests
 
             violations.Should().BeEmpty($"file {Path.GetFileName(path)} must not carry a non-empty secret value");
         }
+    }
+
+    [Fact]
+    [Trait("Category", "Configuration")]
+    public void Outbound_http_client_logging_is_at_warning_so_request_addresses_are_never_logged()
+    {
+        var path = Path.Combine(FindLedgerServiceDirectory(), "appsettings.json");
+        using var document = JsonDocument.Parse(File.ReadAllText(path));
+
+        var level = document.RootElement
+            .GetProperty("Logging")
+            .GetProperty("LogLevel")
+            .GetProperty("System.Net.Http.HttpClient")
+            .GetString();
+
+        level.Should().Be("Warning");
+    }
+
+    [Fact]
+    [Trait("Category", "Configuration")]
+    public void Ingestion_defaults_are_the_values_measured_against_the_real_bank()
+    {
+        var options = new IngestionOptions();
+
+        options.BackgroundCallsPerDay.Should().Be(12);
+        options.QuotaWindow.Should().Be(QuotaWindow.Rolling24Hours);
+        options.PsuHeadersOnOperatorSyncs.Should().BeTrue();
+        options.ReconcileBalanceKinds.Should().Equal(BalanceKind.ClosingBooked, BalanceKind.InterimBooked, BalanceKind.Expected);
+        options.ReconcileUndatedBalances.Should().BeTrue();
+        options.MatchWindowDays.Should().Be(5);
     }
 
     private static void CollectSecretViolations(JsonElement element, string path, List<string> violations)

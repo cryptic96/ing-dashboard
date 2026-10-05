@@ -32,7 +32,7 @@ Revoke the leaked key immediately with `ledger-apikey revoke <name>`, then creat
 
 ## Bank link
 
-The ledger reads your bank accounts through a bank data provider. You link them once, by approving a consent in your bank app, and renew that consent when it is about to expire. Every call below is made with your key, except the callback the bank redirects your browser to. Ready-to-run requests are in `docs/bank-link.http`.
+The ledger reads your bank accounts through a bank data provider. You link them once, by approving a consent in your bank app, and renew that consent when it is about to expire. Every call below is made with your key, except the callback the bank redirects your browser to. Ready-to-run requests are in `docs/bank-link.http`, and the one-time setup on the host (registering the application, generating the key, linking, renewing and revoking) is walked through in `docs/bank-link.md`.
 
 Bank linking only works when a provider is configured with the `Ingestion:Provider` setting and `BankLink:RedirectUrl` holds the https address of the callback. Until then the endpoints answer `503` with a message that bank linking is not configured.
 
@@ -56,7 +56,7 @@ Once accounts are selected, the ledger syncs them by itself. You never have to t
 
 - **Every morning.** Each active connection with at least one selected account syncs once a day at 06:30 Amsterdam time. A process that starts after that time and has not synced yet that day catches up at once. The time and zone are set with `Ingestion:ScheduleLocalTime` (HH:mm) and `Ingestion:TimeZone`.
 - **One retry.** When the morning sync fails for a temporary reason, it is retried once, no earlier than four hours after it finished and only on the same day (`Ingestion:RetryDelayHours`). A rate limit from the bank, a used-up call budget, a consent the bank no longer accepts or rejected application credentials are never retried that day. A consent the bank no longer accepts also marks the connection as expired straight away, so you see it in the connection list.
-- **A call budget per account.** Banks only allow a few unattended calls per account per day. The ledger writes every call to a call ledger before it is sent and allows at most `Ingestion:BackgroundCallsPerDay` (default 4) unattended calls per account in the trailing 24 hours (`Ingestion:QuotaWindow` can switch this to the local calendar day). A sync that would go over the budget stops before calling and is recorded as quota exhausted.
+- **A call budget per account.** Banks only allow a few unattended calls per account per day. The ledger writes every call to a call ledger before it is sent and allows at most `Ingestion:BackgroundCallsPerDay` (default 12) unattended calls per account in the trailing 24 hours (`Ingestion:QuotaWindow` can switch this to the local calendar day). A sync that would go over the budget stops before calling and is recorded as quota exhausted.
 - **Nothing is silent.** Every run, successful or not, is recorded with how it ended and the provider's short error code. A run that a restart interrupted is marked abandoned when the service starts and counts as a temporary failure for that day's retry.
 - **Only the schedule and your own requests fetch from the bank.** Reading connections or accounts, the health check and the metrics never start a sync, so opening a dashboard can never use up a call.
 

@@ -9,6 +9,9 @@ public class ProductionConfigurationValidatorTests : IDisposable
 {
     private const string SentinelPassword = "sentinel-Tr0ub4dor-Value";
     private const string ValidConnectionString = "Host=/var/run/postgresql;Database=ledger;Username=ledger_runtime";
+    private const string ValidApplicationId = "00000000-0000-0000-0000-000000000001";
+    private const string DefaultKeyPath = "existing-key-file";
+    private const string ValidRedirectUrl = "https://ledger-api.example.com/api/v1/bank/callback";
     private readonly string _existingCertificatePath = Path.GetTempFileName();
 
     [Fact]
@@ -127,21 +130,98 @@ public class ProductionConfigurationValidatorTests : IDisposable
 
     [Theory]
     [Trait("Category", "Configuration")]
-    [InlineData(null, null)]
-    [InlineData("None", null)]
-    [InlineData("EnableBanking", "https://ledger-api.example.com/api/v1/bank/callback")]
-    public void ThrowIfInvalid_accepts_no_provider_and_enable_banking_with_an_https_redirect(string? provider, string? redirectUrl)
+    [InlineData(null)]
+    [InlineData("None")]
+    public void ThrowIfInvalid_accepts_no_provider_without_any_bank_settings(string? provider)
     {
-        var configuration = BuildConfiguration(
-            _existingCertificatePath,
-            SentinelPassword,
-            ValidConnectionString,
-            provider,
-            redirectUrl);
+        var configuration = BuildConfiguration(_existingCertificatePath, SentinelPassword, ValidConnectionString, provider);
 
         var act = () => ProductionConfigurationValidator.ThrowIfInvalid(configuration);
 
         act.Should().NotThrow();
+    }
+
+    [Fact]
+    [Trait("Category", "Configuration")]
+    public void ThrowIfInvalid_accepts_enable_banking_with_a_complete_bank_configuration()
+    {
+        var configuration = CompleteEnableBankingConfiguration();
+
+        var act = () => ProductionConfigurationValidator.ThrowIfInvalid(configuration);
+
+        act.Should().NotThrow();
+    }
+
+    [Theory]
+    [Trait("Category", "Configuration")]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("not-a-guid")]
+    [InlineData("0000000000000000000000000000000z")]
+    public void ThrowIfInvalid_names_only_the_application_id_key_when_it_is_missing_or_not_a_guid(string? applicationId)
+    {
+        var configuration = CompleteEnableBankingConfiguration(applicationId: applicationId);
+
+        var act = () => ProductionConfigurationValidator.ThrowIfInvalid(configuration);
+
+        var exception = act.Should().Throw<InvalidOperationException>().Which;
+        exception.Message.Should().Contain("EnableBanking:ApplicationId");
+        exception.Message.Should().NotContain("EnableBanking:PrivateKey");
+        exception.Message.Should().NotContain("not-a-guid");
+    }
+
+    [Theory]
+    [Trait("Category", "Configuration")]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("/nonexistent/enablebanking-key.pem")]
+    public void ThrowIfInvalid_names_only_the_private_key_path_key_when_the_key_file_is_missing(string? keyPath)
+    {
+        var configuration = CompleteEnableBankingConfiguration(keyPath: keyPath);
+
+        var act = () => ProductionConfigurationValidator.ThrowIfInvalid(configuration);
+
+        var exception = act.Should().Throw<InvalidOperationException>().Which;
+        exception.Message.Should().Contain("EnableBanking:PrivateKeyPath");
+        exception.Message.Should().NotContain("EnableBanking:ApplicationId");
+        exception.Message.Should().NotContain("EnableBanking:PrivateKeyPassword");
+        exception.Message.Should().NotContain("nonexistent");
+    }
+
+    [Theory]
+    [Trait("Category", "Configuration")]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void ThrowIfInvalid_names_only_the_private_key_password_key_when_it_is_empty(string? keyPassword)
+    {
+        var configuration = CompleteEnableBankingConfiguration(keyPassword: keyPassword);
+
+        var act = () => ProductionConfigurationValidator.ThrowIfInvalid(configuration);
+
+        var exception = act.Should().Throw<InvalidOperationException>().Which;
+        exception.Message.Should().Contain("EnableBanking:PrivateKeyPassword");
+        exception.Message.Should().NotContain("EnableBanking:ApplicationId");
+        exception.Message.Should().NotContain("EnableBanking:PrivateKeyPath");
+    }
+
+    [Fact]
+    [Trait("Category", "Configuration")]
+    public void ThrowIfInvalid_never_shows_a_bank_setting_value()
+    {
+        var configuration = CompleteEnableBankingConfiguration(
+            applicationId: "value-that-is-not-a-guid",
+            keyPath: "/nonexistent/value-in-path.pem",
+            keyPassword: " ");
+
+        var act = () => ProductionConfigurationValidator.ThrowIfInvalid(configuration);
+
+        var exception = act.Should().Throw<InvalidOperationException>().Which;
+        exception.Message.Should().Contain("EnableBanking:ApplicationId");
+        exception.Message.Should().Contain("EnableBanking:PrivateKeyPath");
+        exception.Message.Should().Contain("EnableBanking:PrivateKeyPassword");
+        exception.Message.Should().NotContain("value-that-is-not-a-guid");
+        exception.Message.Should().NotContain("value-in-path");
     }
 
     [Theory]
@@ -208,6 +288,22 @@ public class ProductionConfigurationValidatorTests : IDisposable
         File.Delete(_existingCertificatePath);
     }
 
+    private IConfiguration CompleteEnableBankingConfiguration(
+        string? applicationId = ValidApplicationId,
+        string? keyPath = DefaultKeyPath,
+        string? keyPassword = SentinelPassword)
+    {
+        return BuildConfiguration(
+            _existingCertificatePath,
+            SentinelPassword,
+            ValidConnectionString,
+            "EnableBanking",
+            ValidRedirectUrl,
+            applicationId: applicationId,
+            keyPath: keyPath == DefaultKeyPath ? _existingCertificatePath : keyPath,
+            keyPassword: keyPassword);
+    }
+
     private static IConfiguration BuildConfiguration(
         string? certificatePath,
         string? certificatePassword,
@@ -215,7 +311,10 @@ public class ProductionConfigurationValidatorTests : IDisposable
         string? provider = null,
         string? redirectUrl = null,
         string? timeZone = null,
-        string? scheduleTime = null)
+        string? scheduleTime = null,
+        string? applicationId = null,
+        string? keyPath = null,
+        string? keyPassword = null)
     {
         var values = new Dictionary<string, string?>
         {
@@ -225,7 +324,10 @@ public class ProductionConfigurationValidatorTests : IDisposable
             ["Ingestion:Provider"] = provider,
             ["BankLink:RedirectUrl"] = redirectUrl,
             ["Ingestion:TimeZone"] = timeZone,
-            ["Ingestion:ScheduleLocalTime"] = scheduleTime
+            ["Ingestion:ScheduleLocalTime"] = scheduleTime,
+            ["EnableBanking:ApplicationId"] = applicationId,
+            ["EnableBanking:PrivateKeyPath"] = keyPath,
+            ["EnableBanking:PrivateKeyPassword"] = keyPassword
         };
 
         return new ConfigurationBuilder().AddInMemoryCollection(values).Build();
