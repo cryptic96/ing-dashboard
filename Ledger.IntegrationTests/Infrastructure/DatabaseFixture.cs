@@ -11,6 +11,9 @@ public class DatabaseFixture : IAsyncLifetime
     private const string AdminConnectionStringEnvironmentVariable = "ConnectionStrings__TestAdmin";
     private const string AdminConnectionStringConfigurationKey = "ConnectionStrings:TestAdmin";
 
+    /// <summary>Seconds a throwaway database drop may take; a forced drop waits for a checkpoint, which is slow on a busy server.</summary>
+    private const int DropCommandTimeoutSeconds = 300;
+
     private readonly List<string> _createdDatabases = [];
     private string _adminConnectionString = string.Empty;
     private string _repositoryRoot = string.Empty;
@@ -33,9 +36,22 @@ public class DatabaseFixture : IAsyncLifetime
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
+        var failures = new List<Exception>();
         foreach (var databaseName in _createdDatabases)
         {
-            await DropDatabaseAsync(databaseName);
+            try
+            {
+                await DropDatabaseAsync(databaseName);
+            }
+            catch (Exception exception) when (exception is NpgsqlException or TimeoutException)
+            {
+                failures.Add(exception);
+            }
+        }
+
+        if (failures.Count > 0)
+        {
+            throw new AggregateException("Dropping one or more throwaway databases failed; the others were still dropped.", failures);
         }
     }
 
@@ -124,10 +140,12 @@ public class DatabaseFixture : IAsyncLifetime
         terminateCommand.CommandText =
             "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = @databaseName AND pid <> pg_backend_pid()";
         terminateCommand.Parameters.AddWithValue("databaseName", databaseName);
+        terminateCommand.CommandTimeout = DropCommandTimeoutSeconds;
         await terminateCommand.ExecuteNonQueryAsync();
 
         await using var dropCommand = connection.CreateCommand();
         dropCommand.CommandText = $"DROP DATABASE IF EXISTS {databaseName} WITH (FORCE)";
+        dropCommand.CommandTimeout = DropCommandTimeoutSeconds;
         await dropCommand.ExecuteNonQueryAsync();
     }
 
