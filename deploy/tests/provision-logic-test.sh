@@ -19,6 +19,8 @@ DEPLOY_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 LEDGER_PROVISION_LIB_ONLY=1 source "${DEPLOY_DIR}/provision.sh"
 # shellcheck source=deploy/provision.d/20-accounts.sh
 LEDGER_PROVISION_LIB_ONLY=1 source "${DEPLOY_DIR}/provision.d/20-accounts.sh"
+# shellcheck source=deploy/provision.d/10-packages.sh
+LEDGER_PROVISION_LIB_ONLY=1 source "${DEPLOY_DIR}/provision.d/10-packages.sh"
 
 # Sourcing the files above also applies their own "set -euo pipefail" to
 # this shell; restore this script's own intended options (no -e, since
@@ -216,6 +218,37 @@ if echo "$rendered" | grep -qiE 'ConnectionStrings|Password=.*[Dd]atabase|Databa
   failtest "accounts_render_ledger_env: contains no database password"
 else
   pass "accounts_render_ledger_env: contains no database password"
+fi
+
+###
+### --- version pins reach an existing host ---------------------------------
+###
+
+assert_eq "grafana_pin_preferences: renders the apt pin for the given version" \
+  $'Package: grafana\nPin: version 13.2.3\nPin-Priority: 1001' "$(grafana_pin_preferences "13.2.3")"
+
+if prometheus_needs_install "" "3.13.4"; then
+  pass "prometheus_needs_install: a missing binary is installed"
+else
+  failtest "prometheus_needs_install: a missing binary is installed"
+fi
+
+if prometheus_needs_install "prometheus, version 3.13.3 (branch: HEAD, revision: abc)" "3.13.4"; then
+  pass "prometheus_needs_install: an older installed version is replaced by the pin"
+else
+  failtest "prometheus_needs_install: an older installed version is replaced by the pin"
+fi
+
+if prometheus_needs_install "prometheus, version 3.13.4 (branch: HEAD, revision: abc)" "3.13.4"; then
+  failtest "prometheus_needs_install: the pinned version already installed is left alone (expected failure, got success)"
+else
+  pass "prometheus_needs_install: the pinned version already installed is left alone"
+fi
+
+if prometheus_needs_install "something unexpected" "3.13.4"; then
+  pass "prometheus_needs_install: an unrecognised version line is reinstalled rather than trusted"
+else
+  failtest "prometheus_needs_install: an unrecognised version line is reinstalled rather than trusted"
 fi
 
 echo "----"

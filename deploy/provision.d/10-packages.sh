@@ -53,6 +53,28 @@ install_apt_signing_key() {
   provision_log "${label}: signing key installed and fingerprint verified"
 }
 
+###
+### Prints the apt preferences entry that holds Grafana at the pinned
+### version. The file is rewritten whenever it differs, so a pin bumped in
+### versions.env reaches an existing host; a stale entry would keep the old
+### version as apt's candidate and a later upgrade would move back to it.
+###
+grafana_pin_preferences() {
+  local version="$1"
+  printf 'Package: grafana\nPin: version %s\nPin-Priority: 1001\n' "$version"
+}
+
+###
+### Succeeds when Prometheus must be (re)installed: the binary is missing or
+### reports a different version than the pin. The first argument is the
+### first line of `prometheus --version`, empty when it is not installed.
+###
+prometheus_needs_install() {
+  local version_line="$1" wanted="$2" installed
+  installed="$(awk '$1 == "prometheus," && $2 == "version" {print $3}' <<<"$version_line")"
+  [[ "$installed" != "$wanted" ]]
+}
+
 if [[ "${LEDGER_PROVISION_LIB_ONLY:-0}" != "1" ]]; then
   provision_log "apt-get update"
   apt-get update -qq
@@ -92,12 +114,10 @@ if [[ "${LEDGER_PROVISION_LIB_ONLY:-0}" != "1" ]]; then
       >"${SOURCES_DIR}/github-cli.list"
   fi
 
-  if [[ ! -f "${PREFERENCES_DIR}/grafana" ]]; then
-    cat >"${PREFERENCES_DIR}/grafana" <<EOF
-Package: grafana
-Pin: version ${GRAFANA_VERSION_PIN}
-Pin-Priority: 1001
-EOF
+  grafana_pin="$(grafana_pin_preferences "$GRAFANA_VERSION_PIN")"
+  if [[ ! -f "${PREFERENCES_DIR}/grafana" ]] || [[ "$(cat "${PREFERENCES_DIR}/grafana")" != "$grafana_pin" ]]; then
+    provision_log "Pinning Grafana to ${GRAFANA_VERSION_PIN}"
+    printf '%s\n' "$grafana_pin" >"${PREFERENCES_DIR}/grafana"
   fi
 
   provision_log "apt-get update (with the new sources)"
@@ -113,7 +133,12 @@ EOF
     provision_die "gh ${GH_VERSION} is older than the required ${GH_CLI_MIN_VERSION} (attestation verify support)"
   fi
 
-  if ! command -v /usr/local/bin/prometheus >/dev/null 2>&1; then
+  prometheus_version_line=""
+  if [[ -x /usr/local/bin/prometheus ]]; then
+    prometheus_version_line="$(/usr/local/bin/prometheus --version 2>/dev/null | head -n1 || true)"
+  fi
+  prometheus_installed_now=0
+  if prometheus_needs_install "$prometheus_version_line" "$PROMETHEUS_VERSION"; then
     provision_log "Installing Prometheus ${PROMETHEUS_VERSION}"
     prom_tmp="$(mktemp -d)"
     prom_tarball="${prom_tmp}/prometheus.tar.gz"
@@ -132,10 +157,16 @@ EOF
     install -m 755 "${prom_dir}/prometheus" /usr/local/bin/prometheus
     install -m 755 "${prom_dir}/promtool" /usr/local/bin/promtool
     rm -rf "$prom_tmp"
+    prometheus_installed_now=1
   fi
 
   mkdir -p /etc/prometheus /var/lib/prometheus
   chown prometheus:prometheus /etc/prometheus /var/lib/prometheus
+
+  if [[ "$prometheus_installed_now" == "1" ]] && systemctl is-active --quiet prometheus; then
+    provision_log "Restarting Prometheus on ${PROMETHEUS_VERSION}"
+    systemctl restart prometheus
+  fi
 
   provision_log "Package installation complete"
 fi
