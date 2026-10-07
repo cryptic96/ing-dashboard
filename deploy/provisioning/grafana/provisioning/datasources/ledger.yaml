@@ -9,9 +9,11 @@ datasources:
     access: proxy
     url: /var/run/postgresql
     user: grafana_reader
-    database: ledger
     editable: false
     jsonData:
+      # Grafana's PostgreSQL datasource reads the default database from
+      # jsonData; the older top-level "database" field is ignored.
+      database: ledger
       sslmode: disable
       postgresVersion: 1800
       # Nothing secret here: PostgreSQL listens on its Unix socket only,
