@@ -9,6 +9,23 @@ public interface ILedgerQueryStore
     /// </summary>
     /// <param name="cancellationToken">Cancels the read.</param>
     Task<IReadOnlyList<OverviewAccountData>> ReadOverviewAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Reads everything one totals question needs from a single read-only snapshot: the booked sums, the pending transactions and
+    /// the transfers between synced accounts that were left out, and the accounts in scope with their last successful sync.
+    /// Dropped transactions appear nowhere.
+    /// </summary>
+    /// <param name="filter">What the question selects.</param>
+    /// <param name="zone">The time zone whose calendar decides which day a transaction without a bank date belongs to.</param>
+    /// <param name="cancellationToken">Cancels the read.</param>
+    Task<TotalsData> ReadTotalsAsync(LedgerQueryFilter filter, TimeZoneInfo zone, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Returns the distinct counterparty names of synced accounts whose reference is one of the given references, in ordinal order.
+    /// </summary>
+    /// <param name="refs">Counterparty references as produced by <see cref="CounterpartyRef"/>.</param>
+    /// <param name="cancellationToken">Cancels the read.</param>
+    Task<IReadOnlyList<string>> ResolveCounterpartyNamesAsync(IReadOnlyList<string> refs, CancellationToken cancellationToken);
 }
 
 /// <summary>
