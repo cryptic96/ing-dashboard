@@ -179,6 +179,15 @@ Do this only after the connection from step 5 works and
 that no extra login can use sudo and that the MCP boundary answers as
 designed.
 
+Before anything else, remove all the temporary access that was used to set
+the hosts up: delete every temporary operator login and SSH key on the ledger
+host, on the reverse proxy host and on the workstation (check each login's
+`authorized_keys` file and the SSH configuration on both hosts). Then run
+`ledger-selfcheck` again. It only catches logins that can use sudo on the
+ledger host: a login without sudo, an SSH key, or anything on the reverse
+proxy host is outside its reach, so those must be removed and checked by hand.
+Only after that, continue with the steps below.
+
 1. Confirm Anthropic's address range is still current:
 
    ```bash
