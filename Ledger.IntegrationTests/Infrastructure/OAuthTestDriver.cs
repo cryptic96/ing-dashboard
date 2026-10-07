@@ -18,6 +18,22 @@ public sealed class TestLogin(Guid id, string userName, string password, string 
     private readonly HashSet<long> _usedSteps = [];
     private readonly List<string> _issuedCodes = [];
 
+    /// <summary>
+    /// The same login after its password was replaced. The time steps already handed out stay used, because the host remembers
+    /// the codes it accepted whichever password followed.
+    /// </summary>
+    public TestLogin WithPassword(string newPassword)
+    {
+        var copy = new TestLogin(Id, UserName, newPassword, AuthenticatorKey);
+
+        lock (_usedSteps)
+        {
+            copy._usedSteps.UnionWith(_usedSteps);
+        }
+
+        return copy;
+    }
+
     /// <summary>The identifier of the login.</summary>
     public Guid Id { get; } = id;
 
