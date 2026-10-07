@@ -64,14 +64,14 @@ id = "generic-api-key"
   ]
 
   [[rules.allowlists]]
-  description = "one line of a planning summary lists self-check names next to the Europe/Amsterdam time zone; only that exact phrase in summary files is allowed"
+  description = "planning summaries list the self-check names next to the Europe/Amsterdam time zone; only that phrase (with or without the word 'check') in summary files is allowed"
   condition = "AND"
   regexTarget = "match"
   paths = [
     '''(^|/)\.plannin[g]/phases/[^/]+/[^/]+-SUMMARY\.md$''',
   ]
   regexes = [
-    '''^key mode check, Europe/Amsterdam $''',
+    '''^key mode( check)?, Europe/Amsterdam $''',
   ]
 
   [[rules.allowlists]]
