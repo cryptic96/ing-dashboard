@@ -2,6 +2,8 @@
 
 Every REST endpoint requires a key, even when the request comes from inside the home network. The one exception is the bank link callback described under "Bank link" below, which the bank's redirect reaches in your browser and which is protected by a one-time link instead.
 
+API keys work only on the REST API. The MCP endpoint that Claude connects to accepts only OAuth tokens issued after a sign-in, and the REST API never accepts those tokens. The two ways in do not overlap: a key cannot be used on the MCP endpoint, and a Claude connection cannot call the REST API. How Claude is connected is described in `docs/mcp.md`.
+
 ## Creating a key
 
 Keys are created, listed and revoked with the `ledger-apikey` command on the server, run as the operator:

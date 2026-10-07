@@ -13,9 +13,11 @@ filling in.
 The container runs the application, PostgreSQL, Grafana and Prometheus.
 PostgreSQL has no network listener at all — only a local socket. Prometheus
 and the application's own operational endpoint listen on loopback only, with
-no route through the reverse proxy. Only the Grafana dashboard and the REST
-API are reachable, and only from the home network and VPN, through the
-existing reverse proxy. Nothing here is reachable from the public internet.
+no route through the reverse proxy. The Grafana dashboard and the REST API
+are reachable only from the home network and VPN, through the existing
+reverse proxy. The only part open to the internet is the MCP endpoint Claude
+connects to, on its own hostname and behind a sign-in, described in [the
+Claude connection guide](mcp.md).
 
 ## Prerequisites
 
@@ -130,10 +132,19 @@ On the existing reverse proxy container, copy
 directory, fill in the real LAN/VPN subnets, hostnames and the ledger
 container's address, and rename it to drop the `.example` suffix.
 
+The template also holds the routers for the MCP hostname: a public router
+for exactly the MCP and OAuth paths, open to Anthropic's published range
+plus the home network and VPN, and a sign-in router for the home network and
+VPN only. Install the public router on the home-and-VPN-only middleware
+first and switch it to Anthropic's range only at go-live; the staged
+rollout is in [the Claude connection guide](mcp.md).
+
 ## 8. Add local DNS records
 
-In the home router, point the Grafana hostname and the API hostname at the
-reverse proxy's address.
+In the home router, point the Grafana hostname, the API hostname and the
+MCP hostname at the reverse proxy's address. The MCP hostname additionally
+needs a public IPv4 `A` record that is DNS-only, with no `AAAA` record (see
+[the Claude connection guide](mcp.md)).
 
 ## 9. Apply the GitHub repository settings
 
@@ -169,7 +180,16 @@ PostgreSQL's socket-only and per-role isolation, file permissions,
 secrets hygiene (no GitHub credential, no stored backup identity, no
 secret-shaped text in the journal or `/var/log`), the bank key file's
 permissions, the Amsterdam time zone data, the firewall, the app's health and authentication, backup freshness, Grafana's
-lockdown and account roles, and every Prometheus target. `--restart-check`
+lockdown and account roles, and every Prometheus target. It also fails when
+any account other than root and the logins listed in
+`LEDGER_SUDO_ALLOWED_USERS` can use sudo or has user id 0, and, once the MCP
+address is configured, proves on the host that `/mcp` answers `401` with its
+discovery challenge, that the protected-resource document names the
+configured address, that the REST status path answers `404` on the MCP
+hostname and that the sign-in page answers `404` to an address outside the
+home network and VPN. Tokens, token and code-verifier parameters and
+authenticator enrolment links are added to the secret shapes it looks for in
+the journal and under `/var/log`. `--restart-check`
 also restarts the application and requires it to stay healthy, proving the
 Data Protection key ring survives a restart.
 
@@ -185,10 +205,29 @@ the password manager.
 
 ## 14. External reachability test
 
-From outside the home network and its VPN (for example, a phone on mobile
-data with the VPN off), confirm the Grafana and API hostnames do not
-answer at all. From inside the home network, confirm a REST call without a
-key returns `401`.
+Run the exposure check from a machine outside the home network and its VPN
+(for example, a laptop tethered to a phone with the VPN off), and again from
+inside:
+
+```bash
+build/check-exposure.sh --from outside \
+  --mcp-host mcp.example.com \
+  --api-host ledger-api.example.com \
+  --grafana-host grafana.example.com
+
+build/check-exposure.sh --from inside \
+  --mcp-host mcp.example.com \
+  --api-host ledger-api.example.com \
+  --grafana-host grafana.example.com
+```
+
+Outside, the dashboard and REST hostnames answer `403`, every MCP, OAuth and
+sign-in path of the MCP hostname answers `403` while the public router is
+still on the home-and-VPN-only list (and after go-live too, for any address
+that is not Anthropic's), and every other path answers `404`. Inside,
+discovery, the `401` challenge on `/mcp`, the sign-in page and a REST call
+without a key (`401`) behave as designed. Each run prints one line per
+request and ends with a count of failures.
 
 ## 15. Database access for the operator
 
@@ -265,6 +304,12 @@ after generating them, exactly like the Data Protection certificate in step
 4: database backups never contain either, on purpose. `ledger-selfcheck`
 checks the key file's mode and owner and looks for the key, its password and
 every other secret shape in the journal and under `/var/log`.
+
+## Connect Claude
+
+Once the host is locked down and the exposure check passes, follow [the
+Claude connection guide](mcp.md) to enrol a login, connect Claude Code and
+claude.ai, and go public with the MCP endpoint.
 
 ## What this guide never does
 
