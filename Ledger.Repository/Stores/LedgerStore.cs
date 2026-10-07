@@ -104,6 +104,8 @@ public class LedgerStore(LedgerDbContext dbContext) : ILedgerStore
         {
             await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
 
+            plan = await RedirectKnownReferencesAsync(accountId, plan, cancellationToken);
+
             var inserted = AddInserts(accountId, syncRunId, plan.Inserts, observedAt);
             var updated = await ApplyUpdatesAsync(syncRunId, plan.Updates, observedAt, cancellationToken);
             var merged = await ApplyMergesAsync(accountId, syncRunId, plan.Merges, observedAt, cancellationToken);
@@ -120,6 +122,62 @@ public class LedgerStore(LedgerDbContext dbContext) : ILedgerStore
             dbContext.ChangeTracker.Clear();
             throw;
         }
+    }
+
+    /// <summary>
+    /// Makes the database, not the loaded window, the authority on which references are known. The reconciler only sees the rows
+    /// inside the window it was given, so a reference it treated as new may already belong to an older row. An insert for such a
+    /// reference becomes an update of the row that owns it, and a merge that would attach such a reference to a different row is
+    /// left out, because a reference identifies exactly one transaction.
+    /// </summary>
+    private async Task<ReconciliationPlan> RedirectKnownReferencesAsync(
+        Guid accountId,
+        ReconciliationPlan plan,
+        CancellationToken cancellationToken)
+    {
+        var references = plan.Inserts.Select(insert => insert.Ref)
+            .Concat(plan.Merges.Select(merge => merge.Ref))
+            .Distinct()
+            .ToList();
+
+        if (references.Count == 0)
+        {
+            return plan;
+        }
+
+        var owners = await (
+            from reference in dbContext.TransactionRefs.AsNoTracking()
+            join transaction in dbContext.Transactions.AsNoTracking() on reference.TransactionId equals transaction.Id
+            where reference.AccountId == accountId && references.Contains(reference.Ref)
+            select new { reference.Ref, reference.TransactionId, transaction.Status })
+            .ToDictionaryAsync(owner => owner.Ref, cancellationToken);
+
+        if (owners.Count == 0)
+        {
+            return plan;
+        }
+
+        var inserts = new List<PlannedInsert>();
+        var updates = plan.Updates.ToList();
+
+        foreach (var insert in plan.Inserts)
+        {
+            if (!owners.TryGetValue(insert.Ref, out var owner))
+            {
+                inserts.Add(insert);
+                continue;
+            }
+
+            var booked = insert.Item.Status == ProviderTransactionStatus.Booked;
+            if (booked || owner.Status != LedgerTransactionStatus.Booked)
+            {
+                updates.Add(new PlannedUpdate(owner.TransactionId, insert.Item, booked, Restore: true));
+            }
+        }
+
+        var merges = plan.Merges.Where(merge => !owners.ContainsKey(merge.Ref)).ToList();
+
+        return plan with { Inserts = inserts, Updates = updates, Merges = merges };
     }
 
     private int AddInserts(Guid accountId, Guid syncRunId, IReadOnlyList<PlannedInsert> inserts, DateTimeOffset observedAt)

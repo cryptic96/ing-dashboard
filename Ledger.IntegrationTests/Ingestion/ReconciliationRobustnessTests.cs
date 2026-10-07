@@ -77,6 +77,38 @@ public class ReconciliationRobustnessTests(DatabaseFixture fixture)
         reported.Should().ContainSingle().Which.Status.Should().Be("booked");
     }
 
+    [Fact]
+    public async Task A_booked_item_the_ledger_did_not_load_into_its_window_is_updated_instead_of_inserted_twice()
+    {
+        var scenario = SyntheticBankScenario.Create();
+        var account = scenario.AddAccount(AccountKind.Current);
+        scenario.AddTransaction(account, IngestionTestSupport.Booked("entry-dated", -4.00m, Day));
+        scenario.AddTransaction(account, IngestionTestSupport.Booked("entry-undated", -6.00m, Day) with
+        {
+            BookingDate = null,
+            ValueDate = null,
+            TransactionDate = null
+        });
+        var (factory, clock) = CreateFactory(scenario);
+        await using var _ = factory;
+        var connection = await IngestionTestSupport.LinkSyntheticAsync(factory, scenario, selectFirstAccountOnly: false);
+        var accountKey = connection.Accounts[0].AccountKey;
+        await IngestionTestSupport.SyncAsync(factory, connection.Id);
+
+        clock.Advance(TimeSpan.FromDays(1));
+        scenario.AddTransaction(account, IngestionTestSupport.Booked("entry-next", -2.00m, Day.AddDays(1)));
+        var second = await IngestionTestSupport.SyncAsync(factory, connection.Id);
+        clock.Advance(TimeSpan.FromDays(1));
+        var third = await IngestionTestSupport.SyncAsync(factory, connection.Id);
+
+        second.Outcome.Should().Be(SyncOutcome.Succeeded);
+        third.Outcome.Should().Be(SyncOutcome.Succeeded);
+        second.Inserted.Should().Be(1);
+        third.Inserted.Should().Be(0);
+        (await IngestionTestSupport.ReadStoredTransactionsAsync(fixture, accountKey)).Should().HaveCount(3);
+        (await IngestionTestSupport.CountIdentityViolationsAsync(fixture)).Should().Be(0);
+    }
+
     private (LedgerWebApplicationFactory Factory, FakeTimeProvider Clock) CreateFactory(SyntheticBankScenario scenario)
     {
         var clock = new FakeTimeProvider(Start);
