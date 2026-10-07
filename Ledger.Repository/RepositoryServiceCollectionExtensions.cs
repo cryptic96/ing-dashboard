@@ -52,11 +52,16 @@ public static class RepositoryServiceCollectionExtensions
         return builder;
     }
 
-    /// <summary>Stores logins in <see cref="LedgerDbContext"/> and adds the default token providers, including the authenticator code provider.</summary>
+    /// <summary>
+    /// Stores logins in <see cref="LedgerDbContext"/> through <see cref="LedgerUserStore"/>, which keeps each authenticator secret
+    /// encrypted with the Data Protection key ring, and adds the default token providers, including the authenticator code provider.
+    /// The host must have Data Protection registered.
+    /// </summary>
     public static IdentityBuilder AddLedgerLoginStores(this IdentityBuilder builder)
     {
         return builder
             .AddEntityFrameworkStores<LedgerDbContext>()
+            .AddUserStore<LedgerUserStore>()
             .AddDefaultTokenProviders();
     }
 

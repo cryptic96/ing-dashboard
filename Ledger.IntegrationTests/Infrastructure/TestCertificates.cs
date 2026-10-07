@@ -6,6 +6,20 @@ namespace Ledger.IntegrationTests.Infrastructure;
 /// <summary>Creates disposable self-signed test certificates for Data Protection key-ring tests.</summary>
 public static class TestCertificates
 {
+    private const string SharedPassword = "ledger-test-shared-key-ring-password";
+
+    private static readonly Lazy<string> SharedPath = new(() => CreateSelfSignedPfx(SharedPassword));
+
+    /// <summary>
+    /// The configuration that points a host or an operator command at one certificate shared by the whole test run, so every
+    /// host on one database opens the same key ring.
+    /// </summary>
+    public static IReadOnlyDictionary<string, string?> SharedKeyRingSettings => new Dictionary<string, string?>
+    {
+        ["DataProtection:CertificatePath"] = SharedPath.Value,
+        ["DataProtection:CertificatePassword"] = SharedPassword
+    };
+
     /// <summary>Creates a self-signed RSA certificate and writes a password-protected PFX to a new temp file, returning its path.</summary>
     public static string CreateSelfSignedPfx(string password)
     {

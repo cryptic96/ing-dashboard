@@ -8,7 +8,7 @@ namespace Ledger.Service.Pages.Account;
 
 /// <summary>
 /// The password sign-in page, the first of two steps. A correct password only continues to the one-time code page; a login
-/// without a confirmed second factor can never sign in. Every way a sign-in can fail, including an unknown user name and a
+/// without a confirmed second factor, or without a readable authenticator secret, can never sign in. Every way a sign-in can fail, including an unknown user name and a
 /// locked login, shows the same message, so the page never reveals which logins exist.
 /// </summary>
 [AllowAnonymous]
@@ -47,7 +47,7 @@ public class LoginModel(
 
         var user = await users.FindByNameAsync(UserName);
 
-        if (user is null || !await users.GetTwoFactorEnabledAsync(user))
+        if (user is null || !await users.GetTwoFactorEnabledAsync(user) || string.IsNullOrEmpty(await users.GetAuthenticatorKeyAsync(user)))
         {
             users.PasswordHasher.HashPassword(new LedgerUserEntity(), Password);
             Failed = true;

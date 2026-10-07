@@ -82,7 +82,8 @@ public sealed class McpTestHost : IAsyncDisposable
         }
 
         var startup = settings
-            .Where(setting => setting.Key.StartsWith("OAuth:", StringComparison.Ordinal))
+            .Where(setting => setting.Key.StartsWith("OAuth:", StringComparison.Ordinal)
+                || setting.Key.StartsWith("DataProtection:", StringComparison.Ordinal))
             .ToDictionary(setting => setting.Key.Replace(":", "__", StringComparison.Ordinal), setting => setting.Value);
 
         var factory = new LedgerWebApplicationFactory(
