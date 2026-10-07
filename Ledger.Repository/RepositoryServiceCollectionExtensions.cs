@@ -1,13 +1,16 @@
 using Ledger.Domain.Auth;
 using Ledger.Domain.Ingestion;
+using Ledger.Domain.Queries;
 using Ledger.Domain.Security;
 using Ledger.Repository.Health;
 using Ledger.Repository.Stores;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+using OpenIddict.Core;
 
 namespace Ledger.Repository;
 
@@ -29,6 +32,7 @@ public static class RepositoryServiceCollectionExtensions
         services.AddScoped<IProviderCallStore, ProviderCallStore>();
         services.AddScoped<IBalanceStore, BalanceStore>();
         services.AddScoped<IIngestionStatusStore, IngestionStatusStore>();
+        services.AddScoped<ILedgerQueryStore, LedgerQueryStore>();
 
         return services;
     }
@@ -37,6 +41,22 @@ public static class RepositoryServiceCollectionExtensions
     public static IDataProtectionBuilder PersistKeysToLedgerDatabase(this IDataProtectionBuilder builder)
     {
         return builder.PersistKeysToDbContext<LedgerDbContext>();
+    }
+
+    /// <summary>Stores the OAuth server's applications, authorizations, scopes and tokens in <see cref="LedgerDbContext"/>.</summary>
+    public static OpenIddictCoreBuilder UseLedgerStores(this OpenIddictCoreBuilder builder)
+    {
+        builder.UseEntityFrameworkCore().UseDbContext<LedgerDbContext>();
+
+        return builder;
+    }
+
+    /// <summary>Stores logins in <see cref="LedgerDbContext"/> and adds the default token providers, including the authenticator code provider.</summary>
+    public static IdentityBuilder AddLedgerLoginStores(this IdentityBuilder builder)
+    {
+        return builder
+            .AddEntityFrameworkStores<LedgerDbContext>()
+            .AddDefaultTokenProviders();
     }
 
     /// <summary>Registers the "database" health check.</summary>

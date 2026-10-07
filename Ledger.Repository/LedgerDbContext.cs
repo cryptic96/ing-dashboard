@@ -3,13 +3,19 @@ using Ledger.Domain.Ingestion;
 using Ledger.Repository.Conventions;
 using Ledger.Repository.Entities;
 using Microsoft.AspNetCore.DataProtection.EntityFrameworkCore;
+using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
+using OpenIddict.EntityFrameworkCore.Models;
 
 namespace Ledger.Repository;
 
-/// <summary>EF Core context for the ledger database, including the Data Protection key ring and the canary table.</summary>
+/// <summary>
+/// EF Core context for the ledger database, including the Data Protection key ring, the canary table, the logins and the
+/// tables of the OAuth server.
+/// </summary>
 public class LedgerDbContext(DbContextOptions<LedgerDbContext> options)
-    : DbContext(options), IDataProtectionKeyContext
+    : IdentityUserContext<LedgerUserEntity, Guid>(options), IDataProtectionKeyContext
 {
     /// <summary>The Data Protection key ring, persisted so it survives a restart or a redeploy.</summary>
     public DbSet<DataProtectionKey> DataProtectionKeys { get; set; } = null!;
@@ -82,8 +88,35 @@ public class LedgerDbContext(DbContextOptions<LedgerDbContext> options)
         ConfigureBankAuthorizations(modelBuilder);
         ConfigureProviderCalls(modelBuilder);
         ConfigureBalanceSnapshots(modelBuilder);
+        ConfigureLogins(modelBuilder);
+
+        modelBuilder.UseOpenIddict();
+        MapOAuthTableNames(modelBuilder);
 
         SnakeCaseNaming.Apply(modelBuilder);
+    }
+
+    private static void ConfigureLogins(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<LedgerUserEntity>(entity =>
+        {
+            entity.ToTable("identity_users");
+            entity.Property(user => user.CreatedAt).IsRequired();
+            entity.Property(user => user.LastTotpCodeSha256);
+            entity.Property(user => user.LastTotpAcceptedAt);
+        });
+
+        modelBuilder.Entity<IdentityUserClaim<Guid>>().ToTable("identity_user_claims");
+        modelBuilder.Entity<IdentityUserLogin<Guid>>().ToTable("identity_user_logins");
+        modelBuilder.Entity<IdentityUserToken<Guid>>().ToTable("identity_user_tokens");
+    }
+
+    private static void MapOAuthTableNames(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<OpenIddictEntityFrameworkCoreApplication>().ToTable("oauth_applications");
+        modelBuilder.Entity<OpenIddictEntityFrameworkCoreAuthorization>().ToTable("oauth_authorizations");
+        modelBuilder.Entity<OpenIddictEntityFrameworkCoreScope>().ToTable("oauth_scopes");
+        modelBuilder.Entity<OpenIddictEntityFrameworkCoreToken>().ToTable("oauth_tokens");
     }
 
     private static void ConfigureProviderCalls(ModelBuilder modelBuilder)
