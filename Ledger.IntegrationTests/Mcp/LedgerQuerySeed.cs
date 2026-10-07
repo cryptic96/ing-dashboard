@@ -130,12 +130,25 @@ public static class LedgerQuerySeed
             Row(joint, LedgerTransactionStatus.Booked, null, -3.00m, "EUR", "Example Cafe", External, "No bank date", new DateTimeOffset(2026, 8, 31, 21, 30, 0, TimeSpan.Zero)),
             Row(joint, LedgerTransactionStatus.Booked, null, -2.00m, "EUR", "Example Cafe", External, "Transaction date only", seen, transactionDate: "2026-08-30"),
             Row(joint, LedgerTransactionStatus.Pending, null, -12.50m, "EUR", "Example Bakery", External, "Pending before midnight", new DateTimeOffset(2026, 8, 31, 21, 30, 0, TimeSpan.Zero)),
-            Row(joint, LedgerTransactionStatus.Pending, null, -7.00m, "EUR", "Example Bakery", External, "Pending after midnight", new DateTimeOffset(2026, 8, 31, 22, 30, 0, TimeSpan.Zero)));
+            Row(joint, LedgerTransactionStatus.Pending, null, -7.00m, "EUR", "Example Bakery", External, "Pending after midnight", new DateTimeOffset(2026, 8, 31, 22, 30, 0, TimeSpan.Zero)),
+            Row(joint, LedgerTransactionStatus.Booked, "2026-03-29", -7.00m, "EUR", "Example Bakery", External, "Day of the spring clock change", seen),
+            Row(joint, LedgerTransactionStatus.Booked, "2026-10-24", -4.00m, "EUR", "Example Bakery", External, "Day before the autumn clock change", seen),
+            Row(joint, LedgerTransactionStatus.Booked, "2026-10-25", -5.00m, "EUR", "Example Bakery", External, "Day of the autumn clock change", seen),
+            Row(joint, LedgerTransactionStatus.Booked, "2026-10-26", -6.00m, "EUR", "Example Bakery", External, "Day after the autumn clock change", seen));
+
+        for (var index = 1; index <= ManyCounterpartiesCount; index++)
+        {
+            context.Transactions.Add(
+                Row(joint, LedgerTransactionStatus.Booked, "2026-07-15", -index, "EUR", $"Example Supplier {index:00}", External, "Synthetic supply", seen));
+        }
 
         await context.SaveChangesAsync();
 
         return new TotalsScenario(joint.AccountKey, savings.AccountKey);
     }
+
+    /// <summary>How many synthetic suppliers the totals scenario books in July 2026, one each, paying one euro more than the one before.</summary>
+    public const int ManyCounterpartiesCount = 30;
 
     /// <summary>The opaque keys of the two synced accounts of the totals scenario.</summary>
     public sealed record TotalsScenario(string JointKey, string SavingsKey);
