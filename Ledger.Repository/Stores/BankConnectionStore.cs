@@ -139,18 +139,32 @@ public class BankConnectionStore(LedgerDbContext dbContext) : IBankConnectionSto
         CancellationToken cancellationToken)
     {
         var text = EnumText.ToText(status);
-        var closedAt = status is ConnectionStatus.Revoked or ConnectionStatus.Superseded ? (DateTimeOffset?)at : null;
-
-        var onlyFromActive = status == ConnectionStatus.ProviderExpired;
+        var closing = status is ConnectionStatus.Revoked or ConnectionStatus.Superseded;
+        var allowedFrom = StatusesFrom(status);
 
         await dbContext.BankConnections
-            .Where(connection => connection.Id == connectionId
-                && (!onlyFromActive || connection.Status == BankConnectionEntity.Statuses.Active))
+            .Where(connection => connection.Id == connectionId && allowedFrom.Contains(connection.Status))
             .ExecuteUpdateAsync(
                 setters => setters
                     .SetProperty(connection => connection.Status, text)
-                    .SetProperty(connection => connection.ClosedAt, connection => closedAt ?? connection.ClosedAt),
+                    .SetProperty(connection => connection.ClosedAt, connection => closing ? connection.ClosedAt ?? at : connection.ClosedAt),
                 cancellationToken);
+    }
+
+    private static string[] StatusesFrom(ConnectionStatus target)
+    {
+        return target switch
+        {
+            ConnectionStatus.Active => [BankConnectionEntity.Statuses.ProviderExpired],
+            ConnectionStatus.ProviderExpired => [BankConnectionEntity.Statuses.Active],
+            ConnectionStatus.Revoked =>
+            [
+                BankConnectionEntity.Statuses.Active,
+                BankConnectionEntity.Statuses.ProviderExpired,
+                BankConnectionEntity.Statuses.Superseded
+            ],
+            _ => [BankConnectionEntity.Statuses.Active, BankConnectionEntity.Statuses.ProviderExpired]
+        };
     }
 
     private static BankConnectionEntity NewConnection(

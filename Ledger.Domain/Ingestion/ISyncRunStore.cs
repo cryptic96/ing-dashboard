@@ -7,8 +7,11 @@ public interface ISyncRunStore
     /// <exception cref="SyncAlreadyRunningException">The connection already has an unfinished run.</exception>
     Task<Guid> StartAsync(Guid connectionId, SyncTrigger trigger, DateTimeOffset startedAt, CancellationToken cancellationToken);
 
-    /// <summary>Records how the run ended.</summary>
-    Task FinishAsync(Guid runId, SyncRunCompletion completion, CancellationToken cancellationToken);
+    /// <summary>
+    /// Records how the run ended, and only when it has not ended yet, so a run already finished or marked abandoned keeps its
+    /// first outcome. Returns whether this call recorded the outcome.
+    /// </summary>
+    Task<bool> FinishAsync(Guid runId, SyncRunCompletion completion, CancellationToken cancellationToken);
 
     /// <summary>Lists the connection's runs that started at or after the given instant, in any order.</summary>
     Task<IReadOnlyList<SyncRunSummary>> ListRunsSinceAsync(Guid connectionId, DateTimeOffset since, CancellationToken cancellationToken);

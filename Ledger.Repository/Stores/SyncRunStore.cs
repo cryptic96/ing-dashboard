@@ -42,14 +42,14 @@ public class SyncRunStore(LedgerDbContext dbContext) : ISyncRunStore
     }
 
     /// <inheritdoc />
-    public async Task FinishAsync(Guid runId, SyncRunCompletion completion, CancellationToken cancellationToken)
+    public async Task<bool> FinishAsync(Guid runId, SyncRunCompletion completion, CancellationToken cancellationToken)
     {
         var providerError = completion.ProviderError is { Length: > MaxProviderErrorLength }
             ? completion.ProviderError[..MaxProviderErrorLength]
             : completion.ProviderError;
 
-        await dbContext.SyncRuns
-            .Where(run => run.Id == runId)
+        var changed = await dbContext.SyncRuns
+            .Where(run => run.Id == runId && run.FinishedAt == null)
             .ExecuteUpdateAsync(
                 setters => setters
                     .SetProperty(run => run.FinishedAt, (DateTimeOffset?)completion.FinishedAt)
@@ -61,6 +61,8 @@ public class SyncRunStore(LedgerDbContext dbContext) : ISyncRunStore
                     .SetProperty(run => run.Dropped, completion.Dropped)
                     .SetProperty(run => run.Flagged, completion.Flagged),
                 cancellationToken);
+
+        return changed == 1;
     }
 
     /// <inheritdoc />
