@@ -30,7 +30,11 @@ Things to know about the answers:
   transactions it covers and what it left out, such as pending items or
   transfers between the household's own accounts. Claude never adds amounts
   up itself.
-- Account numbers are masked in everything Claude sees.
+- Account numbers are masked in everything Claude sees: the counterparty's
+  account is shown as its first two letters and last four characters, and an
+  account number written inside a description or a counterparty name is
+  masked the same way, however it is spelled. The rest of the text is shown
+  as the bank sent it.
 
 ## How it is exposed
 

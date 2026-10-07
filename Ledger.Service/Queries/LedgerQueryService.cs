@@ -177,10 +177,10 @@ public class LedgerQueryService(
                 MoneyText.Format(row.Amount),
                 row.Amount < 0m ? "out" : "in",
                 row.Currency,
-                row.CounterpartyName,
+                IbanText.MaskInText(row.CounterpartyName),
                 CounterpartyRef.For(row.CounterpartyName),
                 row.CounterpartyAccountMasked,
-                row.Description,
+                IbanText.MaskInText(row.Description),
                 row.AccountKey,
                 row.AccountName ?? "Account " + row.AccountKey,
                 row.InternalTransfer))
@@ -299,9 +299,9 @@ public class LedgerQueryService(
             .ToList();
 
         return new CounterpartyEntry(
-            spellings[0].Name,
+            IbanText.MaskInText(spellings[0].Name)!,
             CounterpartyRef.For(spellings[0].Name)!,
-            spellings.Take(MaxSpellings).Select(spelling => spelling.Name).ToList(),
+            spellings.Take(MaxSpellings).Select(spelling => IbanText.MaskInText(spelling.Name)!).Distinct(StringComparer.Ordinal).ToList(),
             group.Sum(row => row.Count),
             currencies,
             DateText(group.Min(row => row.FirstDate)),
@@ -372,7 +372,7 @@ public class LedgerQueryService(
                 currency.CounterpartyCount,
                 currency.Counterparties
                     .Select(share => new TotalsCounterparty(
-                        share.Name,
+                        IbanText.MaskInText(share.Name)!,
                         share.Ref,
                         MoneyText.Format(share.MoneyOut),
                         MoneyText.Format(share.MoneyIn),
@@ -381,7 +381,7 @@ public class LedgerQueryService(
                     .ToList(),
                 currency.Groups
                     .Select(group => new TotalsGroup(
-                        group.Label,
+                        group.CounterpartyRef is null ? group.Label : IbanText.MaskInText(group.Label)!,
                         group.From is { } groupFrom ? DateText(groupFrom) : null,
                         group.To is { } groupTo ? DateText(groupTo) : null,
                         group.AccountKey,
