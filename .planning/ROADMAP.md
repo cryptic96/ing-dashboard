@@ -148,12 +148,12 @@ Plans:
   4. Searching a full year of transactions returns paginated results under a server-side cap and says explicitly when a result was truncated.
   5. From outside the network, only `/mcp` and its OAuth endpoints respond, and only to Anthropic's published IP ranges. OAuth discovery works from outside the network. A token issued for a different audience is rejected, and the caller's token is never forwarded to any other service.
 
-**Plans**: 8 plans
+**Plans**: 1/8 plans executed
 
 Plans:
 **Wave 1**
 
-- [ ] 03-01-PLAN.md — Tracer: embedded OpenIddict with Identity logins, consent and pre-registered Claude clients; Claude Code's discovery chain, PKCE sign-in and /mcp with ledger_overview end to end; rotating refresh tokens that survive a restart
+- [x] 03-01-PLAN.md — Tracer: embedded OpenIddict with Identity logins, consent and pre-registered Claude clients; Claude Code's discovery chain, PKCE sign-in and /mcp with ledger_overview end to end; rotating refresh tokens that survive a restart
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -245,7 +245,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 |-------|----------------|--------|-----------|
 | 1. Secure Platform & Release Pipeline | 12/12 | Complete    | 2026-09-29 |
 | 2. Automatic ING Sync | 16/16 | Complete    | 2026-10-07 |
-| 3. Claude Reads the Ledger | 0/8 | Planned | - |
+| 3. Claude Reads the Ledger | 1/8 | In Progress|  |
 | 4. Trustworthy Categorisation | 0/TBD | Not started | - |
 | 5. Budgets, Goals & Forecast | 0/TBD | Not started | - |
 | 6. Advisor Memory & Scheduled Reviews | 0/TBD | Not started | - |
