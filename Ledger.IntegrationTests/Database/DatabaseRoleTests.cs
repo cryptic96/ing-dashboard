@@ -49,7 +49,14 @@ public class DatabaseRoleTests(DatabaseFixture fixture)
         await AssertDeniedAsync("grafana_reader", "CREATE TABLE reporting.role_test_reader (id int)", "42501");
 
         await ExecuteAsync("ledger_migrator", "CREATE VIEW reporting.role_test_view AS SELECT 1 AS value");
-        await AssertSucceedsAsync("grafana_reader", "SELECT * FROM reporting.role_test_view");
+        try
+        {
+            await AssertSucceedsAsync("grafana_reader", "SELECT * FROM reporting.role_test_view");
+        }
+        finally
+        {
+            await ExecuteAsync("ledger_migrator", "DROP VIEW IF EXISTS reporting.role_test_view");
+        }
     }
 
     [Fact]
