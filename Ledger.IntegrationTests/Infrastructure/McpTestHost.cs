@@ -40,12 +40,19 @@ public sealed class McpTestHost : IAsyncDisposable
     /// <summary>The public address the host answers to behind the emulated proxy.</summary>
     public const string PublicBaseUrl = "https://mcp.example.com";
 
+    /// <summary>The home network the sign-in pages answer to in tests; the default proxied client address lies inside it.</summary>
+    public const string SignInNetwork = "192.0.2.0/24";
+
     private readonly LedgerWebApplicationFactory _factory;
 
-    private McpTestHost(LedgerWebApplicationFactory factory)
+    private McpTestHost(LedgerWebApplicationFactory factory, string baseUrl)
     {
         _factory = factory;
+        BaseUrl = baseUrl;
     }
+
+    /// <summary>The public address this host answers to; the default one unless the test configured another.</summary>
+    public string BaseUrl { get; }
 
     /// <summary>The running host.</summary>
     public LedgerWebApplicationFactory Factory => _factory;
@@ -66,6 +73,7 @@ public sealed class McpTestHost : IAsyncDisposable
         if (enableOAuth)
         {
             settings["OAuth:PublicBaseUrl"] = PublicBaseUrl;
+            settings["OAuth:SignInNetworks:0"] = SignInNetwork;
         }
 
         foreach (var (key, value) in configuration ?? new Dictionary<string, string?>())
@@ -93,7 +101,7 @@ public sealed class McpTestHost : IAsyncDisposable
             throw;
         }
 
-        return new McpTestHost(factory);
+        return new McpTestHost(factory, settings.GetValueOrDefault("OAuth:PublicBaseUrl") ?? PublicBaseUrl);
     }
 
     /// <summary>Creates a client that reaches the host the way the reverse proxy does, with its own cookie jar.</summary>
@@ -102,7 +110,7 @@ public sealed class McpTestHost : IAsyncDisposable
     {
         var handler = new ProxyEmulatingHandler(_factory.ApiPort, clientAddress ?? ProxyEmulatingHandler.DefaultClientAddress);
 
-        return new HttpClient(handler) { BaseAddress = new Uri(PublicBaseUrl) };
+        return new HttpClient(handler) { BaseAddress = new Uri(BaseUrl) };
     }
 
     /// <summary>
@@ -194,7 +202,7 @@ public sealed class McpTestHost : IAsyncDisposable
         var transport = new HttpClientTransport(
             new HttpClientTransportOptions
             {
-                Endpoint = new Uri(PublicBaseUrl + "/mcp"),
+                Endpoint = new Uri(BaseUrl + "/mcp"),
                 TransportMode = HttpTransportMode.StreamableHttp
             },
             httpClient,

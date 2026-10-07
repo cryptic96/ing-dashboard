@@ -90,6 +90,7 @@ builder.Services.AddAuthorization(options =>
         .Build();
 });
 
+builder.Services.AddLedgerRequestLimits();
 builder.Services.AddLedgerOAuth(builder.Configuration);
 builder.Services.AddLedgerMcp(builder.Configuration);
 
@@ -101,6 +102,8 @@ LedgerMetrics.RecordBuildInfo(Assembly.GetExecutingAssembly());
 McpMetrics.InitialiseCounters();
 
 app.UseForwardedHeaders();
+app.UsePublicHostGuard();
+app.UseLedgerRequestLimits();
 
 if (app.Environment.IsDevelopment())
 {

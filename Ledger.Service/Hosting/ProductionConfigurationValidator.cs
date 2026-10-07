@@ -3,6 +3,7 @@ using System.Net;
 using Ledger.Domain.Ingestion;
 using Ledger.Repository;
 using Ledger.Service.Ingestion;
+using Ledger.Service.OAuth;
 using Microsoft.Extensions.Configuration;
 
 namespace Ledger.Service.Hosting;
@@ -21,6 +22,13 @@ public static class ProductionConfigurationValidator
     private const string TimeZoneKey = "Ingestion:TimeZone";
     private const string ScheduleLocalTimeKey = "Ingestion:ScheduleLocalTime";
     private const string KnownProxiesKey = "ReverseProxy:KnownProxies";
+    private const string PublicBaseUrlKey = "OAuth:PublicBaseUrl";
+    private const string SignInNetworksKey = "OAuth:SignInNetworks";
+    private const string AccessTokenLifetimeKey = "OAuth:AccessTokenLifetime";
+    private const string RefreshTokenLifetimeKey = "OAuth:RefreshTokenLifetime";
+    private const string RefreshTokenReuseLeewayKey = "OAuth:RefreshTokenReuseLeeway";
+
+    private static readonly string[] ExampleDomains = ["example.com", "example.org", "example.net"];
 
     /// <summary>Throws one InvalidOperationException listing every offending configuration key when the Production configuration is unsafe.</summary>
     public static void ThrowIfInvalid(IConfiguration configuration)
@@ -47,11 +55,110 @@ public static class ProductionConfigurationValidator
 
         AddBankLinkProblems(configuration, offendingKeys);
         AddScheduleProblems(configuration, offendingKeys);
+        AddOAuthProblems(configuration, offendingKeys);
 
         if (offendingKeys.Count > 0)
         {
             throw new InvalidOperationException(
                 $"Unsafe or missing required configuration key(s): {string.Join(", ", offendingKeys)}.");
+        }
+    }
+
+    /// <summary>
+    /// The sign-in, OAuth and MCP surface is switched on by the public base address, so its other keys are judged only when that
+    /// address is present. The address must be a real https origin, the sign-in networks must be a deliberate allow-list that
+    /// never covers Anthropic's connectors, and the token lifetimes must stay in a sane range.
+    /// </summary>
+    private static void AddOAuthProblems(IConfiguration configuration, List<string> offendingKeys)
+    {
+        var publicBaseUrl = configuration[PublicBaseUrlKey];
+
+        if (string.IsNullOrWhiteSpace(publicBaseUrl))
+        {
+            return;
+        }
+
+        if (!IsValidPublicBaseUrl(publicBaseUrl))
+        {
+            offendingKeys.Add(PublicBaseUrlKey);
+        }
+
+        if (!HasValidSignInNetworks(configuration))
+        {
+            offendingKeys.Add(SignInNetworksKey);
+        }
+
+        AddLifetimeProblem(configuration, AccessTokenLifetimeKey, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(60), offendingKeys);
+        AddLifetimeProblem(configuration, RefreshTokenLifetimeKey, TimeSpan.FromDays(1), TimeSpan.FromDays(180), offendingKeys);
+        AddLifetimeProblem(configuration, RefreshTokenReuseLeewayKey, TimeSpan.Zero, TimeSpan.FromSeconds(120), offendingKeys);
+    }
+
+    private static bool IsValidPublicBaseUrl(string publicBaseUrl)
+    {
+        if (!Uri.TryCreate(publicBaseUrl, UriKind.Absolute, out var uri)
+            || uri.Scheme != Uri.UriSchemeHttps
+            || publicBaseUrl.EndsWith('/')
+            || publicBaseUrl.Contains('?', StringComparison.Ordinal)
+            || publicBaseUrl.Contains('#', StringComparison.Ordinal)
+            || !string.IsNullOrEmpty(uri.UserInfo)
+            || uri.AbsolutePath != "/")
+        {
+            return false;
+        }
+
+        return !ExampleDomains.Any(domain =>
+            uri.Host.Equals(domain, StringComparison.OrdinalIgnoreCase)
+            || uri.Host.EndsWith("." + domain, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// At least one range is required, every range must parse, none may be a /0 that admits the whole internet, and none may
+    /// overlap the ranges Anthropic's connectors call from (160.79.104.0/21 for IPv4 and its IPv6 counterpart), because those must
+    /// never reach the sign-in pages.
+    /// </summary>
+    private static bool HasValidSignInNetworks(IConfiguration configuration)
+    {
+        var ranges = configuration.GetSection(SignInNetworksKey).Get<string[]>() ?? [];
+
+        if (ranges.Length == 0)
+        {
+            return false;
+        }
+
+        var anthropic = new[] { SignInNetworks.AnthropicIpv4Range, SignInNetworks.AnthropicIpv6Range }
+            .Select(range => SignInNetworks.TryParse(range, out var network) ? network : throw new InvalidOperationException("The Anthropic range constant is invalid."))
+            .ToList();
+
+        foreach (var range in ranges)
+        {
+            if (!SignInNetworks.TryParse(range, out var network)
+                || network.PrefixLength == 0
+                || anthropic.Any(blocked => SignInNetworks.Overlaps(network, blocked)))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static void AddLifetimeProblem(
+        IConfiguration configuration,
+        string key,
+        TimeSpan minimum,
+        TimeSpan maximum,
+        List<string> offendingKeys)
+    {
+        var text = configuration[key];
+
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return;
+        }
+
+        if (!TimeSpan.TryParse(text, CultureInfo.InvariantCulture, out var value) || value < minimum || value > maximum)
+        {
+            offendingKeys.Add(key);
         }
     }
 

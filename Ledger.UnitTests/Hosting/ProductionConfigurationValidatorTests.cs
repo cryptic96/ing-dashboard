@@ -311,10 +311,158 @@ public class ProductionConfigurationValidatorTests : IDisposable
         act.Should().NotThrow();
     }
 
+    [Fact]
+    [Trait("Category", "Configuration")]
+    public void ThrowIfInvalid_does_not_require_any_oauth_key_when_no_public_base_address_is_set()
+    {
+        var configuration = BuildConfiguration(_existingCertificatePath, SentinelPassword, ValidConnectionString);
+
+        var act = () => ProductionConfigurationValidator.ThrowIfInvalid(configuration);
+
+        act.Should().NotThrow();
+    }
+
+    [Fact]
+    [Trait("Category", "Configuration")]
+    public void ThrowIfInvalid_accepts_a_valid_public_address_with_valid_sign_in_networks()
+    {
+        var configuration = OAuthConfiguration(new Dictionary<string, string?>());
+
+        var act = () => ProductionConfigurationValidator.ThrowIfInvalid(configuration);
+
+        act.Should().NotThrow();
+    }
+
+    [Theory]
+    [Trait("Category", "Configuration")]
+    [InlineData("http://mcp.household.test")]
+    [InlineData("https://mcp.household.test/path")]
+    [InlineData("https://mcp.household.test/mcp")]
+    [InlineData("https://mcp.household.test?x=1")]
+    [InlineData("https://mcp.household.test#part")]
+    [InlineData("https://mcp.household.test/")]
+    [InlineData("https://mcp.example.com")]
+    [InlineData("https://mcp.example.org")]
+    [InlineData("https://example.net")]
+    [InlineData("mcp.household.test")]
+    public void ThrowIfInvalid_names_the_public_base_address_key_for_an_unsafe_address(string address)
+    {
+        var configuration = OAuthConfiguration(new Dictionary<string, string?> { ["OAuth:PublicBaseUrl"] = address });
+
+        var act = () => ProductionConfigurationValidator.ThrowIfInvalid(configuration);
+
+        var exception = act.Should().Throw<InvalidOperationException>().Which;
+        exception.Message.Should().Contain("OAuth:PublicBaseUrl");
+        exception.Message.Should().NotContain("OAuth:SignInNetworks");
+        exception.Message.Should().NotContain("household.test");
+    }
+
+    [Theory]
+    [Trait("Category", "Configuration")]
+    [InlineData("")]
+    [InlineData("not-a-range")]
+    [InlineData("0.0.0.0/0")]
+    [InlineData("::/0")]
+    [InlineData("160.79.104.0/22")]
+    [InlineData("160.79.104.0/21")]
+    [InlineData("160.79.0.0/16")]
+    [InlineData("160.79.111.255")]
+    [InlineData("2607:6bc0::/32")]
+    public void ThrowIfInvalid_names_the_sign_in_networks_key_for_an_empty_invalid_open_or_anthropic_overlapping_range(string range)
+    {
+        var configuration = OAuthConfiguration(new Dictionary<string, string?> { ["OAuth:SignInNetworks:0"] = range });
+
+        var act = () => ProductionConfigurationValidator.ThrowIfInvalid(configuration);
+
+        var exception = act.Should().Throw<InvalidOperationException>().Which;
+        exception.Message.Should().Contain("OAuth:SignInNetworks");
+        exception.Message.Should().NotContain("OAuth:PublicBaseUrl");
+    }
+
+    [Fact]
+    [Trait("Category", "Configuration")]
+    public void ThrowIfInvalid_names_the_sign_in_networks_key_when_no_range_is_configured()
+    {
+        var configuration = OAuthConfiguration(new Dictionary<string, string?>
+        {
+            ["OAuth:SignInNetworks:0"] = null,
+            ["OAuth:SignInNetworks:1"] = null
+        });
+
+        var act = () => ProductionConfigurationValidator.ThrowIfInvalid(configuration);
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*OAuth:SignInNetworks*");
+    }
+
+    [Fact]
+    [Trait("Category", "Configuration")]
+    public void ThrowIfInvalid_names_the_sign_in_networks_key_when_any_one_range_is_unsafe()
+    {
+        var configuration = OAuthConfiguration(new Dictionary<string, string?> { ["OAuth:SignInNetworks:1"] = "160.79.105.0/24" });
+
+        var act = () => ProductionConfigurationValidator.ThrowIfInvalid(configuration);
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*OAuth:SignInNetworks*");
+    }
+
+    [Theory]
+    [Trait("Category", "Configuration")]
+    [InlineData("OAuth:AccessTokenLifetime", "00:00:30")]
+    [InlineData("OAuth:AccessTokenLifetime", "02:00:00")]
+    [InlineData("OAuth:AccessTokenLifetime", "soon")]
+    [InlineData("OAuth:RefreshTokenLifetime", "0.12:00:00")]
+    [InlineData("OAuth:RefreshTokenLifetime", "365.00:00:00")]
+    [InlineData("OAuth:RefreshTokenReuseLeeway", "00:05:00")]
+    [InlineData("OAuth:RefreshTokenReuseLeeway", "-00:00:01")]
+    public void ThrowIfInvalid_names_a_token_lifetime_key_that_is_outside_its_range(string key, string value)
+    {
+        var configuration = OAuthConfiguration(new Dictionary<string, string?> { [key] = value });
+
+        var act = () => ProductionConfigurationValidator.ThrowIfInvalid(configuration);
+
+        var exception = act.Should().Throw<InvalidOperationException>().Which;
+        exception.Message.Should().Contain(key);
+        exception.Message.Should().NotContain(value);
+    }
+
+    [Theory]
+    [Trait("Category", "Configuration")]
+    [InlineData("OAuth:AccessTokenLifetime", "00:01:00")]
+    [InlineData("OAuth:AccessTokenLifetime", "01:00:00")]
+    [InlineData("OAuth:RefreshTokenLifetime", "1.00:00:00")]
+    [InlineData("OAuth:RefreshTokenLifetime", "180.00:00:00")]
+    [InlineData("OAuth:RefreshTokenReuseLeeway", "00:00:00")]
+    [InlineData("OAuth:RefreshTokenReuseLeeway", "00:02:00")]
+    public void ThrowIfInvalid_accepts_token_lifetimes_at_the_ends_of_their_ranges(string key, string value)
+    {
+        var configuration = OAuthConfiguration(new Dictionary<string, string?> { [key] = value });
+
+        var act = () => ProductionConfigurationValidator.ThrowIfInvalid(configuration);
+
+        act.Should().NotThrow();
+    }
+
     /// <inheritdoc />
     public void Dispose()
     {
         File.Delete(_existingCertificatePath);
+    }
+
+    private IConfiguration OAuthConfiguration(IReadOnlyDictionary<string, string?> overrides)
+    {
+        var values = new Dictionary<string, string?>
+        {
+            ["OAuth:PublicBaseUrl"] = "https://mcp.household.test",
+            ["OAuth:SignInNetworks:0"] = "192.0.2.0/24",
+            ["OAuth:SignInNetworks:1"] = "198.51.100.0/24"
+        };
+
+        foreach (var (key, value) in overrides)
+        {
+            values[key] = value;
+        }
+
+        return BuildConfiguration(_existingCertificatePath, SentinelPassword, ValidConnectionString, extra: values);
     }
 
     private IConfiguration CompleteEnableBankingConfiguration(
@@ -346,7 +494,8 @@ public class ProductionConfigurationValidatorTests : IDisposable
         string? applicationId = null,
         string? keyPath = null,
         string? keyPassword = null,
-        string? knownProxy = null)
+        string? knownProxy = null,
+        IReadOnlyDictionary<string, string?>? extra = null)
     {
         var values = new Dictionary<string, string?>
         {
@@ -362,6 +511,11 @@ public class ProductionConfigurationValidatorTests : IDisposable
             ["EnableBanking:PrivateKeyPassword"] = keyPassword,
             ["ReverseProxy:KnownProxies:0"] = knownProxy
         };
+
+        foreach (var (key, value) in extra ?? new Dictionary<string, string?>())
+        {
+            values[key] = value;
+        }
 
         return new ConfigurationBuilder().AddInMemoryCollection(values).Build();
     }

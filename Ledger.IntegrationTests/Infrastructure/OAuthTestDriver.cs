@@ -16,6 +16,7 @@ public sealed class TestLogin(Guid id, string userName, string password, string 
 {
     private static readonly int[] StepOffsets = [0, 1, 2, -1, -2];
     private readonly HashSet<long> _usedSteps = [];
+    private readonly List<string> _issuedCodes = [];
 
     /// <summary>The identifier of the login.</summary>
     public Guid Id { get; } = id;
@@ -28,6 +29,18 @@ public sealed class TestLogin(Guid id, string userName, string password, string 
 
     /// <summary>The Base32 key an authenticator app holds for the login.</summary>
     public string AuthenticatorKey { get; } = authenticatorKey;
+
+    /// <summary>Every code <see cref="NextCode"/> has handed out so far.</summary>
+    public IReadOnlyList<string> IssuedCodes
+    {
+        get
+        {
+            lock (_usedSteps)
+            {
+                return [.. _issuedCodes];
+            }
+        }
+    }
 
     /// <summary>A code the host accepts now and has not been given by this object before.</summary>
     public string NextCode()
@@ -42,7 +55,10 @@ public sealed class TestLogin(Guid id, string userName, string password, string 
 
                 if (_usedSteps.Add(moment.ToUnixTimeSeconds() / 30))
                 {
-                    return TotpCode.Compute(AuthenticatorKey, moment);
+                    var code = TotpCode.Compute(AuthenticatorKey, moment);
+                    _issuedCodes.Add(code);
+
+                    return code;
                 }
             }
         }
