@@ -147,7 +147,7 @@ public class SyncScheduleTests
         var runs = new[] { Run(SyncTrigger.Scheduled, date, 20, 55, 21, 0, SyncOutcome.FailedTransient) };
 
         SyncSchedule.Decide(LocalInstant(date, 23, 59), Settings(), runs).Should().Be(SyncDecisionKind.None);
-        SyncSchedule.Decide(LocalInstant(date.AddDays(1), 1, 0), Settings(), []).Should().Be(SyncDecisionKind.None);
+        SyncSchedule.Decide(LocalInstant(date.AddDays(1), 1, 0), Settings(), runs).Should().Be(SyncDecisionKind.None);
     }
 
     [Theory]

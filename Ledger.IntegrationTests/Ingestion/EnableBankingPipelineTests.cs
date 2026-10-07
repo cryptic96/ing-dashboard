@@ -83,7 +83,9 @@ public sealed class EnableBankingPipelineTests(DatabaseFixture fixture) : IDispo
         second.Outcome.Should().Be(SyncOutcome.Succeeded);
         second.Inserted.Should().Be(0);
         (await IngestionTestSupport.ReadCountsAsync(fixture, jointKey)).Should().Be(before);
-        fake.Requests.Where(IsTransactionRequest).Skip(3).Should().OnlyContain(request => request.Parameter("date_from") != null);
+        var secondFetch = fake.Requests.Where(IsTransactionRequest).Skip(3).ToList();
+        secondFetch.Should().HaveCount(3, "the second sync fetched the same three pages again");
+        secondFetch.Should().OnlyContain(request => request.Parameter("date_from") != null);
 
         (await IngestionTestSupport.CountIdentityViolationsAsync(fixture)).Should().Be(0);
         (await host.ReadAsync($"SELECT provider FROM public.accounts WHERE account_key = '{jointKey}'")).Single().Should().Be("enablebanking");
