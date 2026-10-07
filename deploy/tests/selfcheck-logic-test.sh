@@ -173,6 +173,32 @@ exec /usr/bin/jq "$@"
 EOF_STUB
 chmod +x "${OWN_BIN}/jq"
 
+# --- stub: getent (only the passwd database) ---------------------------------
+cat > "${OWN_BIN}/getent" <<'EOF_STUB'
+#!/usr/bin/env bash
+if [[ "$1" == "passwd" ]]; then
+  printf '%b\n' "${STUB_PASSWD:-root:x:0:0:root:/root:/bin/bash\nledger:x:998:998::/var/lib/ledger:/usr/sbin/nologin\ndaemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin}"
+  exit 0
+fi
+exit 2
+EOF_STUB
+chmod +x "${OWN_BIN}/getent"
+
+# --- stub: sudo (only "sudo -n -l -U NAME"; NAME is allowed when listed) ----
+cat > "${OWN_BIN}/sudo" <<'EOF_STUB'
+#!/usr/bin/env bash
+name="${*: -1}"
+for u in ${STUB_SUDO_USERS:-}; do
+  if [[ "$u" == "$name" ]]; then
+    printf 'User %s may run the following commands on host:\n    (ALL) NOPASSWD: ALL\n' "$name"
+    exit 0
+  fi
+done
+printf 'User %s is not allowed to run sudo on host.\n' "$name"
+exit 1
+EOF_STUB
+chmod +x "${OWN_BIN}/sudo"
+
 # --- stub: curl --------------------------------------------------------------
 # Handles two shapes the script uses: plain GET (optionally with
 # --write-out '%{http_code}' and --output /dev/null) and the
@@ -183,13 +209,50 @@ cat > "${OWN_BIN}/curl" <<'EOF_STUB'
 has_config=0
 has_write_out=0
 url=""
-for a in "$@"; do
+method="GET"
+host_header=""
+dump_file=""
+out_file=""
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do
+  a="${args[$i]}"
+  next="${args[$((i + 1))]:-}"
   case "$a" in
     --config) has_config=1 ;;
     --write-out) has_write_out=1 ;;
+    --request) method="$next" ;;
+    --dump-header) dump_file="$next" ;;
+    --output) out_file="$next" ;;
+    --header)
+      case "$next" in
+        Host:*) host_header="${next#Host: }" ;;
+      esac ;;
     http://*) url="$a" ;;
   esac
 done
+
+if [[ -n "${STUB_MCP_HOST:-}" && "$host_header" == "$STUB_MCP_HOST" ]]; then
+  path="${url#http://127.0.0.1:5080}"
+  status="404"
+  body=""
+  headers=""
+  default_challenge="https://${STUB_MCP_HOST}/.well-known/oauth-protected-resource/mcp"
+  default_body="{\"resource\":\"https://${STUB_MCP_HOST}/mcp\"}"
+  case "$method $path" in
+    "POST /mcp")
+      status="${STUB_MCP_STATUS:-401}"
+      headers="WWW-Authenticate: Bearer resource_metadata=\"${STUB_MCP_CHALLENGE_URL-$default_challenge}\"" ;;
+    "GET /.well-known/oauth-protected-resource/mcp")
+      status="${STUB_PRM_STATUS:-200}"
+      body="${STUB_PRM_BODY-$default_body}" ;;
+    "GET /api/v1/status") status="${STUB_MCP_API_STATUS:-404}" ;;
+    "GET /account/login") status="${STUB_SIGNIN_STATUS:-404}" ;;
+  esac
+  [[ -n "$dump_file" ]] && printf 'HTTP/1.1 %s\r\n%s\r\n' "$status" "$headers" > "$dump_file"
+  [[ -n "$out_file" && "$out_file" != "/dev/null" ]] && printf '%s' "$body" > "$out_file"
+  [[ "$has_write_out" -eq 1 ]] && printf '%s' "$status"
+  exit 0
+fi
 
 if [[ "$has_config" -eq 1 ]]; then
   cfg="$(cat)"
@@ -320,7 +383,10 @@ setup_good_env() {
     STUB_STATUS_CODE STUB_GRAFANA_ANON_CODE STUB_PROM_TARGETS_DIR \
     STUB_PROM_TARGETS_CALLS STUB_CURRENT_RELEASE_PATH STUB_MANIFEST_COMMIT \
     STUB_GRAFANA_ADMIN_USER STUB_GRAFANA_ADMIN_PASS STUB_GRAFANA_ORG_USERS \
-    STUB_GRAFANA_SETTINGS STUB_GRAFANA_DEFAULT_PASSWORD_WORKS
+    STUB_GRAFANA_SETTINGS STUB_GRAFANA_DEFAULT_PASSWORD_WORKS \
+    STUB_PASSWD STUB_SUDO_USERS STUB_MCP_HOST STUB_MCP_STATUS \
+    STUB_MCP_CHALLENGE_URL STUB_PRM_STATUS STUB_PRM_BODY \
+    STUB_MCP_API_STATUS STUB_SIGNIN_STATUS
   export STUB_ACTIVE_UNITS="prometheus prometheus-node-exporter grafana-server ledger ledger-deploy-poll.timer ledger-backup.timer"
   export STUB_ENABLED_UNITS="ledger-deploy-poll.timer ledger-backup.timer"
   export STUB_PG_SERVICE_NAME="postgresql@16-main.service"
@@ -717,6 +783,175 @@ OUT="$(run_selfcheck --pre-deploy)"
 assert_line "a missing Amsterdam zone file fails" "$OUT" \
   "FAIL - the Europe/Amsterdam time zone file is missing"
 export LEDGER_SELFCHECK_ZONEINFO="${ZONE_ROOT}/Europe/Amsterdam"
+
+# =====================================================================
+# Sudo logins and UID 0 (check_sudo_logins)
+# =====================================================================
+SUDO_OK_LINE="PASS - no account other than root and the allowed list can use sudo"
+UID_OK_LINE="PASS - no account other than root has UID 0"
+PASSWD_WITH_OPERATOR='root:x:0:0:root:/root:/bin/bash\nledger:x:998:998::/var/lib/ledger:/usr/sbin/nologin\noperator:x:1000:1000::/home/operator:/bin/bash'
+SUDO_CONF_EMPTY="${WORKDIR}/sudo-empty.conf"
+SUDO_CONF_ALLOWED="${WORKDIR}/sudo-allowed.conf"
+printf 'LEDGER_SUDO_ALLOWED_USERS=""\n' > "$SUDO_CONF_EMPTY"
+printf 'LEDGER_SUDO_ALLOWED_USERS="admin1 operator,admin2"\n' > "$SUDO_CONF_ALLOWED"
+SAVED_PROVISION_CONF="$LEDGER_PROVISION_CONF"
+
+setup_good_env
+export LEDGER_PROVISION_CONF="$SUDO_CONF_EMPTY"
+OUT="$(run_selfcheck --pre-deploy)"
+assert_line "GOOD host: only root can use sudo" "$OUT" "$SUDO_OK_LINE"
+assert_line "GOOD host: only root has UID 0" "$OUT" "$UID_OK_LINE"
+
+setup_good_env
+export LEDGER_PROVISION_CONF="$SUDO_CONF_EMPTY"
+export STUB_PASSWD="$PASSWD_WITH_OPERATOR"
+export STUB_SUDO_USERS="operator"
+OUT="$(run_selfcheck --pre-deploy)"
+assert_line "BAD host: a login that can use sudo fails and is named" "$OUT" \
+  "FAIL - account operator can use sudo and is not in the allowed list"
+FOUND=0
+grep -qxF "$SUDO_OK_LINE" <<< "$OUT" && FOUND=1
+check "BAD host: the sudo pass line is absent" "0" "$FOUND"
+
+setup_good_env
+export LEDGER_PROVISION_CONF="$SUDO_CONF_ALLOWED"
+export STUB_PASSWD="$PASSWD_WITH_OPERATOR"
+export STUB_SUDO_USERS="operator"
+OUT="$(run_selfcheck --pre-deploy)"
+assert_line "an allowed login with sudo passes (list split on spaces and commas)" "$OUT" "$SUDO_OK_LINE"
+
+setup_good_env
+export LEDGER_PROVISION_CONF="$SUDO_CONF_EMPTY"
+export STUB_PASSWD='root:x:0:0:root:/root:/bin/bash\ntoor:x:0:0:other:/root:/bin/bash'
+OUT="$(run_selfcheck --pre-deploy)"
+assert_line "BAD host: a second UID 0 account fails and is named" "$OUT" \
+  "FAIL - account toor has UID 0"
+
+export LEDGER_PROVISION_CONF="$SAVED_PROVISION_CONF"
+
+# =====================================================================
+# MCP endpoint boundary (check_mcp_endpoint)
+# =====================================================================
+MCP_HOST="mcp.example.com"
+write_mcp_env() {
+  printf 'OAuth__PublicBaseUrl=https://%s\n' "$MCP_HOST" > "$ENV_FIXTURE"
+}
+
+setup_good_env
+reset_log_fixtures
+OUT="$(run_selfcheck)"
+assert_line "an absent OAuth__PublicBaseUrl skips the MCP checks" "$OUT" \
+  "SKIP - MCP endpoint not configured (OAuth__PublicBaseUrl is absent)"
+
+setup_good_env
+reset_log_fixtures
+write_mcp_env
+export STUB_MCP_HOST="$MCP_HOST"
+OUT="$(run_selfcheck)"
+assert_line "GOOD host: the 401 challenge names the resource metadata" "$OUT" \
+  "PASS - POST /mcp without a token returns 401 with the expected resource_metadata challenge"
+assert_line "GOOD host: the protected-resource document names the resource" "$OUT" \
+  "PASS - the protected-resource document names https://${MCP_HOST}/mcp"
+assert_line "GOOD host: the REST status path is 404 on the MCP hostname" "$OUT" \
+  "PASS - GET /api/v1/status on the MCP hostname returns 404"
+assert_line "GOOD host: the sign-in page is 404 from loopback" "$OUT" \
+  "PASS - the sign-in page returns 404 to an address outside the home and VPN networks"
+
+setup_good_env
+reset_log_fixtures
+write_mcp_env
+export STUB_MCP_HOST="$MCP_HOST"
+OUT="$(run_selfcheck --pre-deploy)"
+assert_line "under --pre-deploy the MCP checks are skipped" "$OUT" \
+  "SKIP - MCP endpoint checks: no release installed yet"
+
+setup_good_env
+reset_log_fixtures
+write_mcp_env
+export STUB_MCP_HOST="$MCP_HOST"
+export STUB_MCP_API_STATUS="200"
+OUT="$(run_selfcheck)"
+assert_line "BAD host: a 200 on the REST status path of the MCP hostname fails" "$OUT" \
+  "FAIL - GET /api/v1/status on the MCP hostname returned 200, expected 404"
+
+setup_good_env
+reset_log_fixtures
+write_mcp_env
+export STUB_MCP_HOST="$MCP_HOST"
+export STUB_MCP_CHALLENGE_URL="https://other.example.org/.well-known/oauth-protected-resource/mcp"
+OUT="$(run_selfcheck)"
+assert_line "BAD host: a challenge for a different resource fails" "$OUT" \
+  "FAIL - POST /mcp without a token returned 401 but not the resource_metadata challenge for https://${MCP_HOST}/.well-known/oauth-protected-resource/mcp"
+
+setup_good_env
+reset_log_fixtures
+write_mcp_env
+export STUB_MCP_HOST="$MCP_HOST"
+export STUB_SIGNIN_STATUS="200"
+OUT="$(run_selfcheck)"
+assert_line "BAD host: a 200 on the sign-in page from loopback fails" "$OUT" \
+  "FAIL - the sign-in page returned 200 to an address outside the home and VPN networks, expected 404"
+
+setup_good_env
+reset_log_fixtures
+write_mcp_env
+export STUB_MCP_HOST="$MCP_HOST"
+export STUB_PRM_BODY='{"resource":"https://other.example.org/mcp"}'
+OUT="$(run_selfcheck)"
+assert_line "BAD host: a protected-resource document for a different resource fails" "$OUT" \
+  "FAIL - the protected-resource document returned 200 naming 'https://other.example.org/mcp', expected 200 naming https://${MCP_HOST}/mcp"
+
+# =====================================================================
+# Token and enrolment-secret log patterns (check_log_secrets)
+# =====================================================================
+FIXTURE_BEARER="$(random_chars 'A-Za-z0-9' 40)"
+FIXTURE_TOKEN_VALUE="$(random_chars 'A-Za-z0-9' 32)"
+OTP_SCHEME="otpauth:"
+
+setup_good_env
+reset_log_fixtures
+printf 'request header Authorization: Bearer %s\n' "$FIXTURE_BEARER" >> "$JOURNAL_FILE"
+OUT="$(run_selfcheck --pre-deploy)"
+assert_line "a bearer token in the journal fails" "$OUT" \
+  "FAIL - secret-shaped text (bearer token) found in the journal"
+assert_absent "the bearer token is never printed" "$OUT" "$FIXTURE_BEARER"
+
+setup_good_env
+reset_log_fixtures
+printf 'WWW-Authenticate: Bearer resource_metadata="https://%s/.well-known/oauth-protected-resource/mcp"\n' "$MCP_HOST" >> "$JOURNAL_FILE"
+OUT="$(run_selfcheck --pre-deploy)"
+assert_line "a bearer challenge without a token passes the log scan" "$OUT" "$CLEAN_LOG_LINE"
+
+setup_good_env
+reset_log_fixtures
+printf 'POST /connect/token grant_type=refresh_token&refresh_token=%s\n' "$FIXTURE_TOKEN_VALUE" > "${LOG_ROOT}/proxy.log"
+OUT="$(run_selfcheck --pre-deploy)"
+assert_line "a refresh_token parameter in a log file fails" "$OUT" \
+  "FAIL - secret-shaped text (token parameter) found in ${LOG_ROOT}/proxy.log"
+assert_absent "the refresh token is never printed" "$OUT" "$FIXTURE_TOKEN_VALUE"
+
+setup_good_env
+reset_log_fixtures
+printf 'GET /callback?access_token=%s\n' "$FIXTURE_TOKEN_VALUE" >> "$JOURNAL_FILE"
+OUT="$(run_selfcheck --pre-deploy)"
+assert_line "an access_token parameter in the journal fails" "$OUT" \
+  "FAIL - secret-shaped text (token parameter) found in the journal"
+
+setup_good_env
+reset_log_fixtures
+printf 'token request code_verifier=%s\n' "$FIXTURE_TOKEN_VALUE" >> "$JOURNAL_FILE"
+OUT="$(run_selfcheck --pre-deploy)"
+assert_line "a code_verifier parameter in the journal fails" "$OUT" \
+  "FAIL - secret-shaped text (code verifier) found in the journal"
+assert_absent "the code verifier is never printed" "$OUT" "$FIXTURE_TOKEN_VALUE"
+
+setup_good_env
+reset_log_fixtures
+printf 'enrol %s//totp/Example:user?secret=%s\n' "$OTP_SCHEME" "$FIXTURE_TOKEN_VALUE" >> "$JOURNAL_FILE"
+OUT="$(run_selfcheck --pre-deploy)"
+assert_line "an authenticator enrolment URI in the journal fails" "$OUT" \
+  "FAIL - secret-shaped text (authenticator enrolment URI) found in the journal"
+assert_absent "the enrolment secret is never printed" "$OUT" "$FIXTURE_TOKEN_VALUE"
 
 echo ""
 if [ "$FAILURES" -eq 0 ]; then

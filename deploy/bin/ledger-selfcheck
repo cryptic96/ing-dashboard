@@ -352,6 +352,10 @@ check_log_secrets() {
   scan_logs_for "age identity" regex "${age_marker}${age_one}[0-9A-Z]{58}"
   scan_logs_for "API key" regex 'ldg_[0-9a-f]{16}_[A-Za-z0-9_-]{43}'
   scan_logs_for "private key" regex "${pem_open}([A-Z]+ )*${pem_name}"
+  scan_logs_for "bearer token" regex '[Bb]earer[[:space:]]+[A-Za-z0-9._~+/-]{20,}'
+  scan_logs_for "token parameter" regex '(access_token|refresh_token)=[A-Za-z0-9._~+/-]{16,}'
+  scan_logs_for "code verifier" regex 'code_verifier=[A-Za-z0-9._~+/-]{16,}'
+  scan_logs_for "authenticator enrolment URI" regex 'otpauth://'
 
   local value key_path body
   value="$(env_file_value DataProtection__CertificatePassword)"
@@ -369,6 +373,118 @@ check_log_secrets() {
 
   if [[ "$LOG_LEAKS" -eq 0 ]]; then
     pass "no secret-shaped text found in the journal or under the log directories"
+  fi
+}
+
+# Prints the logins that may use sudo besides root, one per line, as listed
+# in provision.conf. The list is split on whitespace and commas.
+sudo_allowed_users() {
+  local raw=""
+  if [[ -f "$PROVISION_CONF" ]]; then
+    raw="$(grep -E '^LEDGER_SUDO_ALLOWED_USERS=' "$PROVISION_CONF" | head -n1 | cut -d= -f2- || true)"
+  fi
+  raw="${raw#\"}"
+  raw="${raw%\"}"
+  raw="${raw//,/ }"
+  printf '%s\n' "$raw" | tr -s '[:space:]' '\n' | sed '/^$/d'
+}
+
+check_sudo_logins() {
+  local -a allowed
+  mapfile -t allowed < <(sudo_allowed_users)
+
+  local name uid sudo_output
+  local sudo_failures=0 uid_failures=0
+  while IFS=: read -r name _ uid _; do
+    [[ -n "$name" ]] || continue
+    if [[ "$uid" == "0" && "$name" != "root" ]]; then
+      fail "account ${name} has UID 0"
+      uid_failures=$((uid_failures + 1))
+    fi
+    [[ "$name" == "root" ]] && continue
+    if [[ "${#allowed[@]}" -gt 0 ]] && printf '%s\n' "${allowed[@]}" | grep -qxF -- "$name"; then
+      continue
+    fi
+    sudo_output="$(LC_ALL=C sudo -n -l -U "$name" 2> /dev/null || true)"
+    if ! grep -q 'is not allowed to run sudo' <<< "$sudo_output"; then
+      fail "account ${name} can use sudo and is not in the allowed list"
+      sudo_failures=$((sudo_failures + 1))
+    fi
+  done < <(getent passwd)
+
+  if [[ "$sudo_failures" -eq 0 ]]; then
+    pass "no account other than root and the allowed list can use sudo"
+  fi
+  if [[ "$uid_failures" -eq 0 ]]; then
+    pass "no account other than root has UID 0"
+  fi
+}
+
+# Sets REQ_STATUS, REQ_HEADERS and REQ_BODY for a request sent to the app's
+# loopback port as if the reverse proxy had forwarded it for HOST over
+# HTTPS. The app trusts forwarded headers from loopback, and loopback is
+# not one of the sign-in networks.
+local_request() {
+  local method="$1" path="$2" host="$3" header_file body_file
+  header_file="$(mktemp)"
+  body_file="$(mktemp)"
+  REQ_STATUS="$(curl --silent --max-time 5 --request "$method" \
+    --header "Host: ${host}" --header "X-Forwarded-Proto: https" \
+    --dump-header "$header_file" --output "$body_file" --write-out '%{http_code}' \
+    "http://127.0.0.1:5080${path}" 2> /dev/null || true)"
+  REQ_HEADERS="$(cat "$header_file")"
+  REQ_BODY="$(cat "$body_file")"
+  rm -f "$header_file" "$body_file"
+}
+
+check_mcp_endpoint() {
+  local base_url host
+  base_url="$(env_file_value OAuth__PublicBaseUrl)"
+  if [[ -z "$base_url" ]]; then
+    skip "MCP endpoint not configured (OAuth__PublicBaseUrl is absent)"
+    return
+  fi
+  if [[ "$PRE_DEPLOY" -eq 1 ]]; then
+    skip "MCP endpoint checks: no release installed yet"
+    return
+  fi
+
+  host="${base_url#https://}"
+  host="${host%%/*}"
+  local resource_url="https://${host}/mcp"
+  local metadata_url="https://${host}/.well-known/oauth-protected-resource/mcp"
+
+  local_request POST /mcp "$host"
+  if [[ "$REQ_STATUS" == "401" ]] \
+    && grep -i '^www-authenticate:' <<< "$REQ_HEADERS" | grep -qF -- "resource_metadata=\"${metadata_url}\""; then
+    pass "POST /mcp without a token returns 401 with the expected resource_metadata challenge"
+  elif [[ "$REQ_STATUS" == "401" ]]; then
+    fail "POST /mcp without a token returned 401 but not the resource_metadata challenge for ${metadata_url}"
+  else
+    fail "POST /mcp without a token returned ${REQ_STATUS}, expected 401"
+  fi
+
+  local_request GET /.well-known/oauth-protected-resource/mcp "$host"
+  local resource
+  resource="$(jq -r '.resource // empty' <<< "$REQ_BODY" 2> /dev/null || true)"
+  if [[ "$REQ_STATUS" == "200" && "$resource" == "$resource_url" ]]; then
+    pass "the protected-resource document names ${resource_url}"
+  else
+    fail "the protected-resource document returned ${REQ_STATUS} naming '${resource}', expected 200 naming ${resource_url}"
+  fi
+
+  local_request GET /api/v1/status "$host"
+  if [[ "$REQ_STATUS" == "404" ]]; then
+    pass "GET /api/v1/status on the MCP hostname returns 404"
+  else
+    fail "GET /api/v1/status on the MCP hostname returned ${REQ_STATUS}, expected 404"
+  fi
+
+  local_request GET /account/login "$host"
+  if [[ "$REQ_STATUS" == "404" ]]; then
+    pass "the sign-in page returns 404 to an address outside the home and VPN networks"
+  else
+    fail "the sign-in page returned ${REQ_STATUS} to an address outside the home and VPN networks, expected 404"
   fi
 }
 
@@ -712,6 +828,8 @@ check_secrets_hygiene
 check_log_secrets
 check_listeners
 check_firewall
+check_sudo_logins
+check_mcp_endpoint
 
 if [[ "$PRE_DEPLOY" -eq 0 ]]; then
   check_app
