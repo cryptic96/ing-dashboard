@@ -57,6 +57,7 @@ public static class BankEndpoints
                 SyncNowResult.NoConnection => Results.Problem(title: "There is no active bank connection to sync.", statusCode: StatusCodes.Status409Conflict),
                 SyncNowResult.NoAccountsSelected => Results.Problem(title: "No accounts are selected for this connection. Select the accounts to sync first.", statusCode: StatusCodes.Status409Conflict),
                 SyncNowResult.AlreadyRunning => Results.Problem(title: "A sync is running for this connection. Wait for it to finish.", statusCode: StatusCodes.Status409Conflict),
+                SyncNowResult.AlreadyQueued => Results.Problem(title: "A sync is already queued for this connection. Wait for it to finish.", statusCode: StatusCodes.Status409Conflict),
                 _ => Results.Problem(title: SyncNowRefusedText, statusCode: StatusCodes.Status429TooManyRequests)
             };
         });
@@ -115,7 +116,7 @@ public static class BankEndpoints
 
             return outcome.Result switch
             {
-                CallbackResult.Completed => Results.Text(CompletedText(outcome.AccountCount), "text/plain"),
+                CallbackResult.Completed => Results.Text(CompletedText(outcome), "text/plain"),
                 CallbackResult.NoAccounts => Results.Text(NoAccountsText, "text/plain", statusCode: StatusCodes.Status400BadRequest),
                 _ => GenericFailure()
             };
@@ -208,10 +209,12 @@ public static class BankEndpoints
         return Results.Text(CallbackFailureText, "text/plain", statusCode: StatusCodes.Status400BadRequest);
     }
 
-    private static string CompletedText(int accountCount)
+    private static string CompletedText(CallbackOutcome outcome)
     {
-        var noun = accountCount == 1 ? "account" : "accounts";
-        return $"The bank link is complete and {accountCount} {noun} were found. You can close this page and select the accounts to sync.";
+        var noun = outcome.AccountCount == 1 ? "account" : "accounts";
+        var text = $"The bank link is complete and {outcome.AccountCount} {noun} were found. You can close this page and select the accounts to sync.";
+
+        return outcome.SyncQueued ? text : text + " The first sync could not be queued. Start it now with a sync request.";
     }
 
     private static AccountResponse ToResponse(LinkedAccount account)

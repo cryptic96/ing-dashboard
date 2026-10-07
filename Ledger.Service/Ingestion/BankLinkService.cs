@@ -50,8 +50,11 @@ public enum CallbackResult
     Failed
 }
 
-/// <summary>The outcome of a bank redirect, carrying only the number of accounts found.</summary>
-public record CallbackOutcome(CallbackResult Result, int AccountCount);
+/// <summary>
+/// The outcome of a bank redirect, carrying only the number of accounts found and whether the sync that must follow a renewal
+/// was queued. A first link queues no sync, because accounts are chosen afterwards.
+/// </summary>
+public record CallbackOutcome(CallbackResult Result, int AccountCount, bool SyncQueued = true);
 
 /// <summary>A connection together with its derived consent state.</summary>
 public record ConnectionOverview(ConnectionSummary Connection, ConsentSnapshot Consent);
@@ -76,6 +79,9 @@ public enum SyncNowResult
 
     /// <summary>A sync of the connection is already running.</summary>
     AlreadyRunning,
+
+    /// <summary>A sync of the connection is already waiting to run.</summary>
+    AlreadyQueued,
 
     /// <summary>The sync would use the last background call of the day for an account, and nobody is present to make it a foreground call.</summary>
     WouldUseLastCall
@@ -305,7 +311,8 @@ public class BankLinkService(
         var needsFirstSync = accounts.Any(account => account.SyncEnabled)
             && !await connections.HasAnySyncRunAsync(connection.Id, cancellationToken);
 
-        if (needsFirstSync && !dispatcher.TryEnqueue(new SyncRequest(connection.Id, SyncTrigger.PostLink, new FetchContext(psu))))
+        if (needsFirstSync
+            && dispatcher.TryEnqueue(new SyncRequest(connection.Id, SyncTrigger.PostLink, new FetchContext(psu))) == EnqueueResult.Full)
         {
             throw new BankLinkException(BankLinkFailure.Busy, "The sync queue is full. Repeat the call shortly.");
         }
@@ -355,9 +362,12 @@ public class BankLinkService(
             return SyncNowResult.WouldUseLastCall;
         }
 
-        if (!dispatcher.TryEnqueue(new SyncRequest(connection.Id, SyncTrigger.Manual, new FetchContext(psu))))
+        switch (dispatcher.TryEnqueue(new SyncRequest(connection.Id, SyncTrigger.Manual, new FetchContext(psu))))
         {
-            throw new BankLinkException(BankLinkFailure.Busy, "The sync queue is full. Repeat the call shortly.");
+            case EnqueueResult.Full:
+                throw new BankLinkException(BankLinkFailure.Busy, "The sync queue is full. Repeat the call shortly.");
+            case EnqueueResult.AlreadyQueued:
+                return SyncNowResult.AlreadyQueued;
         }
 
         logger.LogInformation("A sync of connection {ConnectionKey} was queued on request.", connection.ConnectionKey);
@@ -487,13 +497,18 @@ public class BankLinkService(
             throw;
         }
 
-        if (!dispatcher.TryEnqueue(new SyncRequest(renewal.Connection.Id, SyncTrigger.PostLink, new FetchContext(psu))))
+        var syncQueued = dispatcher.TryEnqueue(new SyncRequest(renewal.Connection.Id, SyncTrigger.PostLink, new FetchContext(psu)))
+            != EnqueueResult.Full;
+
+        if (!syncQueued)
         {
-            logger.LogWarning("The sync after a renewal could not be queued because the queue is full.");
+            logger.LogError(
+                "The sync after the renewal of connection {ConnectionKey} could not be queued because the queue is full. Start it with a sync request now, because the bank returns the full history only shortly after approval.",
+                renewal.Connection.ConnectionKey);
         }
 
         logger.LogInformation("Bank link callback finished with outcome {Outcome}.", CallbackResult.Completed);
-        return new CallbackOutcome(CallbackResult.Completed, renewal.MappedAccounts + renewal.NewAccounts);
+        return new CallbackOutcome(CallbackResult.Completed, renewal.MappedAccounts + renewal.NewAccounts, syncQueued);
     }
 
     private async Task<bool> IsStillRenewableAsync(Guid? connectionId, CancellationToken cancellationToken)

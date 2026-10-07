@@ -18,6 +18,8 @@ public class SyncScheduler(
 {
     private static readonly TimeSpan TickInterval = TimeSpan.FromMinutes(1);
     private static readonly TimeSpan UnselectedWarningAge = TimeSpan.FromMinutes(30);
+    private static readonly TimeSpan PostLinkRecoveryAge = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan PostLinkRecoveryWindow = TimeSpan.FromHours(2);
 
     private readonly ConcurrentDictionary<string, bool> _warnedConnections = new(StringComparer.Ordinal);
     private ScheduleSettings? _settings;
@@ -112,6 +114,17 @@ public class SyncScheduler(
                 return false;
             }
 
+            var orchestrator = services.GetRequiredService<SyncOrchestrator>();
+
+            if (await NeedsPostLinkRecoveryAsync(connection, now, services, cancellationToken))
+            {
+                logger.LogWarning(
+                    "Connection {ConnectionKey} has selected accounts but never synced, so its first sync is started now as a recovery.",
+                    connection.ConnectionKey);
+                await orchestrator.SyncConnectionAsync(connection.Id, SyncTrigger.PostLink, FetchContext.Background, cancellationToken);
+                return true;
+            }
+
             var runStore = services.GetRequiredService<ISyncRunStore>();
             var runs = await runStore.ListRunsSinceAsync(
                 connection.Id,
@@ -126,7 +139,6 @@ public class SyncScheduler(
             }
 
             var trigger = decision == SyncDecisionKind.Retry ? SyncTrigger.Retry : SyncTrigger.Scheduled;
-            var orchestrator = services.GetRequiredService<SyncOrchestrator>();
 
             await orchestrator.SyncConnectionAsync(connection.Id, trigger, FetchContext.Background, cancellationToken);
             return true;
@@ -148,6 +160,27 @@ public class SyncScheduler(
                 exception.GetType().Name);
             return false;
         }
+    }
+
+    /// <summary>
+    /// Whether a connection that was approved a few minutes ago, has selected accounts and has never synced needs its first sync
+    /// started here. The queued request for it lives in memory only, so a restart in between would lose it, and the first sync
+    /// must read the full history while the bank still returns it. Beyond the window the daily schedule takes over.
+    /// </summary>
+    private static async Task<bool> NeedsPostLinkRecoveryAsync(
+        ConnectionSummary connection,
+        DateTimeOffset now,
+        IServiceProvider services,
+        CancellationToken cancellationToken)
+    {
+        var age = now - connection.AuthorizedAt;
+
+        if (age < PostLinkRecoveryAge || age > PostLinkRecoveryWindow)
+        {
+            return false;
+        }
+
+        return !await services.GetRequiredService<IBankConnectionStore>().HasAnySyncRunAsync(connection.Id, cancellationToken);
     }
 
     private async Task WarnOnceIfLongHistoryMayBeLostAsync(

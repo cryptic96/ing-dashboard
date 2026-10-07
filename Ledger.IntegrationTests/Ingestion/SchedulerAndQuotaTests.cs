@@ -875,10 +875,10 @@ public sealed class RecordingSyncDispatcher : ISyncDispatcher
     public IReadOnlyList<SyncRequest> Requests => _requests.ToArray();
 
     /// <inheritdoc />
-    public bool TryEnqueue(SyncRequest request)
+    public EnqueueResult TryEnqueue(SyncRequest request)
     {
         _requests.Enqueue(request);
-        return true;
+        return EnqueueResult.Queued;
     }
 }
 
