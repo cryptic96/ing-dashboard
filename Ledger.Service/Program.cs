@@ -33,6 +33,16 @@ if (args.Length > 0 && args[0] == "apikey")
     return await ApiKeyCommand.RunAsync(args[1..], builder.Configuration);
 }
 
+if (args.Length > 0 && args[0] == "login")
+{
+    return await LoginCommand.RunAsync(args[1..], builder.Configuration);
+}
+
+if (args.Length > 0 && args[0] == "grants")
+{
+    return await GrantsCommand.RunAsync(args[1..], builder.Configuration);
+}
+
 if (builder.Environment.IsProduction())
 {
     builder.Logging.ClearProviders();

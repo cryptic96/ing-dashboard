@@ -97,7 +97,7 @@ public class AuthorizeModel(
 
         if (string.Equals(decision, "approve", StringComparison.Ordinal))
         {
-            return await ApproveAsync(request, user, canonicalResource);
+            return await ApproveAsync(request, application, user, canonicalResource);
         }
 
         SignInPageHeaders.AllowRedirectOrigins(HttpContext, await applications.GetRedirectUrisAsync(application));
@@ -113,7 +113,7 @@ public class AuthorizeModel(
         return Page();
     }
 
-    private async Task<IActionResult> ApproveAsync(OpenIddictRequest request, LedgerUserEntity user, string resource)
+    private async Task<IActionResult> ApproveAsync(OpenIddictRequest request, object application, LedgerUserEntity user, string resource)
     {
         var scopes = new List<string> { ClientRegistrations.ReadScope };
 
@@ -136,7 +136,7 @@ public class AuthorizeModel(
         var authorization = await authorizations.CreateAsync(
             identity,
             subject,
-            request.ClientId!,
+            (await applications.GetIdAsync(application))!,
             AuthorizationTypes.AdHoc,
             [.. scopes]);
 

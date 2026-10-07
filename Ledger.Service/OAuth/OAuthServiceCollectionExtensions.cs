@@ -42,21 +42,8 @@ public static class OAuthServiceCollectionExtensions
         services.Configure<LedgerOAuthOptions>(configuration.GetSection(LedgerOAuthOptions.SectionName));
         services.AddSingleton<LedgerOAuthSurface>(new LedgerOAuthSurface(options));
 
-        services
-            .AddIdentityCore<LedgerUserEntity>(identity =>
-            {
-                identity.Lockout.AllowedForNewUsers = true;
-                identity.Lockout.MaxFailedAccessAttempts = 5;
-                identity.Lockout.DefaultLockoutTimeSpan = TimeSpan.FromMinutes(15);
-                identity.Password.RequiredLength = 16;
-                identity.Password.RequireDigit = false;
-                identity.Password.RequireLowercase = false;
-                identity.Password.RequireUppercase = false;
-                identity.Password.RequireNonAlphanumeric = false;
-                identity.User.AllowedUserNameCharacters = UserNameCharacters;
-            })
-            .AddSignInManager()
-            .AddLedgerLoginStores();
+        services.AddLedgerOAuthCore(configuration);
+        new IdentityBuilder(typeof(LedgerUserEntity), services).AddSignInManager();
 
         services.AddAuthentication()
             .AddCookie(IdentityConstants.ApplicationScheme, cookie =>
@@ -102,7 +89,6 @@ public static class OAuthServiceCollectionExtensions
         services.AddRazorPages();
 
         services.AddOpenIddict()
-            .AddCore(core => core.UseLedgerStores())
             .AddServer(server =>
             {
                 server.SetIssuer(options.Issuer)
@@ -138,6 +124,34 @@ public static class OAuthServiceCollectionExtensions
             });
 
         services.AddHostedService<ClientRegistrationSeeder>();
+
+        return services;
+    }
+
+    /// <summary>
+    /// Registers what the web host and the operator commands share: the login store with the password rules and the authenticator
+    /// code provider, the OpenIddict stores and the service that revokes grants. It adds no cookies, pages, endpoints or settings,
+    /// so a command-line host can use it without a public address.
+    /// </summary>
+    public static IServiceCollection AddLedgerOAuthCore(this IServiceCollection services, IConfiguration configuration)
+    {
+        services
+            .AddIdentityCore<LedgerUserEntity>(identity =>
+            {
+                identity.Lockout.AllowedForNewUsers = true;
+                identity.Lockout.MaxFailedAccessAttempts = 5;
+                identity.Lockout.DefaultLockoutTimeSpan = TimeSpan.FromMinutes(15);
+                identity.Password.RequiredLength = 16;
+                identity.Password.RequireDigit = false;
+                identity.Password.RequireLowercase = false;
+                identity.Password.RequireUppercase = false;
+                identity.Password.RequireNonAlphanumeric = false;
+                identity.User.AllowedUserNameCharacters = UserNameCharacters;
+            })
+            .AddLedgerLoginStores();
+
+        services.AddOpenIddict().AddCore(core => core.UseLedgerStores());
+        services.AddScoped<GrantRevocationService>();
 
         return services;
     }
