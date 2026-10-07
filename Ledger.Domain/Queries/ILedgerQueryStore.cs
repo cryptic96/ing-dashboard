@@ -26,7 +26,47 @@ public interface ILedgerQueryStore
     /// <param name="refs">Counterparty references as produced by <see cref="CounterpartyRef"/>.</param>
     /// <param name="cancellationToken">Cancels the read.</param>
     Task<IReadOnlyList<string>> ResolveCounterpartyNamesAsync(IReadOnlyList<string> refs, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Reads one page of transactions that match the filter, newest first by period date, then first-seen time, then internal id,
+    /// from a single read-only snapshot. Dropped transactions appear nowhere and counterparty account numbers are masked.
+    /// </summary>
+    /// <param name="filter">What the search selects.</param>
+    /// <param name="status">Whether to show booked transactions, pending ones or both.</param>
+    /// <param name="after">The key of the last row of the previous page, or null for the first page.</param>
+    /// <param name="limit">The most rows to return.</param>
+    /// <param name="zone">The time zone whose calendar decides which day a transaction without a bank date belongs to.</param>
+    /// <param name="cancellationToken">Cancels the read.</param>
+    Task<SearchPage> SearchAsync(
+        LedgerQueryFilter filter,
+        SearchStatus status,
+        SearchPosition? after,
+        int limit,
+        TimeZoneInfo zone,
+        CancellationToken cancellationToken);
 }
+
+/// <summary>One transaction as a search shows it. The counterparty account is already masked.</summary>
+public record SearchRowData(
+    Guid Id,
+    DateTimeOffset FirstSeenAt,
+    DateOnly PeriodDate,
+    DateOnly? BookingDate,
+    string Status,
+    decimal Amount,
+    string Currency,
+    string? CounterpartyName,
+    string? CounterpartyAccountMasked,
+    string? Description,
+    string AccountKey,
+    string? AccountName,
+    bool InternalTransfer);
+
+/// <summary>
+/// One page of a search: at most the requested number of rows, how many transactions match in all, whether more rows follow this
+/// page, and how many of the requested account keys are synced accounts.
+/// </summary>
+public record SearchPage(IReadOnlyList<SearchRowData> Rows, int MatchingTotal, bool HasMore, int AccountsInScope);
 
 /// <summary>
 /// A synced account as the overview shows it. The display name is null when the household never named the account. The

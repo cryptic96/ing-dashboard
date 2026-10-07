@@ -71,4 +71,55 @@ public class LedgerTools(LedgerQueryService queries)
             throw new McpException(exception.Message);
         }
     }
+
+    /// <summary>Shows detail rows of the transactions that match, newest first, capped and paged. Rows are never a source for totals.</summary>
+    [McpServerTool(Name = "search_transactions", Title = "Search transactions", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
+    [Description(
+        "Shows supporting detail: the individual transactions that match, newest first. Results are capped at 100 rows a page and "
+        + "always say how many rows matched and whether the page was cut short; pass next_cursor to continue. Never add the rows "
+        + "up or use them to work out a total: use money_totals for every how-much question. Pending transactions are shown with "
+        + "their status, and transfers between the household's own accounts are flagged internal_transfer. Counterparty account "
+        + "numbers are masked. Days follow the Europe/Amsterdam calendar.")]
+    public async Task<SearchResult> SearchTransactions(
+        [Description("A named period: today, yesterday, this_week, last_week, this_month, last_month, last_30_days, last_90_days, this_year or last_year. Use this or fromDate with toDate, not both.")]
+        string? period = null,
+        [Description("First day, inclusive, as yyyy-MM-dd. Use together with toDate instead of period.")]
+        string? fromDate = null,
+        [Description("Last day, inclusive, as yyyy-MM-dd. Use together with fromDate instead of period.")]
+        string? toDate = null,
+        [Description("Words that appear in the counterparty name, any one of them matches. Case-insensitive, up to 10 words of at most 100 characters.")]
+        string[]? counterparty = null,
+        [Description("counterparty_ref values from an earlier result, to focus on exactly those counterparties.")]
+        string[]? counterpartyRef = null,
+        [Description("Words that appear in the transaction description, any one of them matches. When counterparty and description are both given, a transaction must match both.")]
+        string[]? description = null,
+        [Description("account_key values from ledger_overview to narrow to; omit to include every synced account.")]
+        string[]? accounts = null,
+        [Description("out for money spent, in for money received, both for everything. Default both.")]
+        string? direction = null,
+        [Description("Smallest absolute amount to include, inclusive.")]
+        decimal? minAmount = null,
+        [Description("Largest absolute amount to include, inclusive.")]
+        decimal? maxAmount = null,
+        [Description("booked, pending or both. Default both.")]
+        string? status = null,
+        [Description("Rows per page, 1 to 100. Default 50.")]
+        int? limit = null,
+        [Description("next_cursor from the previous page of exactly the same search; omit for the first page.")]
+        string? cursor = null,
+        CancellationToken cancellationToken = default)
+    {
+        McpMetrics.ToolCalled("search_transactions");
+
+        try
+        {
+            return await queries.SearchAsync(
+                new SearchRequest(period, fromDate, toDate, counterparty, counterpartyRef, description, accounts, direction, minAmount, maxAmount, status, limit, cursor),
+                cancellationToken);
+        }
+        catch (LedgerQueryException exception)
+        {
+            throw new McpException(exception.Message);
+        }
+    }
 }

@@ -116,6 +116,55 @@ public class LedgerQueryStore(LedgerDbContext dbContext) : ILedgerQueryStore
         return await InSnapshotAsync(() => ResolveNamesAsync(refs, cancellationToken), cancellationToken);
     }
 
+    /// <inheritdoc />
+    public async Task<SearchPage> SearchAsync(
+        LedgerQueryFilter filter,
+        SearchStatus status,
+        SearchPosition? after,
+        int limit,
+        TimeZoneInfo zone,
+        CancellationToken cancellationToken)
+    {
+        return await InSnapshotAsync(
+            async () =>
+            {
+                var counterpartyNames = filter.CounterpartyNames
+                    .Concat(await ResolveNamesAsync(filter.CounterpartyRefs ?? [], cancellationToken))
+                    .Distinct(StringComparer.Ordinal)
+                    .ToArray();
+
+                var rows = await ReadSearchRowsAsync(filter, status, after, limit + 1, zone, counterpartyNames, cancellationToken);
+                var keys = filter.AccountKeys.ToList();
+                var accountsInScope = keys.Count == 0
+                    ? 0
+                    : await dbContext.Accounts
+                        .AsNoTracking()
+                        .CountAsync(account => account.SyncEnabled && keys.Contains(account.AccountKey), cancellationToken);
+
+                var shown = rows
+                    .Where(row => row.Id is not null)
+                    .Take(limit)
+                    .Select(row => new SearchRowData(
+                        row.Id!.Value,
+                        row.FirstSeenAt!.Value,
+                        row.PeriodDate!.Value,
+                        row.BookingDate,
+                        row.Status!,
+                        row.Amount!.Value,
+                        row.Currency!,
+                        row.CounterpartyName,
+                        IbanText.Mask(row.CounterpartyIban),
+                        row.Description,
+                        row.AccountKey!,
+                        row.AccountName,
+                        row.IsTransfer!.Value))
+                    .ToList();
+
+                return new SearchPage(shown, rows[0].MatchingTotal, rows.Count(row => row.Id is not null) > limit, accountsInScope);
+            },
+            cancellationToken);
+    }
+
     private async Task<T> InSnapshotAsync<T>(Func<Task<T>> read, CancellationToken cancellationToken)
     {
         if (dbContext.Database.CurrentTransaction is not null)
@@ -265,6 +314,146 @@ public class LedgerQueryStore(LedgerDbContext dbContext) : ILedgerQueryStore
             WHERE period_date BETWEEN {from} AND {to}
             GROUP BY 1, currency, period_date, account_key, counterparty_name
             """).ToListAsync(cancellationToken);
+    }
+
+    private async Task<List<SearchRow>> ReadSearchRowsAsync(
+        LedgerQueryFilter filter,
+        SearchStatus status,
+        SearchPosition? after,
+        int fetch,
+        TimeZoneInfo zone,
+        string[] counterpartyNames,
+        CancellationToken cancellationToken)
+    {
+        var zoneId = zone.Id;
+        var from = filter.Range.From;
+        var to = filter.Range.To;
+        var accountKeys = filter.AccountKeys.ToArray();
+        var direction = filter.Direction switch
+        {
+            MoneyDirection.Out => "out",
+            MoneyDirection.In => "in",
+            _ => "both"
+        };
+        var statusText = status switch
+        {
+            SearchStatus.Booked => "booked",
+            SearchStatus.Pending => "pending",
+            _ => "both"
+        };
+        var minAmount = filter.MinAmount;
+        var maxAmount = filter.MaxAmount;
+        var counterpartyActive = filter.HasCounterpartySelection;
+        var counterpartyPatterns = filter.CounterpartyTerms.Select(LikePattern.Contains).ToArray();
+        var descriptionPatterns = filter.DescriptionTerms.Select(LikePattern.Contains).ToArray();
+        var hasCursor = after is not null;
+        var afterDate = after?.PeriodDate ?? DateOnly.MinValue;
+        var afterSeen = after is null ? DateTimeOffset.UnixEpoch : new DateTimeOffset(after.FirstSeenAt.UtcTicks, TimeSpan.Zero);
+        var afterId = after?.Id ?? Guid.Empty;
+
+        return await dbContext.Database.SqlQuery<SearchRow>($"""
+            WITH own_accounts AS (
+                SELECT upper(regexp_replace(iban, '[[:space:]]+', '', 'g')) AS iban
+                FROM accounts
+                WHERE sync_enabled AND iban IS NOT NULL
+            ),
+            in_range AS (
+                SELECT * FROM (
+                    SELECT
+                        t.id,
+                        t.first_seen_at,
+                        t.status,
+                        t.booking_date,
+                        t.amount,
+                        t.currency,
+                        t.counterparty_name,
+                        t.counterparty_iban,
+                        t.description,
+                        a.account_key,
+                        a.display_name,
+                        CASE WHEN t.status = 'booked'
+                            THEN COALESCE(t.booking_date, t.value_date, t.transaction_date, (t.first_seen_at AT TIME ZONE {zoneId}::text)::date)
+                            ELSE COALESCE(t.booking_date, (t.first_seen_at AT TIME ZONE {zoneId}::text)::date)
+                        END AS period_date,
+                        (t.status = 'booked'
+                            AND t.counterparty_iban IS NOT NULL
+                            AND upper(regexp_replace(t.counterparty_iban, '[[:space:]]+', '', 'g'))
+                                IN (SELECT iban FROM own_accounts WHERE iban <> '')) AS is_transfer
+                    FROM transactions t
+                    JOIN accounts a ON a.id = t.account_id
+                    WHERE a.sync_enabled
+                      AND t.status IN ('booked', 'pending')
+                      AND ({statusText}::text = 'both' OR t.status = {statusText}::text)
+                      AND (cardinality({accountKeys}::text[]) = 0 OR a.account_key = ANY({accountKeys}::text[]))
+                      AND ({direction}::text = 'both'
+                           OR ({direction}::text = 'out' AND t.amount < 0)
+                           OR ({direction}::text = 'in' AND t.amount > 0))
+                      AND ({minAmount}::numeric IS NULL OR abs(t.amount) >= {minAmount}::numeric)
+                      AND ({maxAmount}::numeric IS NULL OR abs(t.amount) <= {maxAmount}::numeric)
+                      AND (NOT {counterpartyActive}::boolean
+                           OR btrim(regexp_replace(t.counterparty_name, '[[:space:]]+', ' ', 'g')) ILIKE ANY({counterpartyPatterns}::text[])
+                           OR t.counterparty_name = ANY({counterpartyNames}::text[]))
+                      AND (cardinality({descriptionPatterns}::text[]) = 0
+                           OR btrim(regexp_replace(t.description, '[[:space:]]+', ' ', 'g')) ILIKE ANY({descriptionPatterns}::text[]))
+                ) candidate
+                WHERE period_date BETWEEN {from} AND {to}
+            )
+            SELECT
+                c.n AS "MatchingTotal",
+                p.id AS "Id",
+                p.first_seen_at AS "FirstSeenAt",
+                p.period_date AS "PeriodDate",
+                p.booking_date AS "BookingDate",
+                p.status AS "Status",
+                p.amount AS "Amount",
+                p.currency AS "Currency",
+                p.counterparty_name AS "CounterpartyName",
+                p.counterparty_iban AS "CounterpartyIban",
+                p.description AS "Description",
+                p.account_key AS "AccountKey",
+                p.display_name AS "AccountName",
+                p.is_transfer AS "IsTransfer"
+            FROM (SELECT COUNT(*)::int AS n FROM in_range) c
+            LEFT JOIN (
+                SELECT * FROM in_range
+                WHERE NOT {hasCursor}::boolean
+                   OR (period_date, first_seen_at, id) < ({afterDate}::date, {afterSeen}::timestamptz, {afterId}::uuid)
+                ORDER BY period_date DESC, first_seen_at DESC, id DESC
+                LIMIT {fetch}
+            ) p ON true
+            ORDER BY p.period_date DESC, p.first_seen_at DESC, p.id DESC
+            """).ToListAsync(cancellationToken);
+    }
+
+    private sealed class SearchRow
+    {
+        public int MatchingTotal { get; set; }
+
+        public Guid? Id { get; set; }
+
+        public DateTimeOffset? FirstSeenAt { get; set; }
+
+        public DateOnly? PeriodDate { get; set; }
+
+        public DateOnly? BookingDate { get; set; }
+
+        public string? Status { get; set; }
+
+        public decimal? Amount { get; set; }
+
+        public string? Currency { get; set; }
+
+        public string? CounterpartyName { get; set; }
+
+        public string? CounterpartyIban { get; set; }
+
+        public string? Description { get; set; }
+
+        public string? AccountKey { get; set; }
+
+        public string? AccountName { get; set; }
+
+        public bool? IsTransfer { get; set; }
     }
 
     private static List<ExcludedTotals> Excluded(IEnumerable<GroupedRow> rows, string kind)
