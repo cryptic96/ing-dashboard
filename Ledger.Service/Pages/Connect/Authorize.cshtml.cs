@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Security.Claims;
 using Ledger.Repository.Entities;
+using Ledger.Service.Mcp;
 using Ledger.Service.OAuth;
 using Microsoft.AspNetCore;
 using Microsoft.AspNetCore.Authentication;
@@ -25,7 +26,8 @@ public class AuthorizeModel(
     IOpenIddictApplicationManager applications,
     IOpenIddictAuthorizationManager authorizations,
     UserManager<LedgerUserEntity> users,
-    IOptions<LedgerOAuthOptions> oauthOptions) : PageModel
+    IOptions<LedgerOAuthOptions> oauthOptions,
+    ILogger<AuthorizeModel> logger) : PageModel
 {
     private static readonly string[] FormFieldsNotForwarded = ["decision", "__RequestVerificationToken"];
 
@@ -140,7 +142,13 @@ public class AuthorizeModel(
             AuthorizationTypes.AdHoc,
             [.. scopes]);
 
-        identity.SetAuthorizationId(await authorizations.GetIdAsync(authorization));
+        var grantId = await authorizations.GetIdAsync(authorization);
+        identity.SetAuthorizationId(grantId);
+        McpMetrics.GrantCreated();
+        logger.LogInformation(
+            "A Claude connection was approved for client {ClientId} as grant {GrantId}.",
+            request.ClientId,
+            grantId);
         identity.SetDestinations(_ => ImmutableArray.Create(Destinations.AccessToken));
 
         return SignIn(new ClaimsPrincipal(identity), OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);

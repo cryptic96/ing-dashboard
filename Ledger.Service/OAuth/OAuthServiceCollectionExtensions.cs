@@ -1,5 +1,6 @@
 using Ledger.Repository;
 using Ledger.Repository.Entities;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
@@ -46,6 +47,7 @@ public static class OAuthServiceCollectionExtensions
         new IdentityBuilder(typeof(LedgerUserEntity), services).AddSignInManager();
 
         services.AddAuthentication()
+            .AddScheme<AuthenticationSchemeOptions, CountingTokenAuthenticationHandler>(CountingTokenAuthenticationHandler.SchemeName, _ => { })
             .AddCookie(IdentityConstants.ApplicationScheme, cookie =>
             {
                 cookie.Cookie.Name = SignInCookieName;
@@ -108,6 +110,8 @@ public static class OAuthServiceCollectionExtensions
                     .AddEphemeralSigningKey()
                     .AddEphemeralEncryptionKey()
                     .UseDataProtection();
+
+                server.AddEventHandler(ReusedRefreshTokenHandler.Descriptor);
 
                 server.UseAspNetCore()
                     .EnableAuthorizationEndpointPassthrough()

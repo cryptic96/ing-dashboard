@@ -56,7 +56,7 @@ public static class McpEndpoint
         services.AddAuthentication()
             .AddMcp(mcp =>
             {
-                mcp.ForwardAuthenticate = OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme;
+                mcp.ForwardAuthenticate = CountingTokenAuthenticationHandler.SchemeName;
                 mcp.ResourceMetadataUri = new Uri(options.ResourceMetadataUrl, UriKind.Absolute);
                 mcp.ResourceMetadata = new ProtectedResourceMetadata
                 {
