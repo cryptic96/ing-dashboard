@@ -1,6 +1,7 @@
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
 namespace Ledger.IntegrationTests.Infrastructure;
 
@@ -82,6 +83,19 @@ public class HostIsolationTests(DatabaseFixture fixture)
 
         counter.Starts.Should().Be(1);
         factory.Services.GetServices<IHostedService>().OfType<StartCounter>().Should().ContainSingle().Which.Should().BeSameAs(counter);
+    }
+
+    [Fact]
+    public async Task The_log_capture_sees_debug_and_trace_messages_whatever_level_the_host_is_configured_for()
+    {
+        await using var factory = new LedgerWebApplicationFactory(fixture.ConnectionStringFor("ledger_runtime"));
+        var logger = factory.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Ledger.CaptureProbe");
+
+        logger.LogDebug("capture-probe-debug");
+        logger.LogTrace("capture-probe-trace");
+
+        factory.CapturedLogMessages.Should().Contain(message => message.EndsWith("capture-probe-debug", StringComparison.Ordinal));
+        factory.CapturedLogMessages.Should().Contain(message => message.EndsWith("capture-probe-trace", StringComparison.Ordinal));
     }
 
     /// <summary>Counts how often the host starts it, so a second running host would show up as a second start.</summary>

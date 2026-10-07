@@ -75,7 +75,12 @@ public class LedgerWebApplicationFactory : WebApplicationFactory<Program>
     /// <summary>The real loopback port the ops endpoint listens on for this instance.</summary>
     public int OpsPort { get; }
 
-    /// <summary>Every log message written by the host so far, across every logging category.</summary>
+    /// <summary>
+    /// Every log message written by the host so far, across every logging category. The capture sees Debug and Trace messages
+    /// too, so a secret logged at a low level cannot hide behind the configured level. The one exception is a category the
+    /// committed configuration pins to a level on purpose; it keeps that level here, and the committed configuration tests
+    /// verify the pin itself.
+    /// </summary>
     public IReadOnlyList<string> CapturedLogMessages => _loggerProvider.Messages;
 
     /// <summary>An HttpClient bound to the real API port.</summary>
@@ -110,7 +115,19 @@ public class LedgerWebApplicationFactory : WebApplicationFactory<Program>
             }
         });
 
-        builder.ConfigureLogging(logging => logging.AddProvider(_loggerProvider));
+        builder.ConfigureLogging((context, logging) =>
+        {
+            logging.AddProvider(_loggerProvider);
+            logging.AddFilter<CapturingLoggerProvider>(null, LogLevel.Trace);
+
+            foreach (var pinned in context.Configuration.GetSection("Logging:LogLevel").GetChildren())
+            {
+                if (pinned.Key != "Default" && Enum.TryParse<LogLevel>(pinned.Value, out var level))
+                {
+                    logging.AddFilter<CapturingLoggerProvider>(pinned.Key, level);
+                }
+            }
+        });
 
         if (_configureTestServices is not null)
         {
