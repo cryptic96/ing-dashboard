@@ -287,6 +287,178 @@ public class OAuthFlowTests(DatabaseFixture fixture)
         unknown.Headers.WwwAuthenticate.ToString().Should().Contain("ApiKey");
     }
 
+    [Fact]
+    [Trait("Category", "OAuth")]
+    public async Task A_refresh_returns_a_new_token_pair_and_the_new_access_token_reads_the_overview()
+    {
+        await using var host = await McpTestHost.StartAsync(fixture.ConnectionStringFor("ledger_runtime"));
+        var login = await host.CreateLoginAsync();
+        var (discovery, first) = await host.SignInAsync(login);
+
+        var refreshed = await RefreshAsync(host, discovery, first.RefreshToken!);
+
+        refreshed.Succeeded.Should().BeTrue($"a refresh must issue tokens, got {refreshed.Status} {refreshed.Error}");
+        refreshed.AccessToken.Should().NotBe(first.AccessToken);
+        refreshed.RefreshToken.Should().NotBeNullOrEmpty().And.NotBe(first.RefreshToken);
+
+        await using var connection = await host.OpenAsync(refreshed.AccessToken!, refreshed.RefreshToken!);
+        var overview = await ReadOverviewAsync(connection);
+
+        overview.TryGetProperty("accounts", out _).Should().BeTrue();
+    }
+
+    [Fact]
+    [Trait("Category", "OAuth")]
+    public async Task Presenting_a_rotated_refresh_token_again_ends_the_whole_grant()
+    {
+        await using var host = await McpTestHost.StartAsync(
+            fixture.ConnectionStringFor("ledger_runtime"),
+            new Dictionary<string, string?> { ["OAuth:RefreshTokenReuseLeeway"] = "00:00:00" });
+        var login = await host.CreateLoginAsync();
+        var (discovery, first) = await host.SignInAsync(login);
+
+        var second = await RefreshAsync(host, discovery, first.RefreshToken!);
+        second.Succeeded.Should().BeTrue();
+        (await host.ToolsListStatusAsync(second.AccessToken)).Should().Be(HttpStatusCode.OK);
+
+        var reused = await RefreshAsync(host, discovery, first.RefreshToken!);
+        reused.Succeeded.Should().BeFalse();
+        reused.Error.Should().Be("invalid_grant");
+
+        var afterwards = await RefreshAsync(host, discovery, second.RefreshToken!);
+        afterwards.Succeeded.Should().BeFalse();
+        afterwards.Error.Should().Be("invalid_grant");
+
+        (await host.ToolsListStatusAsync(second.AccessToken)).Should().Be(HttpStatusCode.Unauthorized);
+        (await host.ToolsListStatusAsync(first.AccessToken)).Should().Be(HttpStatusCode.Unauthorized);
+
+        using var scope = host.Factory.Services.CreateScope();
+        var authorizations = scope.ServiceProvider.GetRequiredService<IOpenIddictAuthorizationManager>();
+        var grants = await authorizations
+            .FindBySubjectAsync(login.Id.ToString(), TestContext.Current.CancellationToken)
+            .ToListAsync(TestContext.Current.CancellationToken);
+
+        grants.Should().HaveCount(1, "the grant row itself stays so the operator can simply sign in again");
+        (await authorizations.HasStatusAsync(grants[0], OpenIddictConstants.Statuses.Valid, TestContext.Current.CancellationToken))
+            .Should().BeTrue();
+    }
+
+    [Fact]
+    [Trait("Category", "OAuth")]
+    public async Task A_refresh_retried_within_the_default_leeway_still_succeeds()
+    {
+        await using var host = await McpTestHost.StartAsync(fixture.ConnectionStringFor("ledger_runtime"));
+        var login = await host.CreateLoginAsync();
+        var (discovery, first) = await host.SignInAsync(login);
+
+        var original = await RefreshAsync(host, discovery, first.RefreshToken!);
+        var retried = await RefreshAsync(host, discovery, first.RefreshToken!);
+
+        original.Succeeded.Should().BeTrue();
+        retried.Succeeded.Should().BeTrue($"a retry inside the leeway must succeed, got {retried.Status} {retried.Error}");
+        (await host.ToolsListStatusAsync(original.AccessToken)).Should().Be(HttpStatusCode.OK);
+        (await host.ToolsListStatusAsync(retried.AccessToken)).Should().Be(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    [Trait("Category", "OAuth")]
+    public async Task Parallel_tool_calls_with_one_access_token_all_succeed()
+    {
+        var connectionString = await LedgerQuerySeed.CreateIsolatedDatabaseAsync(fixture);
+        await LedgerQuerySeed.SeedStandardLedgerAsync(connectionString);
+
+        await using var host = await McpTestHost.StartAsync(connectionString);
+        var login = await host.CreateLoginAsync();
+        await using var first = await host.ConnectAsync(login);
+        await using var second = await host.OpenAsync(first.AccessToken, first.RefreshToken);
+
+        var calls = await Task.WhenAll(
+            ReadOverviewAsync(first),
+            ReadOverviewAsync(second),
+            ReadOverviewAsync(first),
+            ReadOverviewAsync(second));
+
+        calls.Should().OnlyContain(overview => overview.GetProperty("accounts").GetArrayLength() == 2);
+    }
+
+    [Fact]
+    [Trait("Category", "OAuth")]
+    public async Task An_expired_access_token_is_refused_and_a_refresh_restores_access()
+    {
+        await using var host = await McpTestHost.StartAsync(
+            fixture.ConnectionStringFor("ledger_runtime"),
+            new Dictionary<string, string?> { ["OAuth:AccessTokenLifetime"] = "00:00:02" });
+        var login = await host.CreateLoginAsync();
+        var (discovery, tokens) = await host.SignInAsync(login);
+
+        await Task.Delay(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+
+        (await host.ToolsListStatusAsync(tokens.AccessToken)).Should().Be(HttpStatusCode.Unauthorized);
+
+        var refreshed = await RefreshAsync(host, discovery, tokens.RefreshToken!);
+        refreshed.Succeeded.Should().BeTrue($"a refresh after expiry must issue tokens, got {refreshed.Status} {refreshed.Error}");
+        (await host.ToolsListStatusAsync(refreshed.AccessToken)).Should().Be(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    [Trait("Category", "OAuth")]
+    public async Task Tokens_issued_before_a_restart_still_refresh_and_call_the_endpoint_afterwards()
+    {
+        var connectionString = await LedgerQuerySeed.CreateIsolatedDatabaseAsync(fixture);
+        await LedgerQuerySeed.SeedStandardLedgerAsync(connectionString);
+
+        TokenResult issued;
+        DiscoveryDocuments discovery;
+        var hostA = await McpTestHost.StartAsync(connectionString);
+
+        try
+        {
+            var login = await hostA.CreateLoginAsync();
+            (discovery, issued) = await hostA.SignInAsync(login);
+        }
+        finally
+        {
+            await hostA.DisposeAsync();
+        }
+
+        await using var hostB = await McpTestHost.StartAsync(connectionString);
+
+        (await hostB.ToolsListStatusAsync(issued.AccessToken)).Should().Be(
+            HttpStatusCode.OK,
+            "an access token issued before the restart must still validate");
+
+        var refreshed = await RefreshAsync(hostB, discovery, issued.RefreshToken!);
+        refreshed.Succeeded.Should().BeTrue($"a refresh token issued before the restart must still work, got {refreshed.Status} {refreshed.Error}");
+
+        await using var connection = await hostB.OpenAsync(refreshed.AccessToken!, refreshed.RefreshToken!);
+        var overview = await ReadOverviewAsync(connection);
+
+        overview.GetProperty("accounts").GetArrayLength().Should().Be(2);
+    }
+
+    [Fact]
+    [Trait("Category", "OAuth")]
+    public async Task A_refresh_for_a_login_that_no_longer_exists_is_refused_as_an_invalid_grant()
+    {
+        await using var host = await McpTestHost.StartAsync(fixture.ConnectionStringFor("ledger_runtime"));
+        var login = await host.CreateLoginAsync();
+        var (discovery, tokens) = await host.SignInAsync(login);
+
+        await host.DeleteLoginAsync(login);
+
+        var refreshed = await RefreshAsync(host, discovery, tokens.RefreshToken!);
+
+        refreshed.Succeeded.Should().BeFalse();
+        refreshed.Error.Should().Be("invalid_grant");
+    }
+
+    private static async Task<TokenResult> RefreshAsync(McpTestHost host, DiscoveryDocuments discovery, string refreshToken)
+    {
+        using var browser = host.CreateBrowser();
+
+        return await new OAuthTestDriver(browser).RefreshAsync(discovery, ClientRegistrations.CodeClientId, refreshToken);
+    }
+
     private static async Task<JsonElement> ReadOverviewAsync(McpConnection connection)
     {
         var result = await connection.Client.CallToolAsync(
