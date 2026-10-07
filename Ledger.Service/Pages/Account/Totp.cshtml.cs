@@ -67,7 +67,7 @@ public class TotpModel(
             return await RefuseAsync(user, countFailure: false);
         }
 
-        if (code.Length == 0)
+        if (!TotpCodes.IsWellFormed(code))
         {
             return await RefuseAsync(user, countFailure: true);
         }

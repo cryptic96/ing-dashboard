@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using Ledger.Domain.Auth;
 using Ledger.Repository.Entities;
 using Ledger.Service.OAuth;
 using Microsoft.AspNetCore.Identity;
@@ -90,7 +91,9 @@ public static partial class LoginCommand
             return await NotFoundAsync(name);
         }
 
-        var valid = await users.VerifyTwoFactorTokenAsync(user, TokenOptions.DefaultAuthenticatorProvider, code.Trim());
+        var trimmed = code.Trim();
+        var valid = TotpCodes.IsWellFormed(trimmed)
+            && await users.VerifyTwoFactorTokenAsync(user, TokenOptions.DefaultAuthenticatorProvider, trimmed);
 
         if (!valid)
         {
