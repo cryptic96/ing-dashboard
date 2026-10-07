@@ -17,11 +17,13 @@ public static class OAuthServiceCollectionExtensions
 {
     private const string SignInCookieName = "__Host-ledger-signin";
     private const string SecondFactorCookieName = "__Host-ledger-2fa";
-    private const string AntiforgeryCookieName = "__Host-ledger-csrf";
+    private const string RememberedSecondFactorCookieName = "__Host-ledger-2fa-remember";
+    private const string AntiforgeryCookieName = "__Host-ledger-af";
     private const string UserNameCharacters = "abcdefghijklmnopqrstuvwxyz0123456789-";
 
     /// <summary>
-    /// Registers the login store, the sign-in cookies, the OpenIddict server and validation, the Razor pages and the client
+    /// Registers the login store, the sign-in cookies (the remembered-device cookie scheme exists only because Identity looks for
+    /// it during every password check; nothing ever issues it, so every sign-in asks for a code), the OpenIddict server and validation, the Razor pages and the client
     /// seeder. The default authentication scheme is left as it is, because the REST endpoints keep using their API keys.
     /// The resource a client asks for is checked by the authorization page, which accepts every canonical spelling of the one MCP
     /// address and nothing else; OpenIddict's own check accepts only one exact string, so it and its per-client resource
@@ -79,6 +81,14 @@ public static class OAuthServiceCollectionExtensions
                 cookie.Cookie.Path = "/";
                 cookie.ExpireTimeSpan = TimeSpan.FromMinutes(5);
                 cookie.SlidingExpiration = false;
+            })
+            .AddCookie(IdentityConstants.TwoFactorRememberMeScheme, cookie =>
+            {
+                cookie.Cookie.Name = RememberedSecondFactorCookieName;
+                cookie.Cookie.HttpOnly = true;
+                cookie.Cookie.SecurePolicy = CookieSecurePolicy.Always;
+                cookie.Cookie.SameSite = SameSiteMode.Strict;
+                cookie.Cookie.Path = "/";
             });
 
         services.AddAntiforgery(antiforgery =>
@@ -140,7 +150,7 @@ public static class OAuthServiceCollectionExtensions
             return app;
         }
 
-        app.UseMiddleware<SignInPageHeadersMiddleware>();
+        app.UseMiddleware<SignInPageHeaders>();
         app.MapRazorPages();
         app.MapTokenEndpoint();
 

@@ -105,8 +105,17 @@ public sealed class McpTestHost : IAsyncDisposable
         return new HttpClient(handler) { BaseAddress = new Uri(PublicBaseUrl) };
     }
 
-    /// <summary>Creates a login with a random name and password, as the command-line tool will.</summary>
+    /// <summary>
+    /// Creates a login with a random name and password and a confirmed authenticator, as the command-line tool will, and
+    /// returns it with the authenticator key.
+    /// </summary>
     public async Task<TestLogin> CreateLoginAsync()
+    {
+        return await CreateLoginAsync(enrolSecondFactor: true);
+    }
+
+    /// <summary>Creates a login with a random name and password, optionally without any second factor.</summary>
+    public async Task<TestLogin> CreateLoginAsync(bool enrolSecondFactor)
     {
         var userName = "user-" + Guid.NewGuid().ToString("N")[..10];
         var password = Convert.ToBase64String(RandomNumberGenerator.GetBytes(24));
@@ -123,7 +132,17 @@ public sealed class McpTestHost : IAsyncDisposable
         var result = await users.CreateAsync(user, password);
         result.Succeeded.Should().BeTrue(string.Join(", ", result.Errors.Select(error => error.Code)));
 
-        return new TestLogin(user.Id, userName, password);
+        var authenticatorKey = string.Empty;
+
+        if (enrolSecondFactor)
+        {
+            (await users.ResetAuthenticatorKeyAsync(user)).Succeeded.Should().BeTrue();
+            authenticatorKey = (await users.GetAuthenticatorKeyAsync(user))!;
+            authenticatorKey.Should().NotBeNullOrEmpty();
+            (await users.SetTwoFactorEnabledAsync(user, true)).Succeeded.Should().BeTrue();
+        }
+
+        return new TestLogin(user.Id, userName, password, authenticatorKey);
     }
 
     /// <summary>Deletes a login, so its tokens can no longer be refreshed.</summary>
