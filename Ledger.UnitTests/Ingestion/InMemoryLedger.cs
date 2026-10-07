@@ -12,7 +12,6 @@ namespace Ledger.UnitTests.Ingestion;
 public sealed class InMemoryLedger
 {
     private readonly List<Row> _rows = [];
-    private readonly Dictionary<string, Row> _byReference = new(StringComparer.Ordinal);
 
     /// <summary>How many rows were inserted.</summary>
     public int Inserted { get; private set; }
@@ -44,7 +43,10 @@ public sealed class InMemoryLedger
     /// <summary>The number of booked rows.</summary>
     public int LiveBooked => _rows.Count(row => row.Status == LedgerTransactionStatus.Booked);
 
-    /// <summary>The number of references that point at more than one row; always zero for a consistent ledger.</summary>
+    /// <summary>
+    /// The number of references that point at more than one row; always zero for a consistent ledger. The ledger records a
+    /// violation instead of refusing it, so a replay can name the broken invariant rather than stop on an exception.
+    /// </summary>
     public int ReferencesOnMoreThanOneRow => _rows
         .SelectMany(row => row.Refs.Select(reference => (reference, row.Id)))
         .GroupBy(pair => pair.reference, StringComparer.Ordinal)
@@ -68,7 +70,7 @@ public sealed class InMemoryLedger
         .ToList();
 
     /// <summary>Applies a plan the way the store does, in the same order of parts.</summary>
-    /// <exception cref="InvalidOperationException">A reference would point at a second row, or a plan names a missing row.</exception>
+    /// <exception cref="InvalidOperationException">A plan names a missing row.</exception>
     public void Apply(ReconciliationPlan plan, DateTimeOffset observedAt)
     {
         foreach (var insert in plan.Inserts)
@@ -189,11 +191,6 @@ public sealed class InMemoryLedger
 
     private void Attach(Row row, string reference)
     {
-        if (!_byReference.TryAdd(reference, row))
-        {
-            throw new InvalidOperationException("A reference would map to a second row.");
-        }
-
         row.Refs.Add(reference);
     }
 

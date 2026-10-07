@@ -153,6 +153,28 @@ public partial class CapturedPairReplayTests
     }
 
     [Fact]
+    public void A_reference_that_maps_to_two_rows_is_counted_and_fails_the_replay_naming_the_invariant()
+    {
+        var ledger = new InMemoryLedger();
+        var observedAt = DateTimeOffset.Parse("2026-10-01T08:00:00Z", CultureInfo.InvariantCulture);
+        ledger.Apply(
+            new ReconciliationPlan([new PlannedInsert(Item("er-shared", ProviderTransactionStatus.Booked), "er:er-shared", MatchFlag.None)], [], [], [], []),
+            observedAt);
+        ledger.ReferencesOnMoreThanOneRow.Should().Be(0);
+
+        ledger.Apply(
+            new ReconciliationPlan([new PlannedInsert(Item("er-shared", ProviderTransactionStatus.Booked), "er:er-shared", MatchFlag.None)], [], [], [], []),
+            observedAt);
+
+        ledger.ReferencesOnMoreThanOneRow.Should().Be(1);
+        var failure = Record.Exception(() => ReplayInvariants.Verify(ledger, [], 5));
+
+        failure.Should().BeOfType<ReplayFailedException>();
+        failure!.Message.Should().Be("Invariant broken: 1 references map to more than one row.");
+        AssertNoMarker(failure);
+    }
+
+    [Fact]
     public void Real_captures_replay_without_a_duplicate_a_ghost_or_a_reference_on_two_rows()
     {
         var captures = Environment.GetEnvironmentVariable(CapturesVariable);
