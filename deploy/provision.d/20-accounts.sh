@@ -13,21 +13,51 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LEDGER_PROVISION_LIB_ONLY=1 source "${SCRIPT_DIR}/../provision.sh"
 
 ###
-### Renders the application env file content from the given Traefik IP and
-### Data Protection certificate password. Produces exactly these keys, in
-### this order, and no database password (peer auth needs none).
+### Renders the application env file content from the given Traefik IP, Data
+### Protection certificate password, MCP hostname and the comma-separated home
+### and VPN ranges. Produces exactly these keys, in this order, and no
+### database password (peer auth needs none). The OAuth keys are rendered only
+### when an MCP hostname is given: without one the MCP surface stays off.
 ###
 accounts_render_ledger_env() {
-  local traefik_ip="$1" dp_password="$2"
+  local traefik_ip="$1" dp_password="$2" mcp_domain="${3:-}" sign_in_ranges="${4:-}"
   cat <<EOF
 ASPNETCORE_ENVIRONMENT=Production
 ReverseProxy__KnownProxies__0=${traefik_ip}
 DataProtection__CertificatePath=/etc/ledger/dataprotection.pfx
 DataProtection__CertificatePassword=${dp_password}
 EOF
+
+  if [[ -z "$mcp_domain" ]]; then
+    return 0
+  fi
+
+  echo "OAuth__PublicBaseUrl=https://${mcp_domain}"
+
+  local ranges range index=0
+  IFS=',' read -ra ranges <<<"$sign_in_ranges"
+  for range in "${ranges[@]}"; do
+    range="${range//[[:space:]]/}"
+    if [[ -n "$range" ]]; then
+      echo "OAuth__SignInNetworks__${index}=${range}"
+      index=$((index + 1))
+    fi
+  done
+}
+
+###
+### Succeeds when the value is a plain lower-case hostname with at least one
+### dot, so nothing but a hostname can reach the env file as the MCP address.
+###
+accounts_valid_mcp_domain() {
+  [[ "$1" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$ ]]
 }
 
 if [[ "${LEDGER_PROVISION_LIB_ONLY:-0}" != "1" ]]; then
+  if [[ -n "${LEDGER_MCP_DOMAIN:-}" ]] && ! accounts_valid_mcp_domain "$LEDGER_MCP_DOMAIN"; then
+    provision_die "LEDGER_MCP_DOMAIN is not a valid hostname: ${LEDGER_MCP_DOMAIN}"
+  fi
+
   DP_CERT_PATH="/etc/ledger/dataprotection.pfx"
   DP_ENV_PATH="/etc/ledger/ledger.env"
 
@@ -107,7 +137,8 @@ if [[ "${LEDGER_PROVISION_LIB_ONLY:-0}" != "1" ]]; then
 
     render_tmp="$(mktemp)"
     chmod 600 "$render_tmp"
-    accounts_render_ledger_env "${LEDGER_TRAEFIK_IP:-}" "$LEDGER_DP_PASSWORD" >"$render_tmp"
+    accounts_render_ledger_env "${LEDGER_TRAEFIK_IP:-}" "$LEDGER_DP_PASSWORD" \
+      "${LEDGER_MCP_DOMAIN:-}" "${LEDGER_ADMIN_SSH_SOURCES:-}" >"$render_tmp"
     install -m 640 -o root -g ledger "$render_tmp" "$DP_ENV_PATH"
     rm -f "$render_tmp"
   fi
