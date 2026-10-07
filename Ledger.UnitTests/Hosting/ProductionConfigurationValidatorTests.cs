@@ -11,6 +11,7 @@ public class ProductionConfigurationValidatorTests : IDisposable
     private const string ValidConnectionString = "Host=/var/run/postgresql;Database=ledger;Username=ledger_runtime";
     private const string ValidApplicationId = "00000000-0000-0000-0000-000000000001";
     private const string DefaultKeyPath = "existing-key-file";
+    private const string ValidKnownProxy = "192.0.2.10";
     private const string ValidRedirectUrl = "https://ledger-api.example.com/api/v1/bank/callback";
     private readonly string _existingCertificatePath = Path.GetTempFileName();
 
@@ -226,6 +227,34 @@ public class ProductionConfigurationValidatorTests : IDisposable
 
     [Theory]
     [Trait("Category", "Configuration")]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("traefik.example.com")]
+    public void ThrowIfInvalid_names_only_the_known_proxies_key_when_enable_banking_has_no_parseable_proxy_address(string? knownProxy)
+    {
+        var configuration = CompleteEnableBankingConfiguration(knownProxy: knownProxy);
+
+        var act = () => ProductionConfigurationValidator.ThrowIfInvalid(configuration);
+
+        var exception = act.Should().Throw<InvalidOperationException>().Which;
+        exception.Message.Should().Contain("ReverseProxy:KnownProxies");
+        exception.Message.Should().NotContain("EnableBanking:");
+        exception.Message.Should().NotContain("traefik.example.com");
+    }
+
+    [Fact]
+    [Trait("Category", "Configuration")]
+    public void ThrowIfInvalid_does_not_require_a_known_proxy_when_no_bank_provider_is_configured()
+    {
+        var configuration = BuildConfiguration(_existingCertificatePath, SentinelPassword, ValidConnectionString);
+
+        var act = () => ProductionConfigurationValidator.ThrowIfInvalid(configuration);
+
+        act.Should().NotThrow();
+    }
+
+    [Theory]
+    [Trait("Category", "Configuration")]
     [InlineData("Nowhere/Atlantis")]
     [InlineData("   ")]
     public void ThrowIfInvalid_names_the_time_zone_key_when_the_zone_cannot_be_resolved(string timeZone)
@@ -291,7 +320,8 @@ public class ProductionConfigurationValidatorTests : IDisposable
     private IConfiguration CompleteEnableBankingConfiguration(
         string? applicationId = ValidApplicationId,
         string? keyPath = DefaultKeyPath,
-        string? keyPassword = SentinelPassword)
+        string? keyPassword = SentinelPassword,
+        string? knownProxy = ValidKnownProxy)
     {
         return BuildConfiguration(
             _existingCertificatePath,
@@ -301,7 +331,8 @@ public class ProductionConfigurationValidatorTests : IDisposable
             ValidRedirectUrl,
             applicationId: applicationId,
             keyPath: keyPath == DefaultKeyPath ? _existingCertificatePath : keyPath,
-            keyPassword: keyPassword);
+            keyPassword: keyPassword,
+            knownProxy: knownProxy);
     }
 
     private static IConfiguration BuildConfiguration(
@@ -314,7 +345,8 @@ public class ProductionConfigurationValidatorTests : IDisposable
         string? scheduleTime = null,
         string? applicationId = null,
         string? keyPath = null,
-        string? keyPassword = null)
+        string? keyPassword = null,
+        string? knownProxy = null)
     {
         var values = new Dictionary<string, string?>
         {
@@ -327,7 +359,8 @@ public class ProductionConfigurationValidatorTests : IDisposable
             ["Ingestion:ScheduleLocalTime"] = scheduleTime,
             ["EnableBanking:ApplicationId"] = applicationId,
             ["EnableBanking:PrivateKeyPath"] = keyPath,
-            ["EnableBanking:PrivateKeyPassword"] = keyPassword
+            ["EnableBanking:PrivateKeyPassword"] = keyPassword,
+            ["ReverseProxy:KnownProxies:0"] = knownProxy
         };
 
         return new ConfigurationBuilder().AddInMemoryCollection(values).Build();
