@@ -88,10 +88,10 @@ public class SyncRunStore(LedgerDbContext dbContext) : ISyncRunStore
     }
 
     /// <inheritdoc />
-    public async Task<int> AbandonUnfinishedAsync(DateTimeOffset now, CancellationToken cancellationToken)
+    public async Task<int> AbandonUnfinishedAsync(DateTimeOffset now, DateTimeOffset startedAtOrBefore, CancellationToken cancellationToken)
     {
         return await dbContext.SyncRuns
-            .Where(run => run.FinishedAt == null)
+            .Where(run => run.FinishedAt == null && run.StartedAt <= startedAtOrBefore)
             .ExecuteUpdateAsync(
                 setters => setters
                     .SetProperty(run => run.FinishedAt, (DateTimeOffset?)now)

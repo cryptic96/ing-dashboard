@@ -51,22 +51,6 @@ public class SyncScheduler(
         return started;
     }
 
-    /// <summary>Marks every run left unfinished by a stopped process as abandoned and returns how many there were.</summary>
-    public async Task<int> AbandonOrphanedRunsAsync(CancellationToken cancellationToken)
-    {
-        using var scope = scopeFactory.CreateScope();
-        var runStore = scope.ServiceProvider.GetRequiredService<ISyncRunStore>();
-
-        var abandoned = await runStore.AbandonUnfinishedAsync(timeProvider.GetUtcNow(), cancellationToken);
-
-        if (abandoned > 0)
-        {
-            logger.LogWarning("{Count} sync run(s) left unfinished by a restart were marked abandoned.", abandoned);
-        }
-
-        return abandoned;
-    }
-
     /// <inheritdoc />
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -78,7 +62,6 @@ public class SyncScheduler(
         try
         {
             ResolveSettings();
-            await AbandonOrphanedRunsAsync(stoppingToken);
             await TickAsync(stoppingToken);
 
             using var timer = new PeriodicTimer(TickInterval, timeProvider);

@@ -23,6 +23,8 @@ public class SyncOrchestrator(
     TimeProvider timeProvider,
     ILogger<SyncOrchestrator> logger)
 {
+    private static readonly TimeSpan[] FinishDelays = [TimeSpan.FromMilliseconds(250), TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(3)];
+
     /// <summary>Syncs every selected account of the connection and records the run.</summary>
     /// <exception cref="SyncAlreadyRunningException">The connection already has an unfinished run.</exception>
     public async Task<SyncRunResult> SyncConnectionAsync(
@@ -71,7 +73,7 @@ public class SyncOrchestrator(
             providerError = exception.GetType().Name;
         }
 
-        await FinishAsync(runId, outcome, providerError, progress, cancellationToken);
+        await FinishWithRetryAsync(runId, outcome, providerError, progress);
         LogRun(runId, outcome, progress);
 
         return new SyncRunResult(runId, outcome, progress.Inserted, progress.Updated, progress.Dropped, progress.Flagged);
@@ -256,7 +258,41 @@ public class SyncOrchestrator(
         };
     }
 
-    private Task FinishAsync(
+    /// <summary>
+    /// Records how the run ended, retrying a few times when the database fails, because a run left open blocks every later sync
+    /// of the connection until the process restarts. It is not tied to the caller's cancellation: the outcome of work that was
+    /// done must be recorded. When every attempt fails it logs what is left open and returns, so the failure is not mistaken
+    /// for a failed sync.
+    /// </summary>
+    private async Task FinishWithRetryAsync(Guid runId, SyncOutcome outcome, string? providerError, RunProgress progress)
+    {
+        for (var attempt = 0; attempt < FinishDelays.Length + 1; attempt++)
+        {
+            try
+            {
+                await FinishAsync(runId, outcome, providerError, progress, CancellationToken.None);
+                return;
+            }
+            catch (Exception exception) when (attempt < FinishDelays.Length)
+            {
+                logger.LogWarning(
+                    "Recording the end of sync run {RunId} failed with {ExceptionType}. It will be tried again.",
+                    runId,
+                    exception.GetType().Name);
+                await Task.Delay(FinishDelays[attempt], CancellationToken.None);
+            }
+            catch (Exception exception)
+            {
+                logger.LogError(
+                    "Sync run {RunId} ended with outcome {Outcome} but recording that failed with {ExceptionType}. The run stays open until the service restarts.",
+                    runId,
+                    outcome,
+                    exception.GetType().Name);
+            }
+        }
+    }
+
+    private Task<bool> FinishAsync(
         Guid runId,
         SyncOutcome outcome,
         string? providerError,

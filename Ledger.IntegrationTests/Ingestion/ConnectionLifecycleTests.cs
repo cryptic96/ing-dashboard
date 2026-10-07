@@ -88,7 +88,7 @@ public class ConnectionLifecycleTests(DatabaseFixture fixture)
         (await runs.FinishAsync(finishedRun, Completion(SyncOutcome.FailedTransient, started), CancellationToken.None)).Should().BeFalse();
 
         var abandonedRun = await runs.StartAsync(connection.Id, SyncTrigger.Manual, started, CancellationToken.None);
-        (await runs.AbandonUnfinishedAsync(started, CancellationToken.None)).Should().Be(1);
+        (await runs.AbandonUnfinishedAsync(started, started, CancellationToken.None)).Should().Be(1);
         (await runs.FinishAsync(abandonedRun, Completion(SyncOutcome.Succeeded, started), CancellationToken.None)).Should().BeFalse();
 
         var outcomes = (await runs.ListRunsSinceAsync(connection.Id, started.AddMinutes(-1), CancellationToken.None))

@@ -245,7 +245,7 @@ public class SchedulerAndQuotaTests(DatabaseFixture fixture)
     }
 
     [Fact]
-    public async Task A_run_left_unfinished_by_a_restart_is_marked_abandoned_when_the_scheduler_starts()
+    public async Task A_run_left_unfinished_by_a_restart_is_marked_abandoned_when_the_service_starts_even_with_the_scheduler_off()
     {
         var scenario = SyntheticScenario(pagesForFirstAccount: 1);
         var start = AmsterdamInstant(Monday, 5, 0);
@@ -263,7 +263,7 @@ public class SchedulerAndQuotaTests(DatabaseFixture fixture)
             fixture,
             scenario,
             start.AddMinutes(10),
-            new Dictionary<string, string?> { ["Ingestion:SchedulerEnabled"] = "true" },
+            new Dictionary<string, string?> { ["Ingestion:SchedulerEnabled"] = "false" },
             databaseName);
 
         var abandoned = await second.WaitForRunOutcomeAsync(runId);
@@ -799,11 +799,11 @@ public sealed class SchedulerTestHost : IAsyncDisposable
         return await store.StartAsync(connectionId, trigger, Clock.GetUtcNow(), TestContext.Current.CancellationToken);
     }
 
-    /// <summary>Marks unfinished runs as abandoned the way the scheduler does when it starts.</summary>
+    /// <summary>Marks unfinished runs as abandoned the way the service does when it starts.</summary>
     public async Task AbandonOrphanedRunsAsync()
     {
-        var scheduler = Factory.Services.GetRequiredService<SyncScheduler>();
-        await scheduler.AbandonOrphanedRunsAsync(TestContext.Current.CancellationToken);
+        var recovery = Factory.Services.GetRequiredService<OrphanedRunRecovery>();
+        await recovery.AbandonAsync(Clock.GetUtcNow(), TestContext.Current.CancellationToken);
     }
 
     /// <summary>Waits up to ten seconds for a run to have an outcome and returns it, or null when it never gets one.</summary>
