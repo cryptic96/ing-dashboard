@@ -295,6 +295,17 @@ public class SchedulerAndQuotaTests(DatabaseFixture fixture)
     }
 
     [Fact]
+    public async Task Waiting_for_runs_that_never_finish_fails_with_a_descriptive_timeout_instead_of_returning_early()
+    {
+        await using var host = await SchedulerTestHost.StartAsync(fixture, SyntheticScenario(pagesForFirstAccount: 1), AmsterdamInstant(Monday, 14, 0));
+
+        var act = () => host.WaitForFinishedRunsAsync(1, TimeSpan.FromMilliseconds(300));
+
+        var timeout = await act.Should().ThrowAsync<TimeoutException>();
+        timeout.Which.Message.Should().Contain("1 finished sync runs").And.Contain("0 finished and 0 unfinished runs");
+    }
+
+    [Fact]
     public async Task Sync_now_queues_an_attended_manual_run_whose_calls_are_not_background_calls()
     {
         var scenario = SyntheticScenario(pagesForFirstAccount: 2);
@@ -725,25 +736,18 @@ public sealed class SchedulerTestHost : IAsyncDisposable
         return await client.SendAsync(request, TestContext.Current.CancellationToken);
     }
 
-    /// <summary>Waits up to ten seconds until the expected number of runs have finished and returns every run.</summary>
-    public async Task<IReadOnlyList<RunRow>> WaitForFinishedRunsAsync(int expected)
+    /// <summary>
+    /// Waits until at least the expected number of runs have finished and none is still running, then returns every run, so the
+    /// caller sees the settled state. Throws a <see cref="TimeoutException"/> when that never happens.
+    /// </summary>
+    public async Task<IReadOnlyList<RunRow>> WaitForFinishedRunsAsync(int expected, TimeSpan? timeout = null)
     {
-        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(10);
-        IReadOnlyList<RunRow> runs = [];
-
-        while (DateTimeOffset.UtcNow < deadline)
-        {
-            runs = await ReadRunsAsync();
-
-            if (runs.Count(run => run.Outcome is not null) >= expected)
-            {
-                return runs;
-            }
-
-            await Task.Delay(TimeSpan.FromMilliseconds(100), TestContext.Current.CancellationToken);
-        }
-
-        return runs;
+        return await Wait.UntilAsync(
+            ReadRunsAsync,
+            runs => runs.Count(run => run.Outcome is not null) >= expected && runs.All(run => run.Outcome is not null),
+            $"{expected} finished sync runs and none still running",
+            runs => $"{runs.Count(run => run.Outcome is not null)} finished and {runs.Count(run => run.Outcome is null)} unfinished runs",
+            timeout);
     }
 
     /// <summary>Reads the stored status of every connection, oldest first.</summary>
@@ -818,24 +822,17 @@ public sealed class SchedulerTestHost : IAsyncDisposable
         await recovery.AbandonAsync(Clock.GetUtcNow(), TestContext.Current.CancellationToken);
     }
 
-    /// <summary>Waits up to ten seconds for a run to have an outcome and returns it, or null when it never gets one.</summary>
-    public async Task<string?> WaitForRunOutcomeAsync(Guid runId)
+    /// <summary>Waits for a run to have an outcome and returns it; throws a <see cref="TimeoutException"/> when it never gets one.</summary>
+    public async Task<string> WaitForRunOutcomeAsync(Guid runId, TimeSpan? timeout = null)
     {
-        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(10);
+        var run = await Wait.UntilAsync(
+            async () => (await ReadRunsAsync()).Single(candidate => candidate.Id == runId),
+            candidate => candidate.Outcome is not null,
+            "a sync run to record an outcome",
+            candidate => "no outcome yet",
+            timeout);
 
-        while (DateTimeOffset.UtcNow < deadline)
-        {
-            var run = (await ReadRunsAsync()).Single(candidate => candidate.Id == runId);
-
-            if (run.Outcome is not null)
-            {
-                return run.Outcome;
-            }
-
-            await Task.Delay(TimeSpan.FromMilliseconds(100), TestContext.Current.CancellationToken);
-        }
-
-        return null;
+        return run.Outcome!;
     }
 
     /// <inheritdoc />

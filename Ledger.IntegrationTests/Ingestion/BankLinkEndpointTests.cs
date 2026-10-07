@@ -652,25 +652,29 @@ public sealed class BankLinkTestHost : IAsyncDisposable
         return await response.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken);
     }
 
-    /// <summary>Reads the account names the Grafana reader sees for an account, waiting up to ten seconds for the expected row count.</summary>
-    public async Task<IReadOnlyList<string>> WaitForReportedRowsAsync(string accountKey, int expected)
+    /// <summary>
+    /// Waits until every sync run has finished and the Grafana reader sees at least the expected number of rows for the account,
+    /// then returns the account names of those rows. Waiting for the runs to finish means the rows are the complete result of
+    /// the sync, so a caller can assert the exact count. Throws a <see cref="TimeoutException"/> when that never happens.
+    /// </summary>
+    public async Task<IReadOnlyList<string>> WaitForReportedRowsAsync(string accountKey, int expected, TimeSpan? timeout = null)
     {
-        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(10);
-        IReadOnlyList<string> rows = [];
+        var state = await Wait.UntilAsync(
+            async () => (Rows: await ReadReportedAccountNamesAsync(accountKey), Unfinished: await CountUnfinishedRunsAsync()),
+            observed => observed.Unfinished == 0 && observed.Rows.Count >= expected,
+            $"the sync to finish with at least {expected} reported rows",
+            observed => $"{observed.Rows.Count} reported rows and {observed.Unfinished} unfinished runs",
+            timeout);
 
-        while (DateTimeOffset.UtcNow < deadline)
-        {
-            rows = await ReadReportedAccountNamesAsync(accountKey);
+        return state.Rows;
+    }
 
-            if (rows.Count >= expected)
-            {
-                return rows;
-            }
-
-            await Task.Delay(TimeSpan.FromMilliseconds(200), TestContext.Current.CancellationToken);
-        }
-
-        return rows;
+    /// <summary>Counts the sync runs that have started and not yet recorded an end.</summary>
+    public async Task<int> CountUnfinishedRunsAsync()
+    {
+        return int.Parse(
+            (await ReadAsync("SELECT count(*)::text FROM public.sync_runs WHERE finished_at IS NULL")).Single(),
+            System.Globalization.CultureInfo.InvariantCulture);
     }
 
     /// <summary>Runs a query that returns one text column as the backup role and returns every value.</summary>
@@ -729,30 +733,7 @@ public sealed class BankLinkTestHost : IAsyncDisposable
         return created.Token;
     }
 
-    private async Task WaitUntilReadyAsync()
-    {
-        using var opsClient = Factory.CreateOpsClient();
-        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(30);
-
-        while (DateTimeOffset.UtcNow < deadline)
-        {
-            try
-            {
-                using var response = await opsClient.GetAsync("/health", TestContext.Current.CancellationToken);
-                if (response.StatusCode == HttpStatusCode.OK)
-                {
-                    return;
-                }
-            }
-            catch (HttpRequestException)
-            {
-            }
-
-            await Task.Delay(TimeSpan.FromMilliseconds(250), TestContext.Current.CancellationToken);
-        }
-
-        throw new TimeoutException("The ops endpoint never became healthy within the timeout.");
-    }
+    private Task WaitUntilReadyAsync() => Wait.UntilReadyAsync(Factory);
 }
 
 /// <summary>

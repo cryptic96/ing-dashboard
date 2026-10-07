@@ -35,7 +35,7 @@ public class LogRedactionTests(DatabaseFixture fixture)
 
         await using var factory = new LedgerWebApplicationFactory(fixture.ConnectionStringFor("ledger_runtime"));
         using var client = factory.CreateApiClient();
-        await WaitUntilReadyAsync(factory);
+        await Wait.UntilReadyAsync(factory);
 
         var responseBodies = new List<string>();
 
@@ -84,7 +84,7 @@ public class LogRedactionTests(DatabaseFixture fixture)
         await using var factory = new LedgerWebApplicationFactory(badConnectionString);
         using var opsClient = factory.CreateOpsClient();
 
-        using var response = await WaitForStatusAsync(opsClient, HttpStatusCode.ServiceUnavailable);
+        using var response = await Wait.ForHealthStatusAsync(opsClient, HttpStatusCode.ServiceUnavailable);
         var body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
 
         response.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
@@ -136,7 +136,7 @@ public class LogRedactionTests(DatabaseFixture fixture)
             configureTestServices: services =>
                 services.AddSingleton<IStartupFilter>(new ThrowingEndpointStartupFilter(sentinel)));
         using var client = factory.CreateApiClient();
-        await WaitUntilReadyAsync(factory);
+        await Wait.UntilReadyAsync(factory);
 
         using var request = new HttpRequestMessage(HttpMethod.Get, "/api/v1/__test-throw");
         request.Headers.Add("X-Api-Key", token);
@@ -157,7 +157,7 @@ public class LogRedactionTests(DatabaseFixture fixture)
     {
         await using var factory = new LedgerWebApplicationFactory(fixture.ConnectionStringFor("ledger_runtime"));
         using var client = factory.CreateApiClient();
-        await WaitUntilReadyAsync(factory);
+        await Wait.UntilReadyAsync(factory);
 
         using var request = new HttpRequestMessage(HttpMethod.Get, "/api/v1/status");
         request.Headers.Add("X-Api-Key", "");
@@ -175,7 +175,7 @@ public class LogRedactionTests(DatabaseFixture fixture)
     {
         await using var factory = new LedgerWebApplicationFactory(fixture.ConnectionStringFor("ledger_runtime"));
         using var opsClient = factory.CreateOpsClient();
-        using var readyResponse = await WaitForStatusAsync(opsClient, HttpStatusCode.OK);
+        using var readyResponse = await Wait.ForHealthStatusAsync(opsClient, HttpStatusCode.OK);
         readyResponse.StatusCode.Should().Be(HttpStatusCode.OK);
 
         var options = factory.Services.GetRequiredService<DbContextOptions<LedgerDbContext>>();
@@ -416,63 +416,6 @@ public class LogRedactionTests(DatabaseFixture fixture)
         var optionsBuilder = new DbContextOptionsBuilder<LedgerDbContext>();
         optionsBuilder.UseNpgsql(fixture.ConnectionStringFor("ledger_runtime"));
         return new LedgerDbContext(optionsBuilder.Options);
-    }
-
-    private static async Task WaitUntilReadyAsync(LedgerWebApplicationFactory factory)
-    {
-        using var opsClient = factory.CreateOpsClient();
-        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(30);
-
-        while (DateTimeOffset.UtcNow < deadline)
-        {
-            try
-            {
-                using var response = await opsClient.GetAsync("/health", TestContext.Current.CancellationToken);
-                if (response.StatusCode == HttpStatusCode.OK)
-                {
-                    return;
-                }
-            }
-            catch (HttpRequestException)
-            {
-            }
-
-            await Task.Delay(TimeSpan.FromMilliseconds(250), TestContext.Current.CancellationToken);
-        }
-
-        throw new TimeoutException("The ops endpoint never became healthy within the timeout.");
-    }
-
-    private static async Task<HttpResponseMessage> WaitForStatusAsync(
-        HttpClient client,
-        HttpStatusCode expectedStatus,
-        TimeSpan? timeout = null)
-    {
-        var deadline = DateTimeOffset.UtcNow + (timeout ?? TimeSpan.FromSeconds(30));
-        HttpResponseMessage? last = null;
-
-        while (DateTimeOffset.UtcNow < deadline)
-        {
-            try
-            {
-                last?.Dispose();
-                last = await client.GetAsync("/health", TestContext.Current.CancellationToken);
-
-                if (last.StatusCode == expectedStatus)
-                {
-                    return last;
-                }
-            }
-            catch (HttpRequestException)
-            {
-                last = null;
-            }
-
-            await Task.Delay(TimeSpan.FromMilliseconds(250), TestContext.Current.CancellationToken);
-        }
-
-        return last ?? throw new TimeoutException(
-            $"The ops endpoint never reached status {expectedStatus} within the timeout.");
     }
 
     /// <summary>Test-only middleware adding an authenticated endpoint that always throws, proving unhandled exceptions never leak to callers.</summary>

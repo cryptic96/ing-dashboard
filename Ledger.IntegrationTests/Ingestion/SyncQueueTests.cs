@@ -136,19 +136,12 @@ public class SyncQueueTests(DatabaseFixture fixture)
 
     private static async Task WaitForLogAsync(SchedulerTestHost host, string fragment)
     {
-        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(10);
-
-        while (DateTimeOffset.UtcNow < deadline)
-        {
-            if (host.Factory.CapturedLogMessages.Any(message => message.Contains(fragment, StringComparison.Ordinal)))
-            {
-                return;
-            }
-
-            await Task.Delay(TimeSpan.FromMilliseconds(50), TestContext.Current.CancellationToken);
-        }
-
-        throw new TimeoutException("The expected log message never appeared.");
+        await Wait.UntilAsync(
+            () => Task.FromResult(host.Factory.CapturedLogMessages.Any(message => message.Contains(fragment, StringComparison.Ordinal))),
+            found => found,
+            "the expected log message to appear",
+            found => "not logged yet",
+            interval: TimeSpan.FromMilliseconds(50));
     }
 
     private static DateTimeOffset Instant(int hour, int minute)

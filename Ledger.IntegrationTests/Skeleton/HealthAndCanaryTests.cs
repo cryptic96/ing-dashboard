@@ -139,7 +139,7 @@ public class HealthAndCanaryTests(DatabaseFixture fixture)
         await using var secondHost = new LedgerWebApplicationFactory(connectionString);
         using var secondOpsClient = secondHost.CreateOpsClient();
 
-        using var unhealthyResponse = await WaitForStatusAsync(secondOpsClient, HttpStatusCode.ServiceUnavailable);
+        using var unhealthyResponse = await Wait.ForHealthStatusAsync(secondOpsClient, HttpStatusCode.ServiceUnavailable);
         unhealthyResponse.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
 
         var (payloadAfter, hashAfter) = await ReadCanaryAsync(databaseName);
@@ -183,7 +183,7 @@ public class HealthAndCanaryTests(DatabaseFixture fixture)
     }
 
     private static Task<HttpResponseMessage> WaitForHealthyAsync(HttpClient client, TimeSpan? timeout = null) =>
-        WaitForStatusAsync(client, HttpStatusCode.OK, timeout);
+        Wait.ForHealthStatusAsync(client, HttpStatusCode.OK, timeout);
 
     private static async Task<string> WaitForMetricsContainingAsync(
         HttpClient client,
@@ -212,37 +212,5 @@ public class HealthAndCanaryTests(DatabaseFixture fixture)
         }
 
         throw new TimeoutException($"/metrics never contained '{expectedSubstring}' within the timeout.");
-    }
-
-    private static async Task<HttpResponseMessage> WaitForStatusAsync(
-        HttpClient client,
-        HttpStatusCode expectedStatus,
-        TimeSpan? timeout = null)
-    {
-        var deadline = DateTimeOffset.UtcNow + (timeout ?? TimeSpan.FromSeconds(30));
-        HttpResponseMessage? last = null;
-
-        while (DateTimeOffset.UtcNow < deadline)
-        {
-            try
-            {
-                last?.Dispose();
-                last = await client.GetAsync("/health", TestContext.Current.CancellationToken);
-
-                if (last.StatusCode == expectedStatus)
-                {
-                    return last;
-                }
-            }
-            catch (HttpRequestException)
-            {
-                last = null;
-            }
-
-            await Task.Delay(TimeSpan.FromMilliseconds(250), TestContext.Current.CancellationToken);
-        }
-
-        return last ?? throw new TimeoutException(
-            $"The ops endpoint never reached status {expectedStatus} within the timeout.");
     }
 }
