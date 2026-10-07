@@ -28,5 +28,13 @@ LEDGER_MAIL_FROM=ledger-alerts@example.com
 # Address platform alerts (backup stale, service down, deploy failed) go to.
 LEDGER_ALERT_EMAIL=operator@example.com
 
+# Dedicated hostname the MCP endpoint is reached at; leave empty to keep the
+# MCP endpoint off. It also becomes the OAuth public address in the app's env file.
+LEDGER_MCP_DOMAIN=mcp.example.com
+
+# Logins other than root that may use sudo, space-separated; normally none.
+# The selfcheck fails for any other account that can use sudo or has UID 0.
+LEDGER_SUDO_ALLOWED_USERS=""
+
 # owner/repo of the public GitHub repository releases are pulled from.
 LEDGER_GITHUB_REPO=example-owner/example-repo
