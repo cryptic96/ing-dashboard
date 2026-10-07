@@ -127,6 +127,26 @@ public class PeriodResolverTests
     }
 
     [Fact]
+    public void The_last_allowed_date_is_accepted_and_the_day_after_it_is_refused()
+    {
+        var resolver = At("2026-10-07T10:00:00Z");
+
+        resolver.Resolve(null, PeriodResolver.LastAllowedDate, PeriodResolver.LastAllowedDate).Range.Days.Should().Be(1);
+
+        var act = () => resolver.Resolve(null, PeriodResolver.LastAllowedDate, PeriodResolver.LastAllowedDate.AddDays(1));
+
+        act.Should().Throw<LedgerQueryException>().WithMessage("*9000-12-31*");
+    }
+
+    [Fact]
+    public void A_period_ending_on_the_last_day_of_the_calendar_is_refused_with_a_fixed_message()
+    {
+        var act = () => At("2026-10-07T10:00:00Z").Resolve(null, Day("9999-12-01"), DateOnly.MaxValue);
+
+        act.Should().Throw<LedgerQueryException>().WithMessage("Dates after 9000-12-31 are not accepted.");
+    }
+
+    [Fact]
     public void A_to_date_before_the_from_date_is_refused()
     {
         var act = () => At("2026-10-07T10:00:00Z").Resolve(null, Day("2026-08-31"), Day("2026-08-30"));

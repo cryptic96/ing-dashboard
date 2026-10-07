@@ -57,6 +57,9 @@ public class PeriodResolver(TimeProvider timeProvider, TimeZoneInfo zone)
     /// <summary>The longest span that can be asked for, in days.</summary>
     public const int MaxDays = 3660;
 
+    /// <summary>The last day an explicit date may name, which keeps day, week and month arithmetic clear of the calendar's end.</summary>
+    public static readonly DateOnly LastAllowedDate = new(9000, 12, 31);
+
     /// <summary>The value reported as the requested period when explicit dates were given.</summary>
     public const string ExplicitDatesLabel = "explicit_dates";
 
@@ -98,6 +101,11 @@ public class PeriodResolver(TimeProvider timeProvider, TimeZoneInfo zone)
         if (to < from)
         {
             throw new LedgerQueryException("toDate must not be before fromDate.");
+        }
+
+        if (to > LastAllowedDate)
+        {
+            throw new LedgerQueryException("Dates after 9000-12-31 are not accepted.");
         }
 
         var explicitRange = new DateRange(from, to);

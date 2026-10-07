@@ -36,7 +36,7 @@ public class LedgerQueryService(
     public async Task<OverviewResult> OverviewAsync(CancellationToken cancellationToken)
     {
         var options = ingestionOptions.Value;
-        var zone = options.ResolveTimeZone();
+        var zone = QueryTimeZone.Resolve(options.TimeZone);
         var now = timeProvider.GetUtcNow();
         var today = SyncSchedule.LocalDate(now, zone);
 
@@ -44,7 +44,7 @@ public class LedgerQueryService(
 
         if (accounts.Count == 0)
         {
-            return new OverviewResult(DateText(today), options.TimeZone, [], NothingSyncedNote);
+            return new OverviewResult(DateText(today), zone.Id, [], NothingSyncedNote);
         }
 
         var status = await ingestionStatus.ReadAsync(now, cancellationToken);
@@ -76,7 +76,7 @@ public class LedgerQueryService(
             })
             .ToList();
 
-        return new OverviewResult(DateText(today), options.TimeZone, shown, null);
+        return new OverviewResult(DateText(today), zone.Id, shown, null);
     }
 
     /// <summary>
@@ -89,7 +89,7 @@ public class LedgerQueryService(
     public async Task<TotalsResult> TotalsAsync(TotalsRequest request, CancellationToken cancellationToken)
     {
         var options = ingestionOptions.Value;
-        var zone = options.ResolveTimeZone();
+        var zone = QueryTimeZone.Resolve(options.TimeZone);
 
         var resolver = new PeriodResolver(timeProvider, zone);
         var period = resolver.Resolve(request.Period, ParseDate(request.FromDate), ParseDate(request.ToDate));
@@ -123,7 +123,7 @@ public class LedgerQueryService(
 
         var aggregate = TotalsAggregator.Aggregate(data, grouping, period.Range);
 
-        return Shape(request, period, filter, grouping, data, aggregate, options.TimeZone);
+        return Shape(request, period, filter, grouping, data, aggregate, zone.Id);
     }
 
     /// <summary>
@@ -136,7 +136,7 @@ public class LedgerQueryService(
     public async Task<SearchResult> SearchAsync(SearchRequest request, CancellationToken cancellationToken)
     {
         var options = ingestionOptions.Value;
-        var zone = options.ResolveTimeZone();
+        var zone = QueryTimeZone.Resolve(options.TimeZone);
 
         var resolver = new PeriodResolver(timeProvider, zone);
         var period = resolver.Resolve(request.Period, ParseDate(request.FromDate), ParseDate(request.ToDate));
@@ -195,7 +195,7 @@ public class LedgerQueryService(
             + (nextCursor is null ? string.Empty : " More rows match: narrow the period or filters, or pass next_cursor for the next page.");
 
         return new SearchResult(
-            new TotalsPeriod(DateText(period.Range.From), DateText(period.Range.To), period.Requested, options.TimeZone),
+            new TotalsPeriod(DateText(period.Range.From), DateText(period.Range.To), period.Requested, zone.Id),
             new SearchFilters(
                 filter.CounterpartyTerms,
                 filter.CounterpartyRefs ?? [],
@@ -225,7 +225,7 @@ public class LedgerQueryService(
     public async Task<CounterpartiesResult> FindCounterpartiesAsync(CounterpartiesRequest request, CancellationToken cancellationToken)
     {
         var options = ingestionOptions.Value;
-        var zone = options.ResolveTimeZone();
+        var zone = QueryTimeZone.Resolve(options.TimeZone);
 
         var text = string.Join(' ', (request.Text ?? string.Empty).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 
@@ -263,7 +263,7 @@ public class LedgerQueryService(
         var truncated = merged.Count > shown.Count;
         var periodText = range is null
             ? "all history"
-            : $"{DateText(range.From)} to {DateText(range.To)} ({options.TimeZone})";
+            : $"{DateText(range.From)} to {DateText(range.To)} ({zone.Id})";
 
         var note = $"Showing {shown.Count} of {merged.Count} matching counterparties, most transactions first. "
             + "These are counterparty names, not categories. Pass counterpartyRef or the spellings to money_totals or search_transactions."

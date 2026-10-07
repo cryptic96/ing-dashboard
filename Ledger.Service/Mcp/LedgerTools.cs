@@ -20,7 +20,14 @@ public class LedgerTools(LedgerQueryService queries)
     {
         McpMetrics.ToolCalled("ledger_overview");
 
-        return await queries.OverviewAsync(cancellationToken);
+        try
+        {
+            return await queries.OverviewAsync(cancellationToken);
+        }
+        catch (LedgerQueryException exception)
+        {
+            throw new McpException(exception.Message);
+        }
     }
 
     /// <summary>Sums money out, money in and net over booked transactions for a period, with the filters, counts and exclusions stated.</summary>
