@@ -96,19 +96,32 @@ public class LogRedactionTests(DatabaseFixture fixture)
 
     [Fact]
     [Trait("Category", "LogRedaction")]
-    public void Sentinel_certificate_password_never_reaches_the_startup_exception_chain()
+    public void Sentinel_certificate_password_never_reaches_the_startup_exception_chain_or_the_logs()
     {
         var sentinel = $"LedgerSentinelCertPass{Guid.NewGuid():N}";
+        var logs = new CapturingLoggerProvider();
 
         var act = () => new LedgerWebApplicationFactory(
             fixture.ConnectionStringFor("ledger_runtime"),
             certificatePath: "/nonexistent/ledger-sentinel-cert.pfx",
-            certificatePassword: sentinel);
+            certificatePassword: sentinel,
+            loggerProvider: logs);
 
         var exception = act.Should().Throw<Exception>().Which;
-        var messages = AllMessages(exception).ToList();
+        var chain = Flatten(exception).ToList();
 
-        messages.Should().NotContain(message => message.Contains(sentinel));
+        chain.Should().Contain(
+            candidate => candidate.Message.Contains("DataProtection:CertificatePath", StringComparison.Ordinal),
+            "the startup must fail because of the certificate, not for an unrelated reason");
+
+        var surfaces = chain
+            .SelectMany(candidate => new[] { candidate.Message, candidate.ToString() }
+                .Concat(candidate.Data.Values.Cast<object?>().Select(value => value?.ToString() ?? string.Empty)))
+            .Concat(logs.Messages)
+            .ToList();
+
+        surfaces.Should().NotBeEmpty();
+        surfaces.Should().NotContain(surface => surface.Contains(sentinel, StringComparison.Ordinal));
     }
 
     [Fact]
@@ -335,11 +348,22 @@ public class LogRedactionTests(DatabaseFixture fixture)
         return await BankLinkTestHost.StartWithFactoryAsync(fixture, factory);
     }
 
-    private static IEnumerable<string> AllMessages(Exception? exception)
+    private static IEnumerable<Exception> Flatten(Exception? exception)
     {
         while (exception is not null)
         {
-            yield return exception.Message;
+            yield return exception;
+
+            if (exception is AggregateException aggregate)
+            {
+                foreach (var inner in aggregate.InnerExceptions.SelectMany(Flatten))
+                {
+                    yield return inner;
+                }
+
+                yield break;
+            }
+
             exception = exception.InnerException;
         }
     }
