@@ -74,14 +74,17 @@ gh attestation verify ledger-<version>.zip \
   --repo <owner>/<repository> \
   --signer-workflow <owner>/<repository>/.github/workflows/release.yml \
   --source-ref refs/tags/v<version> \
+  --source-digest <commit-sha-of-the-tag> \
   --deny-self-hosted-runners
 ```
 
 This performs the check entirely from the two downloaded files — no network
 call to the attestation service is needed once both files are on disk. It
 fails if the archive was modified after being built, if it was built by a
-different workflow, or if it claims to come from a different tag than the
-one you downloaded it for.
+different workflow, or if it claims to come from a different tag or a
+different commit than the one you downloaded it for. The publish step
+binds to the commit as well, so a tag that was deleted and pushed again
+at another commit cannot reuse an attestation from an earlier run.
 
 ## Rolling back
 

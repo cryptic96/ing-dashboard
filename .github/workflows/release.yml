@@ -143,6 +143,7 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
             --source-ref "refs/tags/$TAG" \
+            --source-digest "$GITHUB_SHA" \
             --deny-self-hosted-runners
 
       - name: Publish release
