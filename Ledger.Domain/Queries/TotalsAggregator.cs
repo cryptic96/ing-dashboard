@@ -124,7 +124,9 @@ public record TotalsBucket(
 /// <param name="MoneyIn">The money in.</param>
 /// <param name="Count">The number of booked transactions.</param>
 /// <param name="CounterpartyCount">The number of distinct counterparties.</param>
-/// <param name="Counterparties">The top counterparties plus a remainder row; their parts add up to the totals.</param>
+/// <param name="Counterparties">
+/// The counterparties with the most money moving, out plus in, followed by a remainder row; their parts add up to the totals.
+/// </param>
 /// <param name="Groups">The requested grouping, with empty groups included; empty when no grouping was asked.</param>
 public record CurrencyTotals(
     string Currency,
@@ -227,8 +229,8 @@ public static class TotalsAggregator
                     1,
                     false);
             })
-            .OrderByDescending(share => share.MoneyOut)
-            .ThenByDescending(share => share.MoneyIn)
+            .OrderByDescending(share => share.MoneyOut + share.MoneyIn)
+            .ThenByDescending(share => share.MoneyOut)
             .ThenBy(share => share.Name, StringComparer.Ordinal)
             .ToList();
     }
