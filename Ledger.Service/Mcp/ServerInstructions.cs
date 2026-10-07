@@ -10,6 +10,7 @@ public static class ServerInstructions
         + "Days, months and years follow the Europe/Amsterdam calendar. "
         + "For any how-much question use money_totals and never add amounts up yourself. "
         + "Quote the period, the number of transactions and what was excluded. "
-        + "Say when a result is grouped by counterparty rather than by category. "
+        + "Until categories exist, totals are grouped by counterparty name, not by category: say so in the answer, and use "
+        + "find_counterparties to look up how a merchant is spelled before filtering by it. "
         + "search_transactions shows capped detail rows only; never add its rows up.";
 }

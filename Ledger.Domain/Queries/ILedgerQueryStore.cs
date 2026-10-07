@@ -44,7 +44,40 @@ public interface ILedgerQueryStore
         int limit,
         TimeZoneInfo zone,
         CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Finds the counterparty names that contain the text, case-insensitively, among booked transactions of synced accounts, with
+    /// one entry per name and currency. Transfers between synced accounts are left out and counterparty account numbers are masked.
+    /// </summary>
+    /// <param name="text">The text to look for in counterparty names.</param>
+    /// <param name="range">The days to cover, or null for all history.</param>
+    /// <param name="accountKeys">Opaque account keys to narrow to; empty means every synced account.</param>
+    /// <param name="zone">The time zone whose calendar decides which day a transaction without a bank date belongs to.</param>
+    /// <param name="cancellationToken">Cancels the read.</param>
+    Task<CounterpartyPage> FindCounterpartiesAsync(
+        string text,
+        DateRange? range,
+        IReadOnlyList<string> accountKeys,
+        TimeZoneInfo zone,
+        CancellationToken cancellationToken);
 }
+
+/// <summary>
+/// One counterparty name in one currency: how many booked transactions it has, the money out and in, the first and last day and up
+/// to three of the counterparty's account numbers, already masked.
+/// </summary>
+public record CounterpartyData(
+    string Name,
+    string Currency,
+    int Count,
+    decimal MoneyOut,
+    decimal MoneyIn,
+    DateOnly FirstDate,
+    DateOnly LastDate,
+    IReadOnlyList<string> MaskedAccounts);
+
+/// <summary>The counterparty names that matched, one row per name and currency, and how many of the requested account keys are synced accounts.</summary>
+public record CounterpartyPage(IReadOnlyList<CounterpartyData> Rows, int AccountsInScope);
 
 /// <summary>One transaction as a search shows it. The counterparty account is already masked.</summary>
 public record SearchRowData(
