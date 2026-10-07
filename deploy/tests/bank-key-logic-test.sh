@@ -122,6 +122,36 @@ check "a second generate leaves the env file unchanged" "$ENV_BEFORE" "$(cat "$G
 check "the refusal says the key already exists" "1" "$(grep -c 'already exists' <<< "$SECOND_OUT")"
 check "only the key, certificate and public key are in the key directory" "3" "$(find "$KEY_DIR" -mindepth 1 | wc -l | tr -d ' ')"
 
+# --- failure handling ---------------------------------------------------------
+FAIL_TMP="${WORKDIR}/fail-tmp"
+FAIL_DIR="${WORKDIR}/fail-etc-ledger"
+FAIL_ENV="${WORKDIR}/fail-generated.env"
+mkdir -p "$FAIL_TMP" "$FAIL_DIR"
+printf 'ASPNETCORE_ENVIRONMENT=Production\n' > "$FAIL_ENV"
+UMASK_BEFORE="$(umask)"
+
+FAIL_OUT="$(TMPDIR="$FAIL_TMP" bank_key_generate "$FAIL_DIR" "${WORKDIR}/no-such-dir/ledger.env" 2>&1)"
+check "generate fails when the env file cannot be written" "1" "$?"
+check "a failed generate installs no key" "0" "$(find "$FAIL_DIR" -mindepth 1 | wc -l | tr -d ' ')"
+check "a failed generate leaves no work directory" "0" "$(find "$FAIL_TMP" -mindepth 1 | wc -l | tr -d ' ')"
+check "a failed generate tells the operator nothing was installed" "1" "$(grep -c 'No bank key was installed' <<< "$FAIL_OUT")"
+
+FAIL_PASSWORD_LEFT="$(
+  TMPDIR="$FAIL_TMP" bank_key_generate "$FAIL_DIR" "${WORKDIR}/no-such-dir/ledger.env" > /dev/null 2>&1
+  printf '%s' "${LEDGER_BANK_KEY_PASSWORD:-}"
+)"
+check "a failed generate does not leave the password exported" "" "$FAIL_PASSWORD_LEFT"
+
+TMPDIR="$FAIL_TMP" bank_key_generate "$FAIL_DIR" "${WORKDIR}/no-such-dir/ledger.env" > /dev/null 2>&1
+check "a failed generate restores the umask" "$UMASK_BEFORE" "$(umask)"
+
+RETRY_OUT="$(TMPDIR="$FAIL_TMP" bank_key_generate "$FAIL_DIR" "$FAIL_ENV" 2>&1)"
+check "generate succeeds after a failed attempt without manual cleanup" "0" "$?"
+check "the retry installs the key" "1" "$([ -f "${FAIL_DIR}/enablebanking-key.pem" ] && echo 1 || echo 0)"
+check "the retry leaves no work directory" "0" "$(find "$FAIL_TMP" -mindepth 1 | wc -l | tr -d ' ')"
+check "the retry leaves no staged files" "0" "$(find "$FAIL_DIR" -name '*.new' | wc -l | tr -d ' ')"
+check "the retry records the key path" "${FAIL_DIR}/enablebanking-key.pem" "$(read_env_value EnableBanking__PrivateKeyPath "$FAIL_ENV")"
+
 # --- configure ----------------------------------------------------------------
 CONFIGURED_ID='0b9e2c7a-4d1f-4a6e-9c3b-5e8f1a2d7c64'
 CONFIGURED_URL='https://host.example.com/api/v1/bank/callback'

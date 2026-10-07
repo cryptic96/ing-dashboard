@@ -57,91 +57,152 @@ bank_key_set_env_value() {
   local dir tmp line replaced=0
 
   dir="$(dirname "$file")"
-  tmp="$(mktemp "${dir}/.$(basename "$file").XXXXXX")"
+  tmp="$(mktemp "${dir}/.$(basename "$file").XXXXXX")" || return 1
 
   if [[ -f "$file" ]]; then
     while IFS= read -r line || [[ -n "$line" ]]; do
       if [[ "$line" == "${key}="* ]]; then
         if [[ "$replaced" -eq 0 ]]; then
-          printf '%s=%s\n' "$key" "$value" >> "$tmp"
+          printf '%s=%s\n' "$key" "$value" >> "$tmp" || { rm -f "$tmp"; return 1; }
           replaced=1
         fi
         continue
       fi
-      printf '%s\n' "$line" >> "$tmp"
+      printf '%s\n' "$line" >> "$tmp" || { rm -f "$tmp"; return 1; }
     done < "$file"
   fi
 
   if [[ "$replaced" -eq 0 ]]; then
-    printf '%s=%s\n' "$key" "$value" >> "$tmp"
+    printf '%s=%s\n' "$key" "$value" >> "$tmp" || { rm -f "$tmp"; return 1; }
   fi
 
-  chmod 640 "$tmp"
+  chmod 640 "$tmp" || { rm -f "$tmp"; return 1; }
   if [[ "$(id -u)" -eq 0 ]]; then
-    chown root:ledger "$tmp"
+    chown root:ledger "$tmp" || { rm -f "$tmp"; return 1; }
   fi
-  mv -f "$tmp" "$file"
+  mv -f "$tmp" "$file" || { rm -f "$tmp"; return 1; }
+}
+
+BANK_KEY_WORKDIR=""
+BANK_KEY_OLD_UMASK=""
+BANK_KEY_STAGED=()
+
+###
+### Removes everything a generate run leaves behind besides its result: the
+### work directory with the encrypted key copy, any staged file that was
+### not renamed into place, the exported password, and the restrictive umask.
+### Safe to call more than once and from a signal handler.
+###
+bank_key_generate_cleanup() {
+  local staged
+
+  if [[ -n "$BANK_KEY_WORKDIR" ]]; then
+    shred -u "${BANK_KEY_WORKDIR}/key.pem" 2> /dev/null || true
+    rm -rf "$BANK_KEY_WORKDIR"
+    BANK_KEY_WORKDIR=""
+  fi
+  for staged in "${BANK_KEY_STAGED[@]}"; do
+    rm -f "$staged"
+  done
+  BANK_KEY_STAGED=()
+  unset LEDGER_BANK_KEY_PASSWORD
+  if [[ -n "$BANK_KEY_OLD_UMASK" ]]; then
+    umask "$BANK_KEY_OLD_UMASK"
+    BANK_KEY_OLD_UMASK=""
+  fi
+}
+
+bank_key_generate_abort() {
+  bank_key_generate_cleanup
+  exit 130
+}
+
+###
+### Creates the key, certificate and public key in the work directory, stages
+### them beside their final names in DIR, records the password and the key
+### path in ENV_FILE, and only then renames the staged files into place. The
+### final key file therefore never exists without its password in the env
+### file. Every step is checked explicitly because the caller may run this in
+### a context where errexit is ignored.
+###
+bank_key_generate_steps() {
+  local dir="$1" env_file="$2"
+  local key_path="${dir}/${BANK_KEY_NAME}"
+  local cert_path="${dir}/${BANK_CERT_NAME}"
+  local public_path="${dir}/${BANK_PUBLIC_NAME}"
+
+  openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096 -aes-256-cbc \
+    -pass env:LEDGER_BANK_KEY_PASSWORD -out "${BANK_KEY_WORKDIR}/key.pem" > /dev/null 2>&1 \
+    && openssl req -x509 -new -sha256 -days 3650 \
+      -key "${BANK_KEY_WORKDIR}/key.pem" -passin env:LEDGER_BANK_KEY_PASSWORD \
+      -subj "/CN=household-ledger-bank-link" -out "${BANK_KEY_WORKDIR}/cert.pem" > /dev/null 2>&1 \
+    && openssl pkey -in "${BANK_KEY_WORKDIR}/key.pem" -passin env:LEDGER_BANK_KEY_PASSWORD \
+      -pubout -out "${BANK_KEY_WORKDIR}/public.pem" > /dev/null 2>&1 \
+    || { bank_key_log "Generating the bank key failed."; return 1; }
+
+  mkdir -p "$dir" || return 1
+
+  BANK_KEY_STAGED=("${key_path}.new" "${cert_path}.new" "${public_path}.new")
+  if [[ "$(id -u)" -eq 0 ]]; then
+    install -m 640 -o root -g ledger "${BANK_KEY_WORKDIR}/key.pem" "${key_path}.new" \
+      && install -m 644 -o root -g root "${BANK_KEY_WORKDIR}/cert.pem" "${cert_path}.new" \
+      && install -m 644 -o root -g root "${BANK_KEY_WORKDIR}/public.pem" "${public_path}.new" \
+      || return 1
+  else
+    install -m 640 "${BANK_KEY_WORKDIR}/key.pem" "${key_path}.new" \
+      && install -m 644 "${BANK_KEY_WORKDIR}/cert.pem" "${cert_path}.new" \
+      && install -m 644 "${BANK_KEY_WORKDIR}/public.pem" "${public_path}.new" \
+      || return 1
+  fi
+
+  bank_key_set_env_value "$env_file" EnableBanking__PrivateKeyPassword "$LEDGER_BANK_KEY_PASSWORD" || return 1
+  bank_key_set_env_value "$env_file" EnableBanking__PrivateKeyPath "$key_path" || return 1
+
+  mv -f "${cert_path}.new" "$cert_path" \
+    && mv -f "${public_path}.new" "$public_path" \
+    && mv -f "${key_path}.new" "$key_path" \
+    || return 1
+  BANK_KEY_STAGED=()
 }
 
 ###
 ### Generates the password-protected key, the certificate and the public key
 ### into DIR and records the key path and password in ENV_FILE. Refuses when
 ### the key already exists. Prints the certificate and the public key and a
-### reminder; never prints the password.
+### reminder; never prints the password. On any failure or interrupt the work
+### directory, the staged files, the exported password and the umask are
+### cleaned up, and no key is left without its password in the env file.
 ###
 bank_key_generate() {
   local dir="$1" env_file="$2"
   local key_path="${dir}/${BANK_KEY_NAME}"
-  local cert_path="${dir}/${BANK_CERT_NAME}"
-  local public_path="${dir}/${BANK_PUBLIC_NAME}"
-  local workdir old_umask
+  local status=0
 
   if [[ -e "$key_path" ]]; then
     bank_key_log "The bank key ${key_path} already exists and is never overwritten."
     return 1
   fi
 
-  old_umask="$(umask)"
+  BANK_KEY_OLD_UMASK="$(umask)"
   umask 077
-  workdir="$(mktemp -d)"
+  trap bank_key_generate_abort INT TERM HUP
 
-  LEDGER_BANK_KEY_PASSWORD="$(openssl rand -base64 32)"
-  export LEDGER_BANK_KEY_PASSWORD
+  BANK_KEY_WORKDIR="$(mktemp -d)" || status=1
+  if [[ "$status" -eq 0 ]]; then
+    LEDGER_BANK_KEY_PASSWORD="$(openssl rand -base64 32)" || status=1
+    export LEDGER_BANK_KEY_PASSWORD
+  fi
+  if [[ "$status" -eq 0 ]]; then
+    bank_key_generate_steps "$dir" "$env_file" || status=1
+  fi
 
-  if ! {
-    openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096 -aes-256-cbc \
-      -pass env:LEDGER_BANK_KEY_PASSWORD -out "${workdir}/key.pem" \
-      && openssl req -x509 -new -sha256 -days 3650 \
-        -key "${workdir}/key.pem" -passin env:LEDGER_BANK_KEY_PASSWORD \
-        -subj "/CN=household-ledger-bank-link" -out "${workdir}/cert.pem" \
-      && openssl pkey -in "${workdir}/key.pem" -passin env:LEDGER_BANK_KEY_PASSWORD \
-        -pubout -out "${workdir}/public.pem"
-  } > /dev/null 2>&1; then
-    bank_key_log "Generating the bank key failed."
-    rm -rf "$workdir"
-    unset LEDGER_BANK_KEY_PASSWORD
-    umask "$old_umask"
+  trap - INT TERM HUP
+  bank_key_generate_cleanup
+
+  if [[ "$status" -ne 0 ]]; then
+    bank_key_log "No bank key was installed; fix the problem above and run generate again."
     return 1
   fi
-  umask "$old_umask"
-
-  mkdir -p "$dir"
-  if [[ "$(id -u)" -eq 0 ]]; then
-    install -m 640 -o root -g ledger "${workdir}/key.pem" "$key_path"
-    install -m 644 -o root -g root "${workdir}/cert.pem" "$cert_path"
-    install -m 644 -o root -g root "${workdir}/public.pem" "$public_path"
-  else
-    install -m 640 "${workdir}/key.pem" "$key_path"
-    install -m 644 "${workdir}/cert.pem" "$cert_path"
-    install -m 644 "${workdir}/public.pem" "$public_path"
-  fi
-
-  bank_key_set_env_value "$env_file" EnableBanking__PrivateKeyPath "$key_path"
-  bank_key_set_env_value "$env_file" EnableBanking__PrivateKeyPassword "$LEDGER_BANK_KEY_PASSWORD"
-
-  shred -u "${workdir}/key.pem" 2> /dev/null || rm -f "${workdir}/key.pem"
-  rm -rf "$workdir"
-  unset LEDGER_BANK_KEY_PASSWORD
 
   bank_key_print_public_parts "$dir"
   bank_key_log ""
