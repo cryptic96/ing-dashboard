@@ -16,22 +16,36 @@ namespace Ledger.IntegrationTests.Infrastructure;
 /// <summary>Boots the ledger host on real Kestrel sockets, wired to a throwaway database, so port filtering is genuinely exercised.</summary>
 public class LedgerWebApplicationFactory : WebApplicationFactory<Program>
 {
+    private const string ProviderVariable = "Ingestion__Provider";
+    private const string CertificatePathVariable = "DataProtection__CertificatePath";
+    private const string CertificatePasswordVariable = "DataProtection__CertificatePassword";
+
     private readonly string _ledgerConnectionString;
     private readonly string? _contentRootOverride;
     private readonly Action<IServiceCollection>? _configureTestServices;
     private readonly IReadOnlyDictionary<string, string?>? _additionalConfiguration;
-    private readonly CapturingLoggerProvider _loggerProvider = new();
+    private readonly CapturingLoggerProvider _loggerProvider;
     private IHost? _realHost;
 
-    /// <summary>Creates the factory. Picks two free loopback ports immediately so callers can build clients before starting the host.</summary>
+    /// <summary>
+    /// Creates the factory. Picks two free loopback ports immediately so callers can build clients before starting the host.
+    /// The certificate and the startup environment are process environment values only while the host is built and started,
+    /// because the service registration reads them before the factory's configuration overrides apply; the previous values are
+    /// put back afterwards, whether or not startup succeeds.
+    /// </summary>
+    /// <param name="startupEnvironment">Extra environment values for the duration of startup; a null value removes the variable.</param>
+    /// <param name="loggerProvider">A capture provider the caller keeps, so the logs of a host that fails to start can still be read.</param>
     public LedgerWebApplicationFactory(
         string ledgerConnectionString,
         string? contentRootOverride = null,
         string? certificatePath = null,
         string? certificatePassword = null,
         Action<IServiceCollection>? configureTestServices = null,
-        IReadOnlyDictionary<string, string?>? additionalConfiguration = null)
+        IReadOnlyDictionary<string, string?>? additionalConfiguration = null,
+        IReadOnlyDictionary<string, string?>? startupEnvironment = null,
+        CapturingLoggerProvider? loggerProvider = null)
     {
+        _loggerProvider = loggerProvider ?? new CapturingLoggerProvider();
         _ledgerConnectionString = ledgerConnectionString;
         _contentRootOverride = contentRootOverride;
         _configureTestServices = configureTestServices;
@@ -39,9 +53,22 @@ public class LedgerWebApplicationFactory : WebApplicationFactory<Program>
         ApiPort = GetFreeLoopbackPort();
         OpsPort = GetFreeLoopbackPort();
 
-        ApplyCertificateEnvironmentVariables(certificatePath, certificatePassword);
+        var environment = new Dictionary<string, string?>
+        {
+            [ProviderVariable] = null,
+            [CertificatePathVariable] = certificatePath,
+            [CertificatePasswordVariable] = certificatePassword
+        };
 
-        EnsureHostStarted();
+        foreach (var (name, value) in startupEnvironment ?? new Dictionary<string, string?>())
+        {
+            environment[name] = value;
+        }
+
+        using (new EnvironmentOverride(environment))
+        {
+            EnsureHostStarted();
+        }
     }
 
     /// <summary>The real loopback port the API endpoint listens on for this instance.</summary>
@@ -147,13 +174,6 @@ public class LedgerWebApplicationFactory : WebApplicationFactory<Program>
     private void EnsureHostStarted()
     {
         _ = Server;
-    }
-
-    /// <summary>Sets or clears the process-level certificate environment variables Program.cs reads eagerly, before WebApplicationFactory's configuration overrides merge in.</summary>
-    private static void ApplyCertificateEnvironmentVariables(string? certificatePath, string? certificatePassword)
-    {
-        Environment.SetEnvironmentVariable("DataProtection__CertificatePath", certificatePath);
-        Environment.SetEnvironmentVariable("DataProtection__CertificatePassword", certificatePassword);
     }
 
     private static int GetFreeLoopbackPort()

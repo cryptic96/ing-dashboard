@@ -325,23 +325,12 @@ public class LogRedactionTests(DatabaseFixture fixture)
             ["Ingestion:BackgroundCallsPerDay"] = "1000"
         };
 
-        const string providerVariable = "Ingestion__Provider";
-        Environment.SetEnvironmentVariable(providerVariable, "EnableBanking");
-
-        LedgerWebApplicationFactory factory;
-
-        try
-        {
-            factory = new LedgerWebApplicationFactory(
-                fixture.ConnectionStringFor("ledger_runtime"),
-                configureTestServices: services =>
-                    services.AddHttpClient<EnableBankingClient>().ConfigurePrimaryHttpMessageHandler(() => fake),
-                additionalConfiguration: configuration);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable(providerVariable, null);
-        }
+        var factory = new LedgerWebApplicationFactory(
+            fixture.ConnectionStringFor("ledger_runtime"),
+            configureTestServices: services =>
+                services.AddHttpClient<EnableBankingClient>().ConfigurePrimaryHttpMessageHandler(() => fake),
+            additionalConfiguration: configuration,
+            startupEnvironment: new Dictionary<string, string?> { ["Ingestion__Provider"] = "EnableBanking" });
 
         return await BankLinkTestHost.StartWithFactoryAsync(fixture, factory);
     }

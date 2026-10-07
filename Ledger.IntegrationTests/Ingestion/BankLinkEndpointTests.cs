@@ -517,19 +517,10 @@ public sealed class BankLinkTestHost : IAsyncDisposable
     /// <summary>Creates the factory with Ingestion:Provider set as an environment value only while the host starts.</summary>
     public static LedgerWebApplicationFactory CreateFactoryWithProviderSetting(DatabaseFixture fixture, string provider)
     {
-        const string name = "Ingestion__Provider";
-        Environment.SetEnvironmentVariable(name, provider);
-
-        try
-        {
-            return new LedgerWebApplicationFactory(
-                fixture.ConnectionStringFor("ledger_runtime"),
-                additionalConfiguration: new Dictionary<string, string?> { ["BankLink:RedirectUrl"] = RedirectUrl });
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable(name, null);
-        }
+        return new LedgerWebApplicationFactory(
+            fixture.ConnectionStringFor("ledger_runtime"),
+            additionalConfiguration: new Dictionary<string, string?> { ["BankLink:RedirectUrl"] = RedirectUrl },
+            startupEnvironment: new Dictionary<string, string?> { ["Ingestion__Provider"] = provider });
     }
 
     /// <summary>Sends a request to the API port, with the host's key unless told otherwise.</summary>
