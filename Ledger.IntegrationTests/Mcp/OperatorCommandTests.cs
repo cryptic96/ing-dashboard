@@ -21,7 +21,7 @@ public class OperatorCommandTests(DatabaseFixture fixture)
     public async Task A_created_login_signs_in_only_after_its_authenticator_code_is_confirmed()
     {
         var connectionString = await LedgerQuerySeed.CreateIsolatedDatabaseAsync(fixture);
-        await using var host = await McpTestHost.StartAsync(connectionString);
+        await using var host = await StartHostAsync(connectionString);
         var name = NewName();
         var password = NewPassword();
 
@@ -114,7 +114,7 @@ public class OperatorCommandTests(DatabaseFixture fixture)
     public async Task List_shows_the_second_factor_state_and_the_active_grants_and_never_a_secret()
     {
         var connectionString = await LedgerQuerySeed.CreateIsolatedDatabaseAsync(fixture);
-        await using var host = await McpTestHost.StartAsync(connectionString);
+        await using var host = await StartHostAsync(connectionString);
         var (confirmed, confirmedPassword) = await CreateLoginAsync(connectionString, confirm: true);
         var (pending, pendingPassword) = await CreateLoginAsync(connectionString, confirm: false);
 
@@ -144,7 +144,7 @@ public class OperatorCommandTests(DatabaseFixture fixture)
     public async Task Grants_list_names_the_grant_and_its_client_and_never_prints_a_token()
     {
         var connectionString = await LedgerQuerySeed.CreateIsolatedDatabaseAsync(fixture);
-        await using var host = await McpTestHost.StartAsync(connectionString);
+        await using var host = await StartHostAsync(connectionString);
         var (login, _) = await CreateLoginAsync(connectionString, confirm: true);
 
         await using var connection = await host.ConnectAsync(login, ClientId);
@@ -170,7 +170,7 @@ public class OperatorCommandTests(DatabaseFixture fixture)
     public async Task Revoke_all_refuses_the_very_next_call_and_the_next_refresh_of_every_earlier_token()
     {
         var connectionString = await LedgerQuerySeed.CreateIsolatedDatabaseAsync(fixture);
-        await using var host = await McpTestHost.StartAsync(connectionString);
+        await using var host = await StartHostAsync(connectionString);
         var (first, _) = await CreateLoginAsync(connectionString, confirm: true);
         var (second, _) = await CreateLoginAsync(connectionString, confirm: true);
 
@@ -203,7 +203,7 @@ public class OperatorCommandTests(DatabaseFixture fixture)
     public async Task Revoke_one_grant_stops_only_that_grant_while_another_logins_grant_keeps_working()
     {
         var connectionString = await LedgerQuerySeed.CreateIsolatedDatabaseAsync(fixture);
-        await using var host = await McpTestHost.StartAsync(connectionString);
+        await using var host = await StartHostAsync(connectionString);
         var (first, _) = await CreateLoginAsync(connectionString, confirm: true);
         var (second, _) = await CreateLoginAsync(connectionString, confirm: true);
 
@@ -237,7 +237,7 @@ public class OperatorCommandTests(DatabaseFixture fixture)
     public async Task Set_password_replaces_the_password_and_revokes_the_logins_grants()
     {
         var connectionString = await LedgerQuerySeed.CreateIsolatedDatabaseAsync(fixture);
-        await using var host = await McpTestHost.StartAsync(connectionString);
+        await using var host = await StartHostAsync(connectionString);
         var (login, _) = await CreateLoginAsync(connectionString, confirm: true);
         var (bystander, _) = await CreateLoginAsync(connectionString, confirm: true);
 
@@ -268,7 +268,7 @@ public class OperatorCommandTests(DatabaseFixture fixture)
     public async Task Reset_totp_revokes_the_grants_and_the_login_cannot_sign_in_until_the_new_secret_is_confirmed()
     {
         var connectionString = await LedgerQuerySeed.CreateIsolatedDatabaseAsync(fixture);
-        await using var host = await McpTestHost.StartAsync(connectionString);
+        await using var host = await StartHostAsync(connectionString);
         var (login, password) = await CreateLoginAsync(connectionString, confirm: true);
 
         await using var connection = await host.ConnectAsync(login, ClientId);
@@ -297,10 +297,40 @@ public class OperatorCommandTests(DatabaseFixture fixture)
 
     [Fact]
     [Trait("Category", "OperatorCommands")]
+    public async Task A_secret_written_by_the_command_is_stored_encrypted_and_a_login_it_enrolled_signs_in_through_the_web_host()
+    {
+        var connectionString = await LedgerQuerySeed.CreateIsolatedDatabaseAsync(fixture);
+        await using var host = await StartHostAsync(connectionString);
+
+        var (login, _) = await CreateLoginAsync(connectionString, confirm: true);
+        var stored = await AuthenticatorKeyStore.ReadRawAsync(connectionString, login.UserName);
+
+        stored.Should().NotBeNullOrEmpty().And.NotContain(login.AuthenticatorKey);
+        await using var connection = await host.ConnectAsync(login, ClientId);
+        (await host.ToolsListStatusAsync(connection.AccessToken)).Should().Be(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    [Trait("Category", "OperatorCommands")]
+    public async Task A_secret_written_by_the_web_host_is_read_by_the_command()
+    {
+        var connectionString = await LedgerQuerySeed.CreateIsolatedDatabaseAsync(fixture);
+        await using var host = await StartHostAsync(connectionString);
+        var enrolled = await host.CreateLoginAsync(enrolSecondFactor: true);
+
+        var confirmed = await RunLoginAsync(connectionString, string.Empty, "confirm-totp", enrolled.UserName, TotpCode.Compute(enrolled.AuthenticatorKey, DateTimeOffset.UtcNow));
+        var wrong = await RunLoginAsync(connectionString, string.Empty, "confirm-totp", enrolled.UserName, TotpCode.Wrong(enrolled.AuthenticatorKey, DateTimeOffset.UtcNow));
+
+        confirmed.ExitCode.Should().Be(0);
+        wrong.ExitCode.Should().Be(1);
+    }
+
+    [Fact]
+    [Trait("Category", "OperatorCommands")]
     public async Task Remove_revokes_the_logins_grants_deletes_it_and_leaves_other_logins_alone()
     {
         var connectionString = await LedgerQuerySeed.CreateIsolatedDatabaseAsync(fixture);
-        await using var host = await McpTestHost.StartAsync(connectionString);
+        await using var host = await StartHostAsync(connectionString);
         var (login, _) = await CreateLoginAsync(connectionString, confirm: true);
         var (bystander, _) = await CreateLoginAsync(connectionString, confirm: true);
 
@@ -318,6 +348,9 @@ public class OperatorCommandTests(DatabaseFixture fixture)
         listed.Stdout.Should().NotContain(login.UserName).And.Contain(bystander.UserName);
         (await RunLoginAsync(connectionString, string.Empty, "remove", login.UserName)).ExitCode.Should().Be(1);
     }
+
+    private static Task<McpTestHost> StartHostAsync(string connectionString) =>
+        McpTestHost.StartAsync(connectionString, TestCertificates.SharedKeyRingSettings);
 
     private static async Task AssertPasswordIsRefusedAsync(McpTestHost host, TestLogin login)
     {
@@ -364,6 +397,7 @@ public class OperatorCommandTests(DatabaseFixture fixture)
         string[] args)
     {
         var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(TestCertificates.SharedKeyRingSettings)
             .AddInMemoryCollection(new Dictionary<string, string?> { ["ConnectionStrings:Ledger"] = connectionString })
             .Build();
 

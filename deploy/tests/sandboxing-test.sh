@@ -91,6 +91,17 @@ for wrapper in "$APIKEY" "$LOGIN" "$GRANTS"; do
     "$(file_has_text "$wrapper" "--uid=ledger --gid=ledger ")"
 done
 
+# --- the sandboxed commands can read the key-ring certificate -----------------------
+ACCOUNTS="${DEPLOY_DIR}/provision.d/20-accounts.sh"
+for wrapper in "$LOGIN" "$GRANTS"; do
+  check "$(basename "$wrapper") does not hide any path from the command" "0" \
+    "$(grep -cE 'InaccessiblePaths|TemporaryFileSystem|PrivateMounts|PrivateUsers' "$wrapper")"
+  check "$(basename "$wrapper") does not make the filesystem unreadable" "0" \
+    "$(grep -cE 'ProtectSystem=(full|no)|ReadOnlyPaths=|BindReadOnlyPaths=' "$wrapper")"
+done
+check "the key-ring certificate is installed readable by the ledger group and no one else" "1" \
+  "$(grep -cE 'install -m 640 -o root -g ledger .*dataprotection\.pfx' "$ACCOUNTS")"
+
 # --- apikey behaviour with stubbed host tools ------------------------------------
 STUB_BIN="${WORKDIR}/bin"
 SYSTEMD_RUN_LOG="${WORKDIR}/systemd-run.log"

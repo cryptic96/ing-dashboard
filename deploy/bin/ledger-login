@@ -14,6 +14,9 @@
 ### not a terminal, and otherwise ask for it twice without echo. The password
 ### is never an argument. create and reset-totp print the authenticator secret
 ### once. Run as root; the work happens as the ledger user in a sandbox.
+### The authenticator secret is stored encrypted with the same key ring as the
+### service, so the command reads the certificate named in the env file; it
+### writes nothing outside the database.
 ###
 set -euo pipefail
 

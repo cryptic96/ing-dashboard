@@ -9,7 +9,8 @@
 ###
 ### revoke-all cuts every Claude connection off at once; the next request with
 ### any earlier token is refused. list never prints a token. Run as root; the
-### work happens as the ledger user in a sandbox.
+### work happens as the ledger user in a sandbox. Like the service, the command
+### opens the key ring with the certificate named in the env file.
 ###
 set -euo pipefail
 

@@ -135,7 +135,8 @@ public static class OAuthServiceCollectionExtensions
     /// <summary>
     /// Registers what the web host and the operator commands share: the login store with the password rules and the authenticator
     /// code provider, the OpenIddict stores and the service that revokes grants. It adds no cookies, pages, endpoints or settings,
-    /// so a command-line host can use it without a public address.
+    /// so a command-line host can use it without a public address. The host must register the ledger Data Protection key ring,
+    /// because the login store encrypts authenticator secrets with it.
     /// </summary>
     public static IServiceCollection AddLedgerOAuthCore(this IServiceCollection services, IConfiguration configuration)
     {
