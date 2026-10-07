@@ -145,7 +145,7 @@ check "a failed generate does not leave the password exported" "" "$FAIL_PASSWOR
 TMPDIR="$FAIL_TMP" bank_key_generate "$FAIL_DIR" "${WORKDIR}/no-such-dir/ledger.env" > /dev/null 2>&1
 check "a failed generate restores the umask" "$UMASK_BEFORE" "$(umask)"
 
-RETRY_OUT="$(TMPDIR="$FAIL_TMP" bank_key_generate "$FAIL_DIR" "$FAIL_ENV" 2>&1)"
+TMPDIR="$FAIL_TMP" bank_key_generate "$FAIL_DIR" "$FAIL_ENV" > /dev/null 2>&1
 check "generate succeeds after a failed attempt without manual cleanup" "0" "$?"
 check "the retry installs the key" "1" "$([ -f "${FAIL_DIR}/enablebanking-key.pem" ] && echo 1 || echo 0)"
 check "the retry leaves no work directory" "0" "$(find "$FAIL_TMP" -mindepth 1 | wc -l | tr -d ' ')"

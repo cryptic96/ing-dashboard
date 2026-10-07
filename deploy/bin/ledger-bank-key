@@ -131,14 +131,18 @@ bank_key_generate_steps() {
   local cert_path="${dir}/${BANK_CERT_NAME}"
   local public_path="${dir}/${BANK_PUBLIC_NAME}"
 
-  openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096 -aes-256-cbc \
-    -pass env:LEDGER_BANK_KEY_PASSWORD -out "${BANK_KEY_WORKDIR}/key.pem" > /dev/null 2>&1 \
-    && openssl req -x509 -new -sha256 -days 3650 \
-      -key "${BANK_KEY_WORKDIR}/key.pem" -passin env:LEDGER_BANK_KEY_PASSWORD \
-      -subj "/CN=household-ledger-bank-link" -out "${BANK_KEY_WORKDIR}/cert.pem" > /dev/null 2>&1 \
-    && openssl pkey -in "${BANK_KEY_WORKDIR}/key.pem" -passin env:LEDGER_BANK_KEY_PASSWORD \
-      -pubout -out "${BANK_KEY_WORKDIR}/public.pem" > /dev/null 2>&1 \
-    || { bank_key_log "Generating the bank key failed."; return 1; }
+  if ! {
+    openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096 -aes-256-cbc \
+      -pass env:LEDGER_BANK_KEY_PASSWORD -out "${BANK_KEY_WORKDIR}/key.pem" \
+      && openssl req -x509 -new -sha256 -days 3650 \
+        -key "${BANK_KEY_WORKDIR}/key.pem" -passin env:LEDGER_BANK_KEY_PASSWORD \
+        -subj "/CN=household-ledger-bank-link" -out "${BANK_KEY_WORKDIR}/cert.pem" \
+      && openssl pkey -in "${BANK_KEY_WORKDIR}/key.pem" -passin env:LEDGER_BANK_KEY_PASSWORD \
+        -pubout -out "${BANK_KEY_WORKDIR}/public.pem"
+  } > /dev/null 2>&1; then
+    bank_key_log "Generating the bank key failed."
+    return 1
+  fi
 
   mkdir -p "$dir" || return 1
 
