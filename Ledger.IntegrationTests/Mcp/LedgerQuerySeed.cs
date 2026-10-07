@@ -78,6 +78,102 @@ public static class LedgerQuerySeed
         ];
     }
 
+    /// <summary>The instant the seeded totals scenario's successful sync finished.</summary>
+    public static readonly DateTimeOffset TotalsSyncFinishedAt = new(2026, 10, 6, 7, 30, 0, TimeSpan.Zero);
+
+    /// <summary>The account number the seeded totals scenario's unsynced own account carries.</summary>
+    public const string OtherOwnIban = "XX00SYNT0000000004";
+
+    /// <summary>
+    /// Seeds the scenario the totals tests read: a joint and a savings account that are synced (the savings number is written in
+    /// lower case with spaces), an own account that is not synced, and August 2026 transactions covering booked and pending rows
+    /// on both sides of an Amsterdam midnight, a dropped row, a transfer between the synced accounts, a transfer to the unsynced
+    /// own account, two identical rows, spellings that differ in case and spacing, and a row in another currency. All names,
+    /// account numbers and amounts are made up.
+    /// </summary>
+    public static async Task<TotalsScenario> SeedTotalsScenarioAsync(string connectionString)
+    {
+        await using var context = OpenContext(connectionString);
+        var connection = await AddConnectionAsync(context);
+
+        var joint = AddAccount(context, connection, "Joint", JointIban, AccountKind.Current, true, At(2026, 1, 1), JointProviderName);
+        var savings = AddAccount(context, connection, "Savings", "xx00 synt 0000 0000 02", AccountKind.Savings, true, At(2026, 1, 2), null);
+        AddAccount(context, connection, "Other own", OtherOwnIban, AccountKind.Current, false, At(2026, 1, 3), null);
+
+        context.SyncRuns.Add(new SyncRunEntity
+        {
+            Id = Guid.NewGuid(),
+            BankConnectionId = connection.Id,
+            Trigger = SyncTrigger.Scheduled,
+            StartedAt = TotalsSyncFinishedAt.AddMinutes(-1),
+            FinishedAt = TotalsSyncFinishedAt,
+            Outcome = SyncOutcome.Succeeded
+        });
+
+        const string External = "XX00SYNT9999999999";
+        var seen = new DateTimeOffset(2026, 8, 20, 9, 0, 0, TimeSpan.Zero);
+
+        context.Transactions.AddRange(
+            Row(joint, LedgerTransactionStatus.Booked, "2026-08-03", -40.00m, "EUR", "Example Market", External, "Weekly groceries", seen),
+            Row(joint, LedgerTransactionStatus.Booked, "2026-08-10", -25.50m, "EUR", "EXAMPLE  market ", External, "Weekly groceries and bags", seen),
+            Row(joint, LedgerTransactionStatus.Booked, "2026-08-17", -30.00m, "EUR", "Example Bakery", External, "Bread", seen),
+            Row(joint, LedgerTransactionStatus.Booked, "2026-08-21", -5.00m, "EUR", "Example Shop", External, "Small purchase", seen),
+            Row(joint, LedgerTransactionStatus.Booked, "2026-08-21", -5.00m, "EUR", "Example Shop", External, "Small purchase", seen),
+            Row(joint, LedgerTransactionStatus.Booked, "2026-08-31", -8.00m, "EUR", "Example Shop", External, "Last day", seen),
+            Row(joint, LedgerTransactionStatus.Booked, "2026-09-01", -9.00m, "EUR", "Example Shop", External, "First day of next month", seen),
+            Row(joint, LedgerTransactionStatus.Booked, "2026-08-25", 2000.00m, "EUR", "Example Employer", External, "Salary", seen),
+            Row(joint, LedgerTransactionStatus.Booked, "2026-08-12", -10.00m, "USD", "Example Market", External, "Travel purchase", seen),
+            Row(joint, LedgerTransactionStatus.Booked, "2026-08-05", -300.00m, "EUR", "Savings", "XX00SYNT0000000002", "Move to savings", seen),
+            Row(savings, LedgerTransactionStatus.Booked, "2026-08-05", 300.00m, "EUR", "Joint", "XX00 SYNT 0000 0000 01", "From joint", seen),
+            Row(joint, LedgerTransactionStatus.Booked, "2026-08-06", -150.00m, "EUR", "Other own", OtherOwnIban, "Move to other own account", seen),
+            Row(joint, LedgerTransactionStatus.Dropped, "2026-08-07", -99.00m, "EUR", "Example Market", External, "Never settled", seen),
+            Row(joint, LedgerTransactionStatus.Booked, null, -3.00m, "EUR", "Example Cafe", External, "No bank date", new DateTimeOffset(2026, 8, 31, 21, 30, 0, TimeSpan.Zero)),
+            Row(joint, LedgerTransactionStatus.Booked, null, -2.00m, "EUR", "Example Cafe", External, "Transaction date only", seen, transactionDate: "2026-08-30"),
+            Row(joint, LedgerTransactionStatus.Pending, null, -12.50m, "EUR", "Example Bakery", External, "Pending before midnight", new DateTimeOffset(2026, 8, 31, 21, 30, 0, TimeSpan.Zero)),
+            Row(joint, LedgerTransactionStatus.Pending, null, -7.00m, "EUR", "Example Bakery", External, "Pending after midnight", new DateTimeOffset(2026, 8, 31, 22, 30, 0, TimeSpan.Zero)));
+
+        await context.SaveChangesAsync();
+
+        return new TotalsScenario(joint.AccountKey, savings.AccountKey);
+    }
+
+    /// <summary>The opaque keys of the two synced accounts of the totals scenario.</summary>
+    public sealed record TotalsScenario(string JointKey, string SavingsKey);
+
+    private static LedgerTransactionEntity Row(
+        LedgerAccountEntity account,
+        LedgerTransactionStatus status,
+        string? bookingDate,
+        decimal amount,
+        string currency,
+        string counterparty,
+        string counterpartyIban,
+        string description,
+        DateTimeOffset firstSeenAt,
+        string? transactionDate = null)
+    {
+        var booking = bookingDate is null ? (DateOnly?)null : DateOnly.Parse(bookingDate, System.Globalization.CultureInfo.InvariantCulture);
+
+        return new LedgerTransactionEntity
+        {
+            Id = Guid.NewGuid(),
+            AccountId = account.Id,
+            Status = status,
+            BookingDate = booking,
+            ValueDate = booking,
+            TransactionDate = transactionDate is null ? null : DateOnly.Parse(transactionDate, System.Globalization.CultureInfo.InvariantCulture),
+            Amount = amount,
+            Currency = currency,
+            CounterpartyName = counterparty,
+            CounterpartyIban = counterpartyIban,
+            Description = description,
+            FirstSeenAt = firstSeenAt,
+            UpdatedAt = firstSeenAt,
+            BookedAt = status == LedgerTransactionStatus.Booked ? firstSeenAt : null,
+            DroppedAt = status == LedgerTransactionStatus.Dropped ? firstSeenAt : null
+        };
+    }
+
     /// <summary>Seeds synced accounts with the given display names, created in the order given, one hour apart.</summary>
     public static async Task<IReadOnlyList<SeededAccount>> SeedAccountsInOrderAsync(string connectionString, params string[] displayNames)
     {

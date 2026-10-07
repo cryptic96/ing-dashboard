@@ -71,7 +71,7 @@ public class OAuthFlowTests(DatabaseFixture fixture)
 
         await using var connection = await host.OpenAsync(tokens.AccessToken!, tokens.RefreshToken!);
         var tools = await connection.Client.ListToolsAsync(cancellationToken: TestContext.Current.CancellationToken);
-        tools.Select(tool => tool.Name).Should().Equal("ledger_overview");
+        tools.Select(tool => tool.Name).Should().Contain("ledger_overview");
 
         var result = await connection.Client.CallToolAsync(
             "ledger_overview",

@@ -17,6 +17,9 @@ public class LedgerQueryService(
     TimeProvider timeProvider)
 {
     private const string NothingSyncedNote = "No accounts are synced yet.";
+    private const string GroupedByText = "counterparty name, not category";
+    private const int MaxTerms = 10;
+    private const int MaxTermLength = 100;
 
     /// <summary>
     /// Lists every synced account in creation order with its name, latest balance and whether it reconciles, the last successful
@@ -67,6 +70,367 @@ public class LedgerQueryService(
             .ToList();
 
         return new OverviewResult(DateText(today), options.TimeZone, shown, null);
+    }
+
+    /// <summary>
+    /// Answers a how-much question with exact server sums over booked transactions. Pending transactions and transfers between the
+    /// household's own synced accounts are reported beside the total and never added to it, and currencies are never added together.
+    /// </summary>
+    /// <param name="request">The period, filters and grouping that Claude chose.</param>
+    /// <param name="cancellationToken">Cancels the read.</param>
+    /// <exception cref="LedgerQueryException">The request is invalid; the message says what to change.</exception>
+    public async Task<TotalsResult> TotalsAsync(TotalsRequest request, CancellationToken cancellationToken)
+    {
+        var options = ingestionOptions.Value;
+        var zone = options.ResolveTimeZone();
+
+        var resolver = new PeriodResolver(timeProvider, zone);
+        var period = resolver.Resolve(request.Period, ParseDate(request.FromDate), ParseDate(request.ToDate));
+
+        var counterpartyTerms = Terms(request.Counterparty);
+        var descriptionTerms = Terms(request.Description);
+        var references = References(request.CounterpartyRef);
+        var accountKeys = Terms(request.Accounts);
+        var direction = ParseDirection(request.Direction);
+        var grouping = ParseGrouping(request.GroupBy);
+        CheckAmounts(request.MinAmount, request.MaxAmount);
+
+        var filter = new LedgerQueryFilter(
+            period.Range,
+            accountKeys,
+            counterpartyTerms,
+            [],
+            descriptionTerms,
+            direction,
+            request.MinAmount,
+            request.MaxAmount,
+            references);
+
+        var data = await store.ReadTotalsAsync(filter, zone, cancellationToken);
+
+        if (accountKeys.Count > 0 && data.Accounts.Count != accountKeys.Count)
+        {
+            throw new LedgerQueryException("An account key is not a synced account. Use the account_key values from ledger_overview.");
+        }
+
+        var aggregate = TotalsAggregator.Aggregate(data, grouping, period.Range);
+
+        return Shape(request, period, filter, grouping, data, aggregate, options.TimeZone);
+    }
+
+    private static TotalsResult Shape(
+        TotalsRequest request,
+        ResolvedPeriod period,
+        LedgerQueryFilter filter,
+        TotalsGrouping grouping,
+        TotalsData data,
+        TotalsAggregate aggregate,
+        string timeZone)
+    {
+        var from = DateText(period.Range.From);
+        var to = DateText(period.Range.To);
+
+        var currencies = aggregate.Currencies
+            .Select(currency => new TotalsCurrency(
+                currency.Currency,
+                MoneyText.Format(currency.MoneyOut),
+                MoneyText.Format(currency.MoneyIn),
+                MoneyText.Format(currency.Net),
+                currency.Count,
+                currency.CounterpartyCount,
+                currency.Counterparties
+                    .Select(share => new TotalsCounterparty(
+                        share.Name,
+                        share.Ref,
+                        MoneyText.Format(share.MoneyOut),
+                        MoneyText.Format(share.MoneyIn),
+                        share.Count,
+                        share.IsRemainder ? share.MergedCounterparties : null))
+                    .ToList(),
+                currency.Groups
+                    .Select(group => new TotalsGroup(
+                        group.Label,
+                        group.From is { } groupFrom ? DateText(groupFrom) : null,
+                        group.To is { } groupTo ? DateText(groupTo) : null,
+                        group.AccountKey,
+                        group.CounterpartyRef,
+                        MoneyText.Format(group.MoneyOut),
+                        MoneyText.Format(group.MoneyIn),
+                        MoneyText.Format(group.Net),
+                        group.Count,
+                        group.MergedCounterparties > 1 ? group.MergedCounterparties : null))
+                    .ToList()))
+            .ToList();
+
+        var currencyCodes = aggregate.Currencies.Select(currency => currency.Currency).ToList();
+        var pending = ExcludedFor(currencyCodes, data.Pending);
+        var transfers = ExcludedFor(currencyCodes, data.InternalTransfers);
+
+        var dataAsOf = data.Accounts
+            .Select(account => new TotalsDataAsOf(
+                account.AccountKey,
+                account.DisplayName ?? "Account " + account.AccountKey,
+                account.LastSuccessfulSync is { } sync ? Instant(sync) : null))
+            .ToList();
+
+        var summary = Summary(period.Range, aggregate, pending, transfers, data.Accounts, grouping, timeZone);
+
+        return new TotalsResult(
+            new TotalsPeriod(from, to, period.Requested, timeZone),
+            new TotalsFilters(
+                filter.CounterpartyTerms,
+                filter.CounterpartyRefs ?? [],
+                filter.DescriptionTerms,
+                filter.AccountKeys,
+                DirectionText(filter.Direction),
+                filter.MinAmount is { } min ? MoneyText.Format(min) : null,
+                filter.MaxAmount is { } max ? MoneyText.Format(max) : null,
+                GroupingText(grouping)),
+            BasisText(timeZone),
+            currencies,
+            pending.Select(ExcludedResult).ToList(),
+            transfers.Select(ExcludedResult).ToList(),
+            GroupedByText,
+            dataAsOf,
+            summary);
+    }
+
+    private static string BasisText(string timeZone)
+    {
+        return $"booked transactions by booking date in {timeZone}; pending reported separately; "
+            + "transfers between the household's own synced accounts excluded";
+    }
+
+    private static List<ExcludedTotals> ExcludedFor(IReadOnlyList<string> currencies, IReadOnlyList<ExcludedTotals> excluded)
+    {
+        return currencies
+            .Select(currency => excluded.FirstOrDefault(item => item.Currency == currency) ?? new ExcludedTotals(currency, 0, 0m, 0m))
+            .ToList();
+    }
+
+    private static TotalsExcluded ExcludedResult(ExcludedTotals excluded)
+    {
+        return new TotalsExcluded(
+            excluded.Currency,
+            excluded.Count,
+            MoneyText.Format(excluded.MoneyOut),
+            MoneyText.Format(excluded.MoneyIn));
+    }
+
+    private static string Summary(
+        DateRange range,
+        TotalsAggregate aggregate,
+        IReadOnlyList<ExcludedTotals> pending,
+        IReadOnlyList<ExcludedTotals> transfers,
+        IReadOnlyList<TotalsAccount> accounts,
+        TotalsGrouping grouping,
+        string timeZone)
+    {
+        var from = DateText(range.From);
+        var to = DateText(range.To);
+        var sentences = new List<string>();
+        var dataAsOf = DataAsOfSentence(accounts);
+        var grouped = "Grouped by counterparty name, not by category.";
+
+        foreach (var currency in aggregate.Currencies.Where(currency => currency.Count > 0))
+        {
+            var pendingFor = pending.First(item => item.Currency == currency.Currency);
+            var transfersFor = transfers.First(item => item.Currency == currency.Currency);
+
+            sentences.Add(
+                $"{MoneyText.Format(currency.MoneyOut)} {currency.Currency} out, {MoneyText.Format(currency.MoneyIn)} {currency.Currency} in, "
+                + $"net {MoneyText.Format(currency.Net)} {currency.Currency} across {Plural(currency.Count, "booked transaction")} "
+                + $"at {Plural(currency.CounterpartyCount, "counterparty", "counterparties")}, {from} to {to} ({timeZone}). "
+                + NotIncluded(pendingFor, transfersFor)
+                + " "
+                + grouped
+                + " "
+                + dataAsOf);
+        }
+
+        if (sentences.Count == 0)
+        {
+            sentences.Add($"No booked transactions matched between {from} and {to}.");
+
+            foreach (var currency in aggregate.Currencies)
+            {
+                var pendingFor = pending.First(item => item.Currency == currency.Currency);
+                var transfersFor = transfers.First(item => item.Currency == currency.Currency);
+
+                if (pendingFor.Count > 0 || transfersFor.Count > 0)
+                {
+                    sentences.Add(NotIncluded(pendingFor, transfersFor));
+                }
+            }
+
+            sentences.Add(dataAsOf);
+        }
+
+        return string.Join(" ", sentences);
+    }
+
+    private static string NotIncluded(ExcludedTotals pending, ExcludedTotals transfers)
+    {
+        var pendingText = pending.Count == 0
+            ? "no pending transactions"
+            : $"{Plural(pending.Count, "pending transaction")} ({AmountsText(pending)})";
+        var transferText = transfers.Count == 0
+            ? "no transfers between the household's own accounts"
+            : $"{Plural(transfers.Count, "transfer")} between the household's own accounts";
+
+        return $"Not included: {pendingText} and {transferText}.";
+    }
+
+    private static string AmountsText(ExcludedTotals excluded)
+    {
+        var parts = new List<string>();
+
+        if (excluded.MoneyOut != 0m)
+        {
+            parts.Add($"{MoneyText.Format(excluded.MoneyOut)} {excluded.Currency} out");
+        }
+
+        if (excluded.MoneyIn != 0m)
+        {
+            parts.Add($"{MoneyText.Format(excluded.MoneyIn)} {excluded.Currency} in");
+        }
+
+        return parts.Count == 0 ? $"0.00 {excluded.Currency}" : string.Join(", ", parts);
+    }
+
+    private static string DataAsOfSentence(IReadOnlyList<TotalsAccount> accounts)
+    {
+        if (accounts.Count == 0)
+        {
+            return "Data as of: no synced accounts.";
+        }
+
+        if (accounts.Any(account => account.LastSuccessfulSync is null))
+        {
+            return "Data as of: unknown, because an account in scope has no successful sync yet.";
+        }
+
+        return "Data as of " + Instant(accounts.Min(account => account.LastSuccessfulSync!.Value)) + ".";
+    }
+
+    private static string Plural(int count, string singular, string? plural = null)
+    {
+        return count == 1 ? $"1 {singular}" : $"{count} {plural ?? singular + "s"}";
+    }
+
+    private static string Instant(DateTimeOffset instant)
+    {
+        return instant.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture);
+    }
+
+    private static DateOnly? ParseDate(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return null;
+        }
+
+        if (DateOnly.TryParseExact(text.Trim(), "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date))
+        {
+            return date;
+        }
+
+        throw new LedgerQueryException("Dates must be written as yyyy-MM-dd, for example 2026-08-31.");
+    }
+
+    private static List<string> Terms(IReadOnlyList<string>? terms)
+    {
+        if (terms is null || terms.Count == 0)
+        {
+            return [];
+        }
+
+        if (terms.Count > MaxTerms)
+        {
+            throw new LedgerQueryException("At most 10 values may be given in one list.");
+        }
+
+        var trimmed = terms.Select(term => string.Join(' ', (term ?? string.Empty).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))).ToList();
+
+        if (trimmed.Any(term => term.Length is < 1 or > MaxTermLength))
+        {
+            throw new LedgerQueryException("Each value must be between 1 and 100 characters.");
+        }
+
+        return trimmed.Distinct(StringComparer.Ordinal).ToList();
+    }
+
+    private static List<string> References(IReadOnlyList<string>? references)
+    {
+        var terms = Terms(references);
+
+        if (terms.Any(term => !CounterpartyRef.IsWellFormed(term)))
+        {
+            throw new LedgerQueryException("A counterparty reference is not valid. Use a counterparty_ref from an earlier result.");
+        }
+
+        return terms;
+    }
+
+    private static MoneyDirection ParseDirection(string? direction)
+    {
+        return direction?.Trim().ToLower(CultureInfo.InvariantCulture) switch
+        {
+            null or "" or "both" => MoneyDirection.Both,
+            "out" => MoneyDirection.Out,
+            "in" => MoneyDirection.In,
+            _ => throw new LedgerQueryException("direction must be out, in or both.")
+        };
+    }
+
+    private static TotalsGrouping ParseGrouping(string? groupBy)
+    {
+        return groupBy?.Trim().ToLower(CultureInfo.InvariantCulture) switch
+        {
+            null or "" or "none" => TotalsGrouping.None,
+            "counterparty" => TotalsGrouping.Counterparty,
+            "month" => TotalsGrouping.Month,
+            "week" => TotalsGrouping.Week,
+            "day" => TotalsGrouping.Day,
+            "account" => TotalsGrouping.Account,
+            _ => throw new LedgerQueryException("groupBy must be none, counterparty, month, week, day or account.")
+        };
+    }
+
+    private static void CheckAmounts(decimal? minAmount, decimal? maxAmount)
+    {
+        if (minAmount < 0m || maxAmount < 0m)
+        {
+            throw new LedgerQueryException("minAmount and maxAmount must not be negative.");
+        }
+
+        if (minAmount > maxAmount)
+        {
+            throw new LedgerQueryException("minAmount must not be above maxAmount.");
+        }
+    }
+
+    private static string DirectionText(MoneyDirection direction)
+    {
+        return direction switch
+        {
+            MoneyDirection.Out => "out",
+            MoneyDirection.In => "in",
+            _ => "both"
+        };
+    }
+
+    private static string GroupingText(TotalsGrouping grouping)
+    {
+        return grouping switch
+        {
+            TotalsGrouping.Counterparty => "counterparty",
+            TotalsGrouping.Month => "month",
+            TotalsGrouping.Week => "week",
+            TotalsGrouping.Day => "day",
+            TotalsGrouping.Account => "account",
+            _ => "none"
+        };
     }
 
     private static string DateText(DateOnly date)
