@@ -92,13 +92,20 @@ public static class BalanceReconciler
     /// <summary>
     /// Checks a balance that carries no reference date against what the ledger expected at the previous fetch plus the booked
     /// transactions the ledger first saw as booked between the two fetches. The window is supplied by the caller. The starting
-    /// point is the previous snapshot's own expectation when it was checked, and its bank amount when it was only a baseline.
+    /// point is the previous snapshot's own expectation when it was checked. When it was only a baseline, the starting point is
+    /// its bank amount minus the signed sum of the items that were still pending when the ledger fetched it, because the bank's
+    /// expected balance includes pending items while the ledger counts a row only once it books; without that correction an item
+    /// that was pending at the baseline would be counted a second time when it books, and the gap would never close.
     /// Carrying the ledger's expectation forward is what lets a card payment still in progress show up once and then resolve
     /// when it books, while a transaction the ledger never received keeps showing as drift. The result is unknown when there is
     /// no previous balance, when the kinds or currencies differ, or when the previous balance was dated or has no recorded fetch
     /// time, because then the two do not describe the same timeline.
     /// </summary>
-    public static BalanceCheck CheckUndated(BalanceSnapshotState? previous, ProviderBalance current, decimal bookedSumSincePrevious)
+    public static BalanceCheck CheckUndated(
+        BalanceSnapshotState? previous,
+        ProviderBalance current,
+        decimal bookedSumSincePrevious,
+        decimal pendingSumAtPrevious = 0m)
     {
         if (previous is null
             || previous.Kind != current.Kind
@@ -110,7 +117,8 @@ public static class BalanceReconciler
             return new BalanceCheck(null, null, null);
         }
 
-        var expected = (previous.ExpectedAmount ?? previous.Amount) + bookedSumSincePrevious;
+        var start = previous.ExpectedAmount ?? previous.Amount - pendingSumAtPrevious;
+        var expected = start + bookedSumSincePrevious;
         var drift = current.Amount - expected;
 
         return new BalanceCheck(current.Amount == expected, expected, drift);

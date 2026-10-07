@@ -287,7 +287,7 @@ public class BalanceSnapshotTests(DatabaseFixture fixture)
     [Fact]
     public async Task Pending_and_dropped_transactions_never_enter_the_undated_window()
     {
-        var (scenario, account) = ScenarioWithUndatedBalance(1000.00m);
+        var (scenario, account) = ScenarioWithUndatedBalance(930.00m);
         scenario.AddTransaction(account, IngestionTestSupport.Pending("entry-soon-dropped", -70.00m, DayOne) with { BookingDate = DayOne });
         await using var host = await StartAsync(scenario, DayOne, UndatedConfiguration);
         var connection = await host.LinkAsync(selectFirstAccountOnly: false);
@@ -351,6 +351,72 @@ public class BalanceSnapshotTests(DatabaseFixture fixture)
         var snapshots = await ReadSnapshotsAsync(host, accountKey);
         snapshots.Where(snapshot => snapshot.SnapshotDate > DayOne)
             .Should().OnlyContain(snapshot => snapshot.Reconciled == false && snapshot.Drift == 0.01m && snapshot.Expected == 1000.00m);
+    }
+
+    [Fact]
+    public async Task A_pending_item_inside_the_baseline_balance_reconciles_on_the_days_after_it_books()
+    {
+        var (scenario, account) = ScenarioWithUndatedBalance(990.00m);
+        scenario.AddTransaction(account, IngestionTestSupport.Pending("entry-card-pending", -10.00m, DayOne));
+        await using var host = await StartAsync(scenario, DayOne, UndatedConfiguration);
+        var connection = await host.LinkAsync(selectFirstAccountOnly: false);
+        var accountKey = connection.Accounts[0].AccountKey;
+        await SyncAsync(host, connection.Id);
+
+        scenario.Remove(account, account.Transactions.Count - 1);
+        scenario.AddTransaction(account, IngestionTestSupport.Booked("entry-card-pending", -10.00m, DayOne));
+        host.Clock.SetUtcNow(InstantFor(DayTwo));
+        await SyncAsync(host, connection.Id);
+        host.Clock.SetUtcNow(InstantFor(DayTwo.AddDays(1)));
+        await SyncAsync(host, connection.Id);
+        host.Clock.SetUtcNow(InstantFor(DayTwo.AddDays(2)));
+        await SyncAsync(host, connection.Id);
+
+        var snapshots = (await ReadSnapshotsAsync(host, accountKey)).Where(snapshot => snapshot.SnapshotDate > DayOne).ToList();
+        snapshots.Should().HaveCount(3);
+        snapshots.Should().OnlyContain(snapshot => snapshot.Reconciled == true && snapshot.Drift == 0m && snapshot.Expected == 990.00m);
+    }
+
+    [Fact]
+    public async Task A_pending_item_inside_the_baseline_balance_that_the_bank_drops_reconciles_once_the_balance_excludes_it()
+    {
+        var (scenario, account) = ScenarioWithUndatedBalance(990.00m);
+        scenario.AddTransaction(account, IngestionTestSupport.Pending("entry-card-cancelled", -10.00m, DayOne));
+        await using var host = await StartAsync(scenario, DayOne, UndatedConfiguration);
+        var connection = await host.LinkAsync(selectFirstAccountOnly: false);
+        var accountKey = connection.Accounts[0].AccountKey;
+        await SyncAsync(host, connection.Id);
+
+        scenario.Remove(account, account.Transactions.Count - 1);
+        scenario.SetBalances(account, UndatedBalances(1000.00m));
+        host.Clock.SetUtcNow(InstantFor(DayTwo));
+        await SyncAsync(host, connection.Id);
+        host.Clock.SetUtcNow(InstantFor(DayTwo.AddDays(1)));
+        await SyncAsync(host, connection.Id);
+
+        (await ReadTransactionStatusesAsync(host, accountKey)).Should().Contain("dropped");
+        var snapshots = (await ReadSnapshotsAsync(host, accountKey)).Where(snapshot => snapshot.SnapshotDate > DayOne).ToList();
+        snapshots.Should().HaveCount(2);
+        snapshots.Should().OnlyContain(snapshot => snapshot.Reconciled == true && snapshot.Drift == 0m && snapshot.Expected == 1000.00m);
+    }
+
+    [Fact]
+    public async Task A_pending_item_inside_the_baseline_balance_that_has_not_booked_yet_shows_its_amount_as_drift()
+    {
+        var (scenario, account) = ScenarioWithUndatedBalance(990.00m);
+        scenario.AddTransaction(account, IngestionTestSupport.Pending("entry-card-slow", -10.00m, DayOne));
+        await using var host = await StartAsync(scenario, DayOne, UndatedConfiguration);
+        var connection = await host.LinkAsync(selectFirstAccountOnly: false);
+        var accountKey = connection.Accounts[0].AccountKey;
+        await SyncAsync(host, connection.Id);
+
+        host.Clock.SetUtcNow(InstantFor(DayTwo));
+        await SyncAsync(host, connection.Id);
+
+        var dayTwo = (await ReadSnapshotsAsync(host, accountKey)).Single(snapshot => snapshot.SnapshotDate == DayTwo);
+        dayTwo.Reconciled.Should().BeFalse();
+        dayTwo.Expected.Should().Be(1000.00m);
+        dayTwo.Drift.Should().Be(-10.00m);
     }
 
     [Fact]
