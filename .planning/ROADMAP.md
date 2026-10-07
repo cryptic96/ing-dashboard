@@ -158,7 +158,7 @@ Plans:
 **Goal:** Every transaction is correctly categorised: automatically by rules where they are confident, and by Claude and the user for the rest. Every change is audited and reversible, and the household can see where the money goes and how that compares with before.
 **Mode:** mvp
 **Depends on**: Phase 3
-**Requirements**: CAT-01, CAT-02, CAT-03, CAT-04, CAT-05, CAT-06, CAT-07, CAT-08, ADV-06, ADV-07, DASH-02, PLAN-09
+**Requirements**: CAT-01, CAT-02, CAT-03, CAT-04, CAT-05, CAT-06, CAT-07, CAT-08, ADV-06, ADV-07, DASH-02, PLAN-09, OPS-08
 **Success Criteria** (what must be TRUE):
 
   1. Rules stored in the database categorise new transactions automatically into a Nibud-structured category tree that the household can edit; no reference figures are shipped. Every assignment shows its source (rule, Claude or user) and a confidence level. Transfers between the household's own accounts no longer count as spending or income.

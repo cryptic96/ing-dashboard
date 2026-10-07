@@ -70,13 +70,14 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Operations
 
-- [x] **OPS-01**: The app exposes `/metrics` for Prometheus: time of last successful sync, sync errors, days until bank consent expires, review-queue size
+- [x] **OPS-01**: The app exposes `/metrics` for Prometheus: time of last successful sync, sync errors, days until bank consent expires (the review-queue size moved to OPS-08)
 - [x] **OPS-02**: Alerts fire when syncs fail and when bank consent is 14 and 7 days from expiry
 - [x] **OPS-03**: App, PostgreSQL, Grafana and Prometheus run in one LXC as systemd services; setup is automated where possible and any one-time steps are documented step by step
 - [x] **OPS-04**: Finance database backups are encrypted, and a restore procedure is documented and tested
 - [x] **OPS-05**: Data Protection keys are persisted, so encrypted bank credentials survive restarts and redeploys (verified by an actual restart)
 - [ ] **OPS-06**: All period bucketing (days, months, years) uses the Europe/Amsterdam time zone
 - [x] **OPS-07**: Database schema changes ship as Entity Framework Core migrations and are applied automatically during deployment with the migrator role
+- [ ] **OPS-08**: The app exposes the categorisation review-queue size on `/metrics`
 
 ### Security & deployment
 
@@ -193,6 +194,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | OPS-05 | Phase 1 | Complete |
 | OPS-06 | Phase 3 | Pending |
 | OPS-07 | Phase 1 | Complete |
+| OPS-08 | Phase 4 | Pending |
 | SEC-01 | Phase 2 | Complete |
 | SEC-02 | Phase 1 | Complete |
 | SEC-03 | Phase 1 | Complete |
@@ -208,8 +210,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 **Coverage:**
 
-- v1 requirements: 65 total
-- Mapped to phases: 65
+- v1 requirements: 66 total
+- Mapped to phases: 66
 - Unmapped: 0
 
 ---
