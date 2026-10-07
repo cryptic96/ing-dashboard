@@ -113,9 +113,10 @@ public class SyncOrchestrator(
         var items = new List<ProviderTransaction>();
         var complete = false;
         var accountRef = new ProviderAccountRef(sessionId, account.ProviderAccountUid);
+        var enforceBudget = trigger != SyncTrigger.PostLink;
         var meteredContext = context with
         {
-            Meter = new ProviderCallMeter(account.AccountId, runId, context.IsBackground, callStore, settings, timeProvider)
+            Meter = new ProviderCallMeter(account.AccountId, runId, context.IsBackground, enforceBudget, callStore, settings, timeProvider)
         };
 
         await foreach (var page in provider.GetTransactionsAsync(accountRef, query, meteredContext, cancellationToken))
