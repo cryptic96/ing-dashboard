@@ -31,6 +31,13 @@ public class LedgerOAuthOptions
     /// <summary>How long after a refresh the old refresh token still works, so a refresh whose answer was lost can be retried.</summary>
     public TimeSpan RefreshTokenReuseLeeway { get; set; } = TimeSpan.FromSeconds(30);
 
+    /// <summary>
+    /// The networks, as CIDR ranges, the sign-in and consent pages answer to, normally the home network and the VPN. A request
+    /// from any other address is answered as if those pages did not exist, whatever the reverse proxy lets through. While the
+    /// list is empty nobody can sign in.
+    /// </summary>
+    public string[] SignInNetworks { get; set; } = [];
+
     /// <summary>Whether a public base address is configured.</summary>
     public bool IsEnabled => !string.IsNullOrWhiteSpace(PublicBaseUrl);
 
@@ -48,6 +55,9 @@ public class LedgerOAuthOptions
 
     /// <summary>The host, with its port when it is not the default one, that serves the surface.</summary>
     public string PublicHost => BaseUri().Authority;
+
+    /// <summary>The host name, without a port, that serves the surface.</summary>
+    public string PublicHostName => BaseUri().Host;
 
     private string BaseText()
     {

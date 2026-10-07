@@ -9,6 +9,7 @@ using Ledger.IntegrationTests.Ingestion;
 using Ledger.Repository;
 using Ledger.Repository.Stores;
 using Ledger.Service.Ingestion.EnableBanking;
+using Ledger.Service.OAuth;
 using Ledger.Service.Ingestion.Synthetic;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -71,6 +72,71 @@ public class LogRedactionTests(DatabaseFixture fixture)
             logText.Should().NotContain(marker);
             metricsBody.Should().NotContain(marker);
             responseBodies.Should().OnlyContain(body => !body.Contains(marker, StringComparison.Ordinal));
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "LogRedaction")]
+    public async Task Passwords_codes_authorization_codes_and_tokens_never_reach_logs_across_sign_in_and_refresh()
+    {
+        await using var host = await McpTestHost.StartAsync(fixture.ConnectionStringFor("ledger_runtime"));
+        var login = await host.CreateLoginAsync();
+        var wrongPassword = $"WrongPasswordSentinel{Guid.NewGuid():N}";
+        var wrongCode = TotpCode.Wrong(login.AuthenticatorKey, DateTimeOffset.UtcNow);
+
+        using var failing = host.CreateBrowser();
+        var failingDriver = new OAuthTestDriver(failing);
+        var failingDiscovery = await failingDriver.DiscoverAsync();
+        var (failingAddress, _, _) = OAuthTestDriver.BuildAuthorizeAddress(
+            failingDiscovery,
+            ClientRegistrations.CodeClientId,
+            OAuthTestDriver.LoopbackRedirectUri);
+        using var failingStart = await failing.GetAsync(failingAddress, TestContext.Current.CancellationToken);
+        var loginAddress = failingStart.Headers.Location!.ToString();
+        using var wrongPasswordResponse = await failingDriver.PostPasswordAsync(loginAddress, login.UserName, wrongPassword);
+        using var passwordResponse = await failingDriver.PostPasswordAsync(loginAddress, login.UserName, login.Password);
+        using var wrongCodeResponse = await failingDriver.PostCodeAsync(passwordResponse.Headers.Location!.ToString(), wrongCode);
+
+        using var browser = host.CreateBrowser();
+        var driver = new OAuthTestDriver(browser);
+        var discovery = await driver.DiscoverAsync();
+        var outcome = await driver.AuthorizeAsync(discovery, ClientRegistrations.CodeClientId, login, OAuthTestDriver.LoopbackRedirectUri);
+        var tokens = await driver.ExchangeAsync(discovery, ClientRegistrations.CodeClientId, outcome);
+        var refreshed = await driver.RefreshAsync(discovery, ClientRegistrations.CodeClientId, tokens.RefreshToken!);
+
+        await using (var connection = await host.OpenAsync(refreshed.AccessToken!, refreshed.RefreshToken!))
+        {
+            await connection.Client.CallToolAsync("ledger_overview", cancellationToken: TestContext.Current.CancellationToken);
+        }
+
+        tokens.Succeeded.Should().BeTrue();
+        refreshed.Succeeded.Should().BeTrue();
+
+        var logText = string.Join('\n', host.Factory.CapturedLogMessages);
+        logText.Should().NotBeEmpty();
+
+        var secrets = new Dictionary<string, string>
+        {
+            ["password"] = login.Password,
+            ["wrong password"] = wrongPassword,
+            ["authorization code"] = outcome.Code!,
+            ["first access token"] = tokens.AccessToken!,
+            ["first refresh token"] = tokens.RefreshToken!,
+            ["second access token"] = refreshed.AccessToken!,
+            ["second refresh token"] = refreshed.RefreshToken!,
+            ["code verifier"] = outcome.CodeVerifier
+        };
+
+        foreach (var (name, value) in secrets)
+        {
+            logText.Should().NotContain(value, $"the {name} must never be logged");
+            logText.Should().NotContain(Uri.EscapeDataString(value), $"the {name} must never be logged in its encoded form");
+        }
+
+        foreach (var code in login.IssuedCodes.Append(wrongCode))
+        {
+            System.Text.RegularExpressions.Regex.IsMatch(logText, $"(?<![0-9]){code}(?![0-9])")
+                .Should().BeFalse("a one-time code must never be logged");
         }
     }
 

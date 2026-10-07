@@ -141,6 +141,25 @@ public partial class CommittedConfigurationTests
         level.Should().Be("Warning");
     }
 
+    [Theory]
+    [Trait("Category", "Configuration")]
+    [InlineData("OpenIddict")]
+    [InlineData("ModelContextProtocol")]
+    [InlineData("Microsoft.AspNetCore.Identity")]
+    public void Authorization_and_sign_in_libraries_are_logged_at_warning_so_no_credential_can_reach_the_log(string category)
+    {
+        var path = Path.Combine(FindLedgerServiceDirectory(), "appsettings.json");
+        using var document = JsonDocument.Parse(File.ReadAllText(path));
+
+        var level = document.RootElement
+            .GetProperty("Logging")
+            .GetProperty("LogLevel")
+            .GetProperty(category)
+            .GetString();
+
+        level.Should().Be("Warning");
+    }
+
     [Fact]
     [Trait("Category", "Configuration")]
     public void Ingestion_defaults_are_the_values_measured_against_the_real_bank()
