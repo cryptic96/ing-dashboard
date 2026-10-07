@@ -48,6 +48,35 @@ public class ReconciliationRobustnessTests(DatabaseFixture fixture)
             .Should().ContainSingle(row => row.Status == "dropped");
     }
 
+    [Fact]
+    public async Task A_flagged_pending_twin_that_the_bank_stops_listing_is_dropped_so_the_payment_is_counted_once()
+    {
+        var scenario = SyntheticBankScenario.Create();
+        var account = scenario.AddAccount(AccountKind.Current);
+        scenario.AddTransaction(account, IngestionTestSupport.Pending("entry-E1", -20.00m, Day));
+        scenario.AddTransaction(account, IngestionTestSupport.Pending("entry-E2", -20.00m, Day));
+        var (factory, clock) = CreateFactory(scenario);
+        await using var _ = factory;
+        var connection = await IngestionTestSupport.LinkSyntheticAsync(factory, scenario, selectFirstAccountOnly: false);
+        var accountKey = connection.Accounts[0].AccountKey;
+        await IngestionTestSupport.SyncAsync(factory, connection.Id);
+
+        clock.Advance(TimeSpan.FromDays(1));
+        scenario.Remove(account, 1);
+        scenario.Remove(account, 0);
+        scenario.AddTransaction(account, IngestionTestSupport.Booked("entry-E3", -20.00m, Day.AddDays(1)));
+        var second = await IngestionTestSupport.SyncAsync(factory, connection.Id);
+        second.Flagged.Should().Be(2);
+        (await IngestionTestSupport.ReadReportingTransactionsAsync(fixture, accountKey)).Should().HaveCount(3);
+
+        clock.Advance(TimeSpan.FromDays(1));
+        var third = await IngestionTestSupport.SyncAsync(factory, connection.Id);
+
+        third.Dropped.Should().Be(2);
+        var reported = await IngestionTestSupport.ReadReportingTransactionsAsync(fixture, accountKey);
+        reported.Should().ContainSingle().Which.Status.Should().Be("booked");
+    }
+
     private (LedgerWebApplicationFactory Factory, FakeTimeProvider Clock) CreateFactory(SyntheticBankScenario scenario)
     {
         var clock = new FakeTimeProvider(Start);

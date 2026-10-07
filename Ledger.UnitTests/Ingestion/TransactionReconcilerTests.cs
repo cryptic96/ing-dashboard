@@ -422,7 +422,7 @@ public class TransactionReconcilerTests
     }
 
     [Fact]
-    public void Merged_and_flagged_pending_rows_are_never_dropped()
+    public void Rows_merged_or_flagged_in_this_fetch_are_never_dropped_but_an_older_flag_does_not_protect_a_row_the_bank_stopped_listing()
     {
         var merged = PendingState("er:A", Day, amount: -5.00m);
         var firstDoubtful = PendingState("er:B1", Day, amount: -7.00m);
@@ -443,7 +443,19 @@ public class TransactionReconcilerTests
 
         plan.Merges.Should().ContainSingle().Which.PendingTransactionId.Should().Be(merged.Id);
         plan.FlagAmbiguous.Should().BeEquivalentTo([firstDoubtful.Id, secondDoubtful.Id]);
-        plan.Drops.Should().ContainSingle().Which.Should().Be(unrelated.Id);
+        plan.Drops.Should().BeEquivalentTo([alreadyFlagged.Id, unrelated.Id]);
+    }
+
+    [Fact]
+    public void A_flagged_pending_row_the_bank_still_lists_stays_pending_and_flagged()
+    {
+        var flagged = PendingState("er:A", Day) with { Flag = MatchFlag.Ambiguous };
+        var stillPending = BookedItem("A", Day, status: ProviderTransactionStatus.Pending);
+
+        var plan = TransactionReconciler.Plan([flagged], [stillPending], new FetchCoverage(null, true, 1), Options);
+
+        plan.Drops.Should().BeEmpty();
+        plan.FlagAmbiguous.Should().BeEmpty();
     }
 
     [Fact]

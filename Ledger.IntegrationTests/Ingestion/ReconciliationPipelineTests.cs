@@ -274,11 +274,11 @@ public class ReconciliationPipelineTests(DatabaseFixture fixture)
 
         bookingRun.Updated.Should().Be(1);
         bookingRun.Flagged.Should().Be(0);
+        bookingRun.Dropped.Should().Be(1);
 
         var reported = await IngestionTestSupport.ReadReportingTransactionsAsync(fixture, accountKey);
-        reported.Should().HaveCount(3);
-        reported.Count(row => row.Status == "booked" && row.MatchFlag is null).Should().Be(2);
-        reported.Count(row => row.Status == "pending" && row.MatchFlag == "ambiguous").Should().Be(1);
+        reported.Should().HaveCount(2);
+        reported.Should().OnlyContain(row => row.Status == "booked" && row.MatchFlag == null);
     }
 
     private async Task<IReadOnlyList<LifecycleRow>> ReadLifecycleAsync(string accountKey)

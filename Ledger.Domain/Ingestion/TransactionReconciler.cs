@@ -18,8 +18,9 @@ public static class TransactionReconciler
     /// rows: a booked item that is certainly the booked version of exactly one pending row merges into it, a doubtful pairing
     /// is stored separately and the pending rows are flagged, and everything else is inserted. A cancelled status drops a
     /// known pending row, a dropped row the bank reports again is restored, and a pending row the bank no longer lists is
-    /// dropped only when the fetch was complete and returned at least one item. A pending item never downgrades a booked
-    /// transaction, and items of any other status are ignored.
+    /// dropped only when the fetch was complete and returned at least one item. That holds for a row flagged as ambiguous too:
+    /// a flagged row the bank no longer lists is the pending version of something that booked, so dropping it removes the
+    /// duplicate. A pending item never downgrades a booked transaction, and items of any other status are ignored.
     /// </summary>
     /// <exception cref="BankProviderException">An item has an amount, currency or payload that cannot be stored faithfully.</exception>
     public static ReconciliationPlan Plan(
@@ -131,7 +132,6 @@ public static class TransactionReconciler
         foreach (var state in existing)
         {
             if (state.Status != LedgerTransactionStatus.Pending
-                || state.Flag == MatchFlag.Ambiguous
                 || unclear.Contains(state.Id)
                 || drops.Contains(state.Id))
             {
