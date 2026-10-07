@@ -118,8 +118,8 @@ public class IngestionStatusStore(LedgerDbContext dbContext) : IIngestionStatusS
 
     /// <summary>
     /// Reads the account's reconciliation as the metric and the dashboard show it. The latest snapshot with a verdict decides:
-    /// a match is true, and a mismatch is false only when the previous snapshot with a verdict of the same kind also
-    /// mismatched. A first mismatch is reported as null, an unconfirmed result, because the bank's expected balance can include
+    /// a match is true, and a mismatch is false only when the previous snapshot with a verdict of the same kind, taken at most
+    /// <see cref="BalanceReconciler.MaxDaysBetweenFlaggedMismatches"/> days earlier, also mismatched. A first mismatch is reported as null, an unconfirmed result, because the bank's expected balance can include
     /// a card payment that books the next day. The snapshots themselves keep their exact result either way.
     /// </summary>
     private async Task<bool?> ReadFlaggedReconciliationAsync(Guid accountId, CancellationToken cancellationToken)
@@ -142,11 +142,14 @@ public class IngestionStatusStore(LedgerDbContext dbContext) : IIngestionStatusS
             return true;
         }
 
+        var earliestPreviousDate = latest.SnapshotDate.AddDays(-BalanceReconciler.MaxDaysBetweenFlaggedMismatches);
+
         var previous = await dbContext.BalanceSnapshots
             .AsNoTracking()
             .Where(snapshot => snapshot.AccountId == accountId
                 && snapshot.Kind == latest.Kind
                 && snapshot.Reconciled != null
+                && snapshot.SnapshotDate >= earliestPreviousDate
                 && (snapshot.SnapshotDate < latest.SnapshotDate
                     || (snapshot.SnapshotDate == latest.SnapshotDate && snapshot.CreatedAt < latest.CreatedAt)))
             .OrderByDescending(snapshot => snapshot.SnapshotDate)

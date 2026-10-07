@@ -197,6 +197,33 @@ public class AccountStatusViewTests(DatabaseFixture fixture)
     }
 
     [Fact]
+    public async Task A_latest_snapshot_without_a_verdict_does_not_hide_the_verdict_of_the_snapshot_before_it()
+    {
+        var seeded = await SeedAsync();
+        await InsertSnapshotAsync(seeded.AccountKey, new DateOnly(2026, 10, 20), "expected", 70.00m, reconciled: true);
+        await InsertSnapshotAsync(seeded.AccountKey, new DateOnly(2026, 10, 21), "expected", 71.00m, reconciled: null);
+
+        var status = await ReadStatusAsync(seeded.AccountKey);
+
+        status.BalanceReconciled.Should().Be("yes");
+        status.BalanceDate.Should().Be("2026-10-21");
+    }
+
+    [Theory]
+    [InlineData(3, "no")]
+    [InlineData(4, "unknown")]
+    [InlineData(21, "unknown")]
+    public async Task A_mismatch_confirms_the_previous_one_only_when_it_is_at_most_three_days_older(int daysApart, string expected)
+    {
+        var seeded = await SeedAsync();
+        var first = new DateOnly(2026, 10, 1);
+        await InsertSnapshotAsync(seeded.AccountKey, first, "expected", 70.00m, reconciled: false);
+        await InsertSnapshotAsync(seeded.AccountKey, first.AddDays(daysApart), "expected", 71.00m, reconciled: false);
+
+        (await ReadStatusAsync(seeded.AccountKey)).BalanceReconciled.Should().Be(expected);
+    }
+
+    [Fact]
     public async Task The_grafana_reader_can_select_the_view_and_has_no_write_privilege_on_it()
     {
         await using var connection = new NpgsqlConnection(fixture.ConnectionStringFor("grafana_reader"));

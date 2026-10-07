@@ -29,6 +29,13 @@ public record BalanceCheck(bool? Reconciled, decimal? Expected, decimal? Drift);
 public static class BalanceReconciler
 {
     /// <summary>
+    /// How many days before a mismatch the previous mismatch may be and still count as the same persisting drift. Snapshots are
+    /// daily, so the limit tolerates a day or two without a successful sync while keeping two mismatches weeks apart from being
+    /// read as persistence. The account status view applies the same limit.
+    /// </summary>
+    public const int MaxDaysBetweenFlaggedMismatches = 3;
+
+    /// <summary>
     /// Returns the balance to reconcile: the first preferred kind, in the list's order, that carries a reference date. When
     /// undated balances are allowed and no dated preferred kind is present, the first preferred kind without a reference date
     /// is returned instead, to be placed on the timeline by the time the ledger fetched it.
