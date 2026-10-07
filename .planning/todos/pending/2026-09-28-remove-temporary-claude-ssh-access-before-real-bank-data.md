@@ -37,3 +37,7 @@ Before `/mcp` goes public (Phase 3):
 5. Optionally add a selfcheck that fails when any login other than the expected service accounts has sudo rights.
 
 The exact accounts, paths and removal commands are in the operator's local, uncommitted notes (`.git/gsd-orch/infra-notes.md`), never in the repository.
+
+## Update (2026-10-07)
+
+The operator decided on 2026-09-29 to keep the access through the bank-sync phase, with two mitigations: the key now has a passphrase and is loaded through ssh-agent (stripping the passphrase fails), and the hard removal point is before /mcp goes public. Real bank data has been on the host since 2026-10-06. Remove both logins and the key before the public MCP endpoint is exposed.
