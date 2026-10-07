@@ -247,10 +247,22 @@ public static class TransactionReconciler
 
     private static DateOnly EffectiveDate(LedgerTransactionState state, TimeZoneInfo zone)
     {
-        return state.TransactionDate
-            ?? state.BookingDate
-            ?? state.ValueDate
-            ?? SyncSchedule.LocalDate(state.FirstSeenAt, zone);
+        return EffectiveDate(state.TransactionDate, state.BookingDate, state.ValueDate, state.FirstSeenAt, zone);
+    }
+
+    /// <summary>
+    /// The calendar date a stored row is placed on: its transaction date, else its booking date, else its value date, else the
+    /// local day the ledger first saw it. Matching, the drop rule and the fetch window all use this one definition, so a row
+    /// the bank gave no date is judged the same way everywhere.
+    /// </summary>
+    public static DateOnly EffectiveDate(
+        DateOnly? transactionDate,
+        DateOnly? bookingDate,
+        DateOnly? valueDate,
+        DateTimeOffset firstSeenAt,
+        TimeZoneInfo zone)
+    {
+        return transactionDate ?? bookingDate ?? valueDate ?? SyncSchedule.LocalDate(firstSeenAt, zone);
     }
 
     private static DateOnly? ItemDate(ProviderTransaction item)

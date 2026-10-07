@@ -11,7 +11,7 @@ namespace Ledger.Repository.Stores;
 public class LedgerStore(LedgerDbContext dbContext) : ILedgerStore
 {
     /// <inheritdoc />
-    public async Task<FetchWindow> GetFetchWindowAsync(Guid accountId, CancellationToken cancellationToken)
+    public async Task<FetchWindow> GetFetchWindowAsync(Guid accountId, TimeZoneInfo zone, CancellationToken cancellationToken)
     {
         var effective = dbContext.Transactions
             .AsNoTracking()
@@ -19,15 +19,33 @@ public class LedgerStore(LedgerDbContext dbContext) : ILedgerStore
                 && transaction.Status != LedgerTransactionStatus.Dropped)
             .Select(transaction => new
             {
-                transaction.Status,
                 EffectiveDate = transaction.BookingDate ?? transaction.TransactionDate ?? transaction.ValueDate
             });
 
         var hasTransactions = await effective.AnyAsync(cancellationToken);
         var latest = await effective.MaxAsync(row => row.EffectiveDate, cancellationToken);
-        var oldestPending = await effective
-            .Where(row => row.Status == LedgerTransactionStatus.Pending)
-            .MinAsync(row => row.EffectiveDate, cancellationToken);
+
+        var pendingRows = await dbContext.Transactions
+            .AsNoTracking()
+            .Where(transaction => transaction.AccountId == accountId
+                && transaction.Status == LedgerTransactionStatus.Pending)
+            .Select(transaction => new
+            {
+                transaction.TransactionDate,
+                transaction.BookingDate,
+                transaction.ValueDate,
+                transaction.FirstSeenAt
+            })
+            .ToListAsync(cancellationToken);
+
+        DateOnly? oldestPending = pendingRows.Count == 0
+            ? null
+            : pendingRows.Min(row => TransactionReconciler.EffectiveDate(
+                row.TransactionDate,
+                row.BookingDate,
+                row.ValueDate,
+                row.FirstSeenAt,
+                zone));
 
         return new FetchWindow(hasTransactions, latest, oldestPending);
     }

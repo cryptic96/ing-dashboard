@@ -3,8 +3,11 @@ namespace Ledger.Domain.Ingestion;
 /// <summary>Reads and writes the ledger's transactions for one account at a time.</summary>
 public interface ILedgerStore
 {
-    /// <summary>Summarises what the account already holds, so the next fetch can choose how far back to reach.</summary>
-    Task<FetchWindow> GetFetchWindowAsync(Guid accountId, CancellationToken cancellationToken);
+    /// <summary>
+    /// Summarises what the account already holds, so the next fetch can choose how far back to reach. A pending row the bank
+    /// gave no date is placed on the local day, in the given zone, the ledger first saw it, the same way reconciliation does.
+    /// </summary>
+    Task<FetchWindow> GetFetchWindowAsync(Guid accountId, TimeZoneInfo zone, CancellationToken cancellationToken);
 
     /// <summary>
     /// Loads the account's transactions for reconciliation: every pending row whatever its date, plus every other row whose

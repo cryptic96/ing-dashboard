@@ -107,7 +107,7 @@ public class SyncOrchestrator(
         CancellationToken cancellationToken)
     {
         var settings = options.Value;
-        var window = await ledgerStore.GetFetchWindowAsync(account.AccountId, cancellationToken);
+        var window = await ledgerStore.GetFetchWindowAsync(account.AccountId, settings.ResolveTimeZone(), cancellationToken);
         var query = ChooseQuery(trigger, window, settings.OverlapDays);
 
         var items = new List<ProviderTransaction>();
