@@ -109,6 +109,23 @@ public class ReconciliationRobustnessTests(DatabaseFixture fixture)
         (await IngestionTestSupport.CountIdentityViolationsAsync(fixture)).Should().Be(0);
     }
 
+    [Fact]
+    public async Task An_item_with_a_NUL_character_fails_the_run_as_malformed_instead_of_a_transient_failure_and_stores_nothing()
+    {
+        var scenario = SyntheticBankScenario.Create();
+        var account = scenario.AddAccount(AccountKind.Current);
+        scenario.AddTransaction(account, IngestionTestSupport.Booked("entry-fine", -4.00m, Day));
+        scenario.AddTransaction(account, IngestionTestSupport.Booked("entry-nul", -6.00m, Day, description: "Groceries\0"));
+        var (factory, _) = CreateFactory(scenario);
+        await using var _ = factory;
+        var connection = await IngestionTestSupport.LinkSyntheticAsync(factory, scenario, selectFirstAccountOnly: false);
+
+        var result = await IngestionTestSupport.SyncAsync(factory, connection.Id);
+
+        result.Outcome.Should().Be(SyncOutcome.FailedMalformed);
+        (await IngestionTestSupport.ReadStoredTransactionsAsync(fixture, connection.Accounts[0].AccountKey)).Should().BeEmpty();
+    }
+
     private (LedgerWebApplicationFactory Factory, FakeTimeProvider Clock) CreateFactory(SyntheticBankScenario scenario)
     {
         var clock = new FakeTimeProvider(Start);

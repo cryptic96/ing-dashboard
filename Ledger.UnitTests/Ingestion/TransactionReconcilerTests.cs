@@ -184,6 +184,43 @@ public class TransactionReconcilerTests
         act.Should().Throw<BankProviderException>().Which.Kind.Should().Be(ProviderErrorKind.MalformedData);
     }
 
+    [Theory]
+    [InlineData("counterparty")]
+    [InlineData("description")]
+    [InlineData("iban")]
+    [InlineData("reference")]
+    [InlineData("payload_value")]
+    [InlineData("payload_key")]
+    public void A_NUL_character_anywhere_in_the_stored_text_is_rejected_as_malformed_with_its_own_code(string where)
+    {
+        var item = Item(entryReference: "entry-010");
+        item = where switch
+        {
+            "counterparty" => item with { CounterpartyName = "Example\0Grocer" },
+            "description" => item with { Description = "Groceries\0" },
+            "iban" => item with { CounterpartyIban = "\0XX00SYNT0000000001" },
+            "reference" => item with { EntryReference = "entry\0-010" },
+            "payload_value" => item with { RawJson = "{\"note\":\"a\\u0000b\"}" },
+            _ => item with { RawJson = "{\"a\\u0000b\":\"x\"}" }
+        };
+
+        var act = () => TransactionReconciler.Plan([], [item], Coverage, Options);
+
+        var thrown = act.Should().Throw<BankProviderException>().Which;
+        thrown.Kind.Should().Be(ProviderErrorKind.MalformedData);
+        thrown.ProviderCode.Should().Be("text_nul");
+    }
+
+    [Fact]
+    public void An_escaped_backslash_followed_by_u0000_text_is_not_a_NUL_character()
+    {
+        var item = Item(entryReference: "entry-011") with { RawJson = "{\"note\":\"\\\\u0000\"}" };
+
+        var plan = TransactionReconciler.Plan([], [item], Coverage, Options);
+
+        plan.Inserts.Should().ContainSingle();
+    }
+
     [Fact]
     public void Repeated_reference_in_one_feed_is_planned_once_and_prefers_the_booked_version()
     {

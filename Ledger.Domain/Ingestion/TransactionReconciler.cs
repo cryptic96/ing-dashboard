@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using Ledger.Domain.Banking;
 
@@ -22,7 +23,7 @@ public static class TransactionReconciler
     /// a flagged row the bank no longer lists is the pending version of something that booked, so dropping it removes the
     /// duplicate. A pending item never downgrades a booked transaction, and items of any other status are ignored.
     /// </summary>
-    /// <exception cref="BankProviderException">An item has an amount, currency or payload that cannot be stored faithfully.</exception>
+    /// <exception cref="BankProviderException">An item has an amount, currency, text or payload that cannot be stored faithfully.</exception>
     public static ReconciliationPlan Plan(
         IReadOnlyList<LedgerTransactionState> existing,
         IReadOnlyList<ProviderTransaction> incoming,
@@ -337,6 +338,35 @@ public static class TransactionReconciler
         {
             throw Malformed("payload", "A transaction payload is not valid JSON.");
         }
+
+        if (HasNul(item.EntryReference)
+            || HasNul(item.CounterpartyName)
+            || HasNul(item.CounterpartyIban)
+            || HasNul(item.Description)
+            || JsonTextHasNul(item.RawJson))
+        {
+            throw Malformed("text_nul", "A transaction contains a NUL character, which the database cannot store.");
+        }
+    }
+
+    private static bool HasNul(string? text)
+    {
+        return text is not null && text.Contains('\0', StringComparison.Ordinal);
+    }
+
+    private static bool JsonTextHasNul(string rawJson)
+    {
+        var reader = new Utf8JsonReader(Encoding.UTF8.GetBytes(rawJson));
+
+        while (reader.Read())
+        {
+            if (reader.TokenType is JsonTokenType.String or JsonTokenType.PropertyName && HasNul(reader.GetString()))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool IsCurrencyCode(string? currency)
