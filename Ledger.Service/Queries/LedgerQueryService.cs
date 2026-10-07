@@ -429,7 +429,8 @@ public class LedgerQueryService(
 
     private static string BasisText(string timeZone)
     {
-        return $"booked transactions by booking date in {timeZone}; pending reported separately; "
+        return $"booked transactions by booking date (value date, transaction date or first-seen day where the bank gave none) in {timeZone}; "
+            + "pending reported separately; "
             + "transfers between the household's own synced accounts excluded";
     }
 

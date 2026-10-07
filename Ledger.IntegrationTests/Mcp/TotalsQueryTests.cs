@@ -96,6 +96,7 @@ public class TotalsQueryTests(DatabaseFixture fixture)
         result.Period.To.Should().Be("2026-08-31");
         result.Period.TimeZone.Should().Be("Europe/Amsterdam");
         result.Basis.Should().Contain("booked").And.Contain("pending reported separately").And.Contain("own synced accounts excluded");
+        result.Basis.Should().Contain("by booking date (value date, transaction date or first-seen day where the bank gave none)");
         result.GroupedBy.Should().Be("counterparty name, not category");
         result.DataAsOf.Select(account => account.AccountName).Should().Equal("Joint", "Savings");
         result.DataAsOf.Should().OnlyContain(account => account.LastSuccessfulSync == "2026-10-06T07:30:00Z");
