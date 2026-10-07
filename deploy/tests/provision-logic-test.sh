@@ -251,6 +251,78 @@ else
   failtest "prometheus_needs_install: an unrecognised version line is reinstalled rather than trusted"
 fi
 
+###
+### --- signing keyrings and apt sources converge on every run --------------
+###
+
+KEYRING_TEST_DIR="$(mktemp -d)"
+trap 'rm -rf "$HOST_GUARD_DIR" "$KEYRING_TEST_DIR"' EXIT
+export GNUPGHOME="${KEYRING_TEST_DIR}/gnupg"
+mkdir -m 700 "$GNUPGHOME"
+
+make_test_keyring() {
+  local uid="$1" keyring_path="$2" fingerprint
+  gpg --batch --quiet --passphrase '' --quick-generate-key "$uid" ed25519 sign never >/dev/null 2>&1
+  fingerprint="$(gpg --batch --with-colons --list-keys "$uid" 2>/dev/null | awk -F: '$1 == "fpr" {print $10; exit}')"
+  gpg --batch --export "$fingerprint" >"$keyring_path"
+  printf '%s' "$fingerprint"
+}
+
+FIRST_KEYRING="${KEYRING_TEST_DIR}/first.gpg"
+SECOND_KEYRING="${KEYRING_TEST_DIR}/second.gpg"
+FIRST_FPR="$(make_test_keyring "First Test <first@example.com>" "$FIRST_KEYRING")"
+SECOND_FPR="$(make_test_keyring "Second Test <second@example.com>" "$SECOND_KEYRING")"
+
+if apt_keyring_matches_pin "$FIRST_KEYRING" "$FIRST_FPR"; then
+  pass "apt_keyring_matches_pin: a keyring holding the pinned fingerprint matches"
+else
+  failtest "apt_keyring_matches_pin: a keyring holding the pinned fingerprint matches"
+fi
+
+if apt_keyring_matches_pin "$FIRST_KEYRING" "$SECOND_FPR"; then
+  failtest "apt_keyring_matches_pin: a keyring from before a pin bump is replaced (expected failure, got success)"
+else
+  pass "apt_keyring_matches_pin: a keyring from before a pin bump is replaced"
+fi
+
+if apt_keyring_matches_pin "${KEYRING_TEST_DIR}/missing.gpg" "$FIRST_FPR"; then
+  failtest "apt_keyring_matches_pin: a missing keyring does not match (expected failure, got success)"
+else
+  pass "apt_keyring_matches_pin: a missing keyring does not match"
+fi
+
+: >"${KEYRING_TEST_DIR}/empty.gpg"
+if apt_keyring_matches_pin "${KEYRING_TEST_DIR}/empty.gpg" "$FIRST_FPR"; then
+  failtest "apt_keyring_matches_pin: an empty keyring left by a half-finished run does not match (expected failure, got success)"
+else
+  pass "apt_keyring_matches_pin: an empty keyring left by a half-finished run does not match"
+fi
+
+head -c 40 "$FIRST_KEYRING" >"${KEYRING_TEST_DIR}/truncated.gpg"
+if apt_keyring_matches_pin "${KEYRING_TEST_DIR}/truncated.gpg" "$FIRST_FPR"; then
+  failtest "apt_keyring_matches_pin: a truncated keyring does not match (expected failure, got success)"
+else
+  pass "apt_keyring_matches_pin: a truncated keyring does not match"
+fi
+
+assert_eq "apt_source_line: renders the signed-by sources line" \
+  "deb [signed-by=/usr/share/keyrings/example.gpg] https://apt.example.com stable main" \
+  "$(apt_source_line /usr/share/keyrings/example.gpg https://apt.example.com stable main)"
+
+SOURCE_FILE="${KEYRING_TEST_DIR}/example.list"
+install_apt_source "$SOURCE_FILE" "deb [signed-by=/k.gpg] https://apt.example.com stable main" >/dev/null
+assert_eq "install_apt_source: writes a missing sources file" \
+  "deb [signed-by=/k.gpg] https://apt.example.com stable main" "$(cat "$SOURCE_FILE")"
+
+install_apt_source "$SOURCE_FILE" "deb [signed-by=/k.gpg] https://apt.example.com unstable main" >/dev/null
+assert_eq "install_apt_source: rewrites a sources file whose content changed" \
+  "deb [signed-by=/k.gpg] https://apt.example.com unstable main" "$(cat "$SOURCE_FILE")"
+
+touch -d '2001-01-01 00:00:00' "$SOURCE_FILE"
+install_apt_source "$SOURCE_FILE" "deb [signed-by=/k.gpg] https://apt.example.com unstable main" >/dev/null
+assert_eq "install_apt_source: leaves an up-to-date sources file untouched" \
+  "2001-01-01" "$(date -r "$SOURCE_FILE" +%F)"
+
 echo "----"
 echo "${TESTS_RUN} test(s) run, ${FAILURES} failure(s)"
 if [[ "$FAILURES" -gt 0 ]]; then

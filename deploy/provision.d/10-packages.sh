@@ -18,16 +18,31 @@ SOURCES_DIR="/etc/apt/sources.list.d"
 PREFERENCES_DIR="/etc/apt/preferences.d"
 
 ###
+### Succeeds when the keyring at KEYRING_PATH exists and holds exactly one
+### active primary key whose fingerprint equals the pin. A missing, empty,
+### half-written, rotated or never-verified keyring does not match.
+###
+apt_keyring_matches_pin() {
+  local keyring_path="$1" expected_fpr="$2" current_fpr
+
+  [[ -f "$keyring_path" ]] || return 1
+  current_fpr="$(gpg --batch --with-colons --show-keys "$keyring_path" 2>/dev/null | provision_key_fingerprint)" || return 1
+  [[ "$current_fpr" == "$expected_fpr" ]]
+}
+
+###
 ### Downloads a third-party signing key, refuses to trust it unless its
 ### fingerprint matches the pin from versions.env, then installs it as a
 ### dearmored keyring (armored input is dearmored; an already-binary
-### keyring, such as the GitHub CLI's, is installed as-is).
+### keyring, such as the GitHub CLI's, is installed as-is). An installed
+### keyring that already holds the pinned fingerprint is left alone; any
+### other one is replaced, so a bumped pin reaches an existing host.
 ###
 install_apt_signing_key() {
   local label="$1" key_url="$2" expected_fpr="$3" keyring_path="$4"
-  local tmp_key actual_fpr
+  local tmp_key tmp_keyring actual_fpr
 
-  if [[ -f "$keyring_path" ]]; then
+  if apt_keyring_matches_pin "$keyring_path" "$expected_fpr"; then
     return 0
   fi
 
@@ -44,13 +59,38 @@ install_apt_signing_key() {
   fi
 
   if head -c 20 "$tmp_key" | grep -q "BEGIN PGP"; then
-    gpg --batch --dearmor -o "$keyring_path" "$tmp_key"
+    tmp_keyring="$(mktemp)"
+    gpg --batch --yes --dearmor -o "$tmp_keyring" "$tmp_key"
+    install -m 644 "$tmp_keyring" "$keyring_path"
+    rm -f "$tmp_keyring"
   else
     install -m 644 "$tmp_key" "$keyring_path"
   fi
-  chmod 644 "$keyring_path"
   rm -f "$tmp_key"
   provision_log "${label}: signing key installed and fingerprint verified"
+}
+
+###
+### Prints the apt sources line for a third-party repository.
+###
+apt_source_line() {
+  local keyring_path="$1" url="$2" suite="$3" component="$4"
+  printf 'deb [signed-by=%s] %s %s %s\n' "$keyring_path" "$url" "$suite" "$component"
+}
+
+###
+### Writes the apt sources file at FILE_PATH whenever its content differs
+### from LINE, so a changed suite, URL or keyring path reaches an existing
+### host instead of keeping the first-install value.
+###
+install_apt_source() {
+  local file_path="$1" line="$2"
+
+  if [[ -f "$file_path" ]] && [[ "$(cat "$file_path")" == "$line" ]]; then
+    return 0
+  fi
+  provision_log "Writing apt source ${file_path}"
+  printf '%s\n' "$line" >"$file_path"
 }
 
 ###
@@ -101,18 +141,12 @@ if [[ "${LEDGER_PROVISION_LIB_ONLY:-0}" != "1" ]]; then
   install_apt_signing_key "GitHub CLI" "$GH_CLI_KEY_URL" "$GH_CLI_KEY_FINGERPRINT" \
     "${KEYRING_DIR}/githubcli.gpg"
 
-  if [[ ! -f "${SOURCES_DIR}/pgdg.list" ]]; then
-    echo "deb [signed-by=${KEYRING_DIR}/pgdg.gpg] https://apt.postgresql.org/pub/repos/apt noble-pgdg main" \
-      >"${SOURCES_DIR}/pgdg.list"
-  fi
-  if [[ ! -f "${SOURCES_DIR}/grafana.list" ]]; then
-    echo "deb [signed-by=${KEYRING_DIR}/grafana.gpg] https://apt.grafana.com stable main" \
-      >"${SOURCES_DIR}/grafana.list"
-  fi
-  if [[ ! -f "${SOURCES_DIR}/github-cli.list" ]]; then
-    echo "deb [signed-by=${KEYRING_DIR}/githubcli.gpg] https://cli.github.com/packages stable main" \
-      >"${SOURCES_DIR}/github-cli.list"
-  fi
+  install_apt_source "${SOURCES_DIR}/pgdg.list" \
+    "$(apt_source_line "${KEYRING_DIR}/pgdg.gpg" https://apt.postgresql.org/pub/repos/apt noble-pgdg main)"
+  install_apt_source "${SOURCES_DIR}/grafana.list" \
+    "$(apt_source_line "${KEYRING_DIR}/grafana.gpg" https://apt.grafana.com stable main)"
+  install_apt_source "${SOURCES_DIR}/github-cli.list" \
+    "$(apt_source_line "${KEYRING_DIR}/githubcli.gpg" https://cli.github.com/packages stable main)"
 
   grafana_pin="$(grafana_pin_preferences "$GRAFANA_VERSION_PIN")"
   if [[ ! -f "${PREFERENCES_DIR}/grafana" ]] || [[ "$(cat "${PREFERENCES_DIR}/grafana")" != "$grafana_pin" ]]; then
