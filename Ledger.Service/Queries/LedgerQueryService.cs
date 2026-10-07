@@ -20,6 +20,8 @@ public class LedgerQueryService(
     private const string GroupedByText = "counterparty name, not category";
     private const int MaxTerms = 10;
     private const int MaxTermLength = 100;
+    private const int DefaultSearchLimit = 50;
+    private const int MaxSearchLimit = 100;
 
     /// <summary>
     /// Lists every synced account in creation order with its name, latest balance and whether it reconciles, the last successful
@@ -117,6 +119,136 @@ public class LedgerQueryService(
         var aggregate = TotalsAggregator.Aggregate(data, grouping, period.Range);
 
         return Shape(request, period, filter, grouping, data, aggregate, options.TimeZone);
+    }
+
+    /// <summary>
+    /// Shows one page of the transactions that match, newest first, as detail rows only. The page is capped, says how many rows
+    /// matched in all and whether it was cut short, and carries a cursor for the next page when more rows exist.
+    /// </summary>
+    /// <param name="request">The period, filters, page size and cursor that Claude chose.</param>
+    /// <param name="cancellationToken">Cancels the read.</param>
+    /// <exception cref="LedgerQueryException">The request or the cursor is invalid; the message says what to change.</exception>
+    public async Task<SearchResult> SearchAsync(SearchRequest request, CancellationToken cancellationToken)
+    {
+        var options = ingestionOptions.Value;
+        var zone = options.ResolveTimeZone();
+
+        var resolver = new PeriodResolver(timeProvider, zone);
+        var period = resolver.Resolve(request.Period, ParseDate(request.FromDate), ParseDate(request.ToDate));
+
+        var accountKeys = Terms(request.Accounts);
+        var status = ParseStatus(request.Status);
+        CheckAmounts(request.MinAmount, request.MaxAmount);
+
+        var filter = new LedgerQueryFilter(
+            period.Range,
+            accountKeys,
+            Terms(request.Counterparty),
+            [],
+            Terms(request.Description),
+            ParseDirection(request.Direction),
+            request.MinAmount,
+            request.MaxAmount,
+            References(request.CounterpartyRef));
+
+        var statusText = StatusText(status);
+        var filterHash = SearchCursor.FilterHash(filter, statusText);
+        var after = DecodeCursor(request.Cursor, filterHash);
+        var limit = Math.Clamp(request.Limit ?? DefaultSearchLimit, 1, MaxSearchLimit);
+        var limitClamped = request.Limit is { } asked && asked != limit;
+
+        var page = await store.SearchAsync(filter, status, after, limit, zone, cancellationToken);
+
+        if (accountKeys.Count > 0 && page.AccountsInScope != accountKeys.Count)
+        {
+            throw new LedgerQueryException("An account key is not a synced account. Use the account_key values from ledger_overview.");
+        }
+
+        var rows = page.Rows
+            .Select(row => new SearchRow(
+                DateText(row.PeriodDate),
+                row.BookingDate is { } booking ? DateText(booking) : null,
+                row.Status,
+                MoneyText.Format(row.Amount),
+                row.Amount < 0m ? "out" : "in",
+                row.Currency,
+                row.CounterpartyName,
+                CounterpartyRef.For(row.CounterpartyName),
+                row.CounterpartyAccountMasked,
+                row.Description,
+                row.AccountKey,
+                row.AccountName ?? "Account " + row.AccountKey,
+                row.InternalTransfer))
+            .ToList();
+
+        var nextCursor = page.HasMore && page.Rows.Count > 0
+            ? SearchCursor.Encode(page.Rows[^1].PeriodDate, page.Rows[^1].FirstSeenAt, page.Rows[^1].Id, filterHash)
+            : null;
+
+        var note = $"Showing {rows.Count} of {page.MatchingTotal} matching transactions, newest first. "
+            + "These rows are detail only: do not add them up; use money_totals for any total."
+            + (nextCursor is null ? string.Empty : " More rows match: narrow the period or filters, or pass next_cursor for the next page.");
+
+        return new SearchResult(
+            new TotalsPeriod(DateText(period.Range.From), DateText(period.Range.To), period.Requested, options.TimeZone),
+            new SearchFilters(
+                filter.CounterpartyTerms,
+                filter.CounterpartyRefs ?? [],
+                filter.DescriptionTerms,
+                filter.AccountKeys,
+                DirectionText(filter.Direction),
+                filter.MinAmount is { } min ? MoneyText.Format(min) : null,
+                filter.MaxAmount is { } max ? MoneyText.Format(max) : null,
+                statusText),
+            rows,
+            rows.Count,
+            page.MatchingTotal,
+            nextCursor is not null,
+            nextCursor,
+            limit,
+            limitClamped,
+            note);
+    }
+
+    private static SearchPosition? DecodeCursor(string? cursor, string filterHash)
+    {
+        if (string.IsNullOrWhiteSpace(cursor))
+        {
+            return null;
+        }
+
+        if (!SearchCursor.TryDecode(cursor.Trim(), out var position))
+        {
+            throw new LedgerQueryException("The cursor is not valid; repeat the search without a cursor.");
+        }
+
+        if (!string.Equals(position.FilterHash, filterHash, StringComparison.Ordinal))
+        {
+            throw new LedgerQueryException("This cursor belongs to a different search; repeat the search without a cursor.");
+        }
+
+        return position;
+    }
+
+    private static SearchStatus ParseStatus(string? status)
+    {
+        return status?.Trim().ToLower(CultureInfo.InvariantCulture) switch
+        {
+            null or "" or "both" => SearchStatus.Both,
+            "booked" => SearchStatus.Booked,
+            "pending" => SearchStatus.Pending,
+            _ => throw new LedgerQueryException("status must be booked, pending or both.")
+        };
+    }
+
+    private static string StatusText(SearchStatus status)
+    {
+        return status switch
+        {
+            SearchStatus.Booked => "booked",
+            SearchStatus.Pending => "pending",
+            _ => "both"
+        };
     }
 
     private static TotalsResult Shape(

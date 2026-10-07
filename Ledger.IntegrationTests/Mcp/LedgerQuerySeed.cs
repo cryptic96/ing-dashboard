@@ -147,6 +147,57 @@ public static class LedgerQuerySeed
         return new TotalsScenario(joint.AccountKey, savings.AccountKey);
     }
 
+    /// <summary>How many transactions the year scenario holds.</summary>
+    public const int YearRowCount = 1200;
+
+    /// <summary>How many year scenario rows share one period date and one first-seen instant.</summary>
+    public const int YearTiedRowCount = 40;
+
+    /// <summary>The counterparty name of the year scenario's one hundred and one boundary rows.</summary>
+    public const string BoundaryCounterparty = "Example Boundary Shop";
+
+    /// <summary>A year scenario row as it was seeded: its serial text, the date it counts on, when it was first seen and its id.</summary>
+    public sealed record YearRow(string Serial, DateOnly Date, DateTimeOffset FirstSeenAt, Guid Id);
+
+    /// <summary>
+    /// Seeds 1,200 booked 2025 transactions on a synced account, in deterministic pseudo-random order: forty rows share one period
+    /// date and one first-seen instant, 101 rows belong to one counterparty (one hundred of them for 1.00 and one for 2.00) and
+    /// every row's description carries a unique serial. Returns the rows in the order a search must show them.
+    /// </summary>
+    public static async Task<IReadOnlyList<YearRow>> SeedYearAsync(string connectionString)
+    {
+        await using var context = OpenContext(connectionString);
+        var connection = await AddConnectionAsync(context);
+        var joint = AddAccount(context, connection, "Joint", JointIban, AccountKind.Current, true, At(2025, 1, 1), JointProviderName);
+        var random = new Random(20250101);
+        var rows = new List<YearRow>();
+        var tiedSeen = new DateTimeOffset(2025, 6, 15, 10, 0, 0, TimeSpan.Zero);
+
+        for (var index = 0; index < YearRowCount; index++)
+        {
+            var serial = $"Synthetic row {index + 1:0000}";
+            var boundary = index >= YearRowCount - 101;
+            var tied = index < YearTiedRowCount;
+            var date = tied ? new DateOnly(2025, 6, 15) : new DateOnly(2025, 1, 1).AddDays(random.Next(0, 365));
+            var seen = tied ? tiedSeen : new DateTimeOffset(date.Year, date.Month, date.Day, 8, 0, 0, TimeSpan.Zero).AddSeconds(random.Next(0, 36000));
+            var amount = boundary
+                ? (index == YearRowCount - 1 ? -2.00m : -1.00m)
+                : -(random.Next(100, 50000) / 100m);
+            var counterparty = boundary ? BoundaryCounterparty : $"Example Merchant {random.Next(1, 25):00}";
+            var entity = Row(joint, LedgerTransactionStatus.Booked, date.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture), amount, "EUR", counterparty, "XX00SYNT9999999999", serial, seen);
+            context.Transactions.Add(entity);
+            rows.Add(new YearRow(serial, date, seen, entity.Id));
+        }
+
+        await context.SaveChangesAsync();
+
+        return rows
+            .OrderByDescending(row => row.Date)
+            .ThenByDescending(row => row.FirstSeenAt)
+            .ThenByDescending(row => row.Id.ToByteArray(bigEndian: true), Comparer<byte[]>.Create((left, right) => left.AsSpan().SequenceCompareTo(right)))
+            .ToList();
+    }
+
     /// <summary>How many synthetic suppliers the totals scenario books in July 2026, one each, paying one euro more than the one before.</summary>
     public const int ManyCounterpartiesCount = 30;
 
