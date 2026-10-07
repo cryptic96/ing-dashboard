@@ -22,6 +22,11 @@ public class LedgerQueryService(
     private const int MaxTermLength = 100;
     private const int DefaultSearchLimit = 50;
     private const int MaxSearchLimit = 100;
+    private const int DefaultCounterpartyLimit = 25;
+    private const int MaxCounterpartyLimit = 100;
+    private const int MinCounterpartyTextLength = 2;
+    private const int MaxSpellings = 5;
+    private const int MaxCounterpartyAccounts = 3;
 
     /// <summary>
     /// Lists every synced account in creation order with its name, latest balance and whether it reconciles, the last successful
@@ -208,6 +213,100 @@ public class LedgerQueryService(
             limit,
             limitClamped,
             note);
+    }
+
+    /// <summary>
+    /// Lists the counterparties whose name contains the text, with every spelling that differs only in case or spacing merged under
+    /// one reference, so Claude can build exact filters for the other tools. The list is capped and says when it was cut short.
+    /// </summary>
+    /// <param name="request">The text, optional period and account keys, and page size that Claude chose.</param>
+    /// <param name="cancellationToken">Cancels the read.</param>
+    /// <exception cref="LedgerQueryException">The request is invalid; the message says what to change.</exception>
+    public async Task<CounterpartiesResult> FindCounterpartiesAsync(CounterpartiesRequest request, CancellationToken cancellationToken)
+    {
+        var options = ingestionOptions.Value;
+        var zone = options.ResolveTimeZone();
+
+        var text = string.Join(' ', (request.Text ?? string.Empty).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+
+        if (text.Length is < MinCounterpartyTextLength or > MaxTermLength)
+        {
+            throw new LedgerQueryException("text must be between 2 and 100 characters.");
+        }
+
+        var hasPeriod = !string.IsNullOrWhiteSpace(request.Period)
+            || !string.IsNullOrWhiteSpace(request.FromDate)
+            || !string.IsNullOrWhiteSpace(request.ToDate);
+        var range = hasPeriod
+            ? new PeriodResolver(timeProvider, zone).Resolve(request.Period, ParseDate(request.FromDate), ParseDate(request.ToDate)).Range
+            : null;
+
+        var accountKeys = Terms(request.Accounts);
+        var limit = Math.Clamp(request.Limit ?? DefaultCounterpartyLimit, 1, MaxCounterpartyLimit);
+        var limitClamped = request.Limit is { } asked && asked != limit;
+
+        var page = await store.FindCounterpartiesAsync(text, range, accountKeys, zone, cancellationToken);
+
+        if (accountKeys.Count > 0 && page.AccountsInScope != accountKeys.Count)
+        {
+            throw new LedgerQueryException("An account key is not a synced account. Use the account_key values from ledger_overview.");
+        }
+
+        var merged = page.Rows
+            .GroupBy(row => TextNormalizer.ForMatching(row.Name)!, StringComparer.Ordinal)
+            .Select(MergeCounterparty)
+            .OrderByDescending(entry => entry.TransactionCount)
+            .ThenBy(entry => entry.Name, StringComparer.Ordinal)
+            .ToList();
+
+        var shown = merged.Take(limit).ToList();
+        var truncated = merged.Count > shown.Count;
+        var periodText = range is null
+            ? "all history"
+            : $"{DateText(range.From)} to {DateText(range.To)} ({options.TimeZone})";
+
+        var note = $"Showing {shown.Count} of {merged.Count} matching counterparties, most transactions first. "
+            + "These are counterparty names, not categories. Pass counterpartyRef or the spellings to money_totals or search_transactions."
+            + (truncated ? " More names match: use a longer text or a shorter period." : string.Empty);
+
+        return new CounterpartiesResult(text, periodText, shown, shown.Count, merged.Count, truncated, limit, limitClamped, note);
+    }
+
+    private static CounterpartyEntry MergeCounterparty(IGrouping<string, CounterpartyData> group)
+    {
+        var spellings = group
+            .GroupBy(row => row.Name, StringComparer.Ordinal)
+            .Select(spelling => new { Name = spelling.Key, Count = spelling.Sum(row => row.Count) })
+            .OrderByDescending(spelling => spelling.Count)
+            .ThenBy(spelling => spelling.Name, StringComparer.Ordinal)
+            .ToList();
+
+        var currencies = group
+            .GroupBy(row => row.Currency, StringComparer.Ordinal)
+            .OrderBy(currency => currency.Key, StringComparer.Ordinal)
+            .Select(currency => new CounterpartyCurrency(
+                currency.Key,
+                currency.Sum(row => row.Count),
+                MoneyText.Format(currency.Sum(row => row.MoneyOut)),
+                MoneyText.Format(currency.Sum(row => row.MoneyIn))))
+            .ToList();
+
+        var accounts = group
+            .SelectMany(row => row.MaskedAccounts)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .Take(MaxCounterpartyAccounts)
+            .ToList();
+
+        return new CounterpartyEntry(
+            spellings[0].Name,
+            CounterpartyRef.For(spellings[0].Name)!,
+            spellings.Take(MaxSpellings).Select(spelling => spelling.Name).ToList(),
+            group.Sum(row => row.Count),
+            currencies,
+            DateText(group.Min(row => row.FirstDate)),
+            DateText(group.Max(row => row.LastDate)),
+            accounts);
     }
 
     private static SearchPosition? DecodeCursor(string? cursor, string filterHash)

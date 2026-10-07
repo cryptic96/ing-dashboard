@@ -165,6 +165,41 @@ public class LedgerQueryStore(LedgerDbContext dbContext) : ILedgerQueryStore
             cancellationToken);
     }
 
+    /// <inheritdoc />
+    public async Task<CounterpartyPage> FindCounterpartiesAsync(
+        string text,
+        DateRange? range,
+        IReadOnlyList<string> accountKeys,
+        TimeZoneInfo zone,
+        CancellationToken cancellationToken)
+    {
+        return await InSnapshotAsync(
+            async () =>
+            {
+                var rows = await ReadCounterpartyRowsAsync(text, range, accountKeys.ToArray(), zone, cancellationToken);
+                var keys = accountKeys.ToList();
+                var accountsInScope = keys.Count == 0
+                    ? 0
+                    : await dbContext.Accounts
+                        .AsNoTracking()
+                        .CountAsync(account => account.SyncEnabled && keys.Contains(account.AccountKey), cancellationToken);
+
+                return new CounterpartyPage(
+                    rows.Select(row => new CounterpartyData(
+                            row.Name,
+                            row.Currency,
+                            row.Count,
+                            row.MoneyOut,
+                            row.MoneyIn,
+                            row.FirstDate,
+                            row.LastDate,
+                            (row.Accounts ?? []).Select(account => IbanText.Mask(account)!).Distinct(StringComparer.Ordinal).ToList()))
+                        .ToList(),
+                    accountsInScope);
+            },
+            cancellationToken);
+    }
+
     private async Task<T> InSnapshotAsync<T>(Func<Task<T>> read, CancellationToken cancellationToken)
     {
         if (dbContext.Database.CurrentTransaction is not null)
@@ -423,6 +458,78 @@ public class LedgerQueryStore(LedgerDbContext dbContext) : ILedgerQueryStore
             ) p ON true
             ORDER BY p.period_date DESC, p.first_seen_at DESC, p.id DESC
             """).ToListAsync(cancellationToken);
+    }
+
+    private async Task<List<CounterpartyRow>> ReadCounterpartyRowsAsync(
+        string text,
+        DateRange? range,
+        string[] accountKeys,
+        TimeZoneInfo zone,
+        CancellationToken cancellationToken)
+    {
+        var zoneId = zone.Id;
+        var pattern = LikePattern.Contains(text);
+        var hasRange = range is not null;
+        var from = range?.From ?? DateOnly.MinValue;
+        var to = range?.To ?? DateOnly.MaxValue;
+
+        return await dbContext.Database.SqlQuery<CounterpartyRow>($"""
+            WITH own_accounts AS (
+                SELECT upper(regexp_replace(iban, '[[:space:]]+', '', 'g')) AS iban
+                FROM accounts
+                WHERE sync_enabled AND iban IS NOT NULL
+            ),
+            scoped AS (
+                SELECT
+                    t.counterparty_name,
+                    t.currency,
+                    t.amount,
+                    upper(regexp_replace(t.counterparty_iban, '[[:space:]]+', '', 'g')) AS counterparty_iban,
+                    COALESCE(t.booking_date, t.value_date, t.transaction_date, (t.first_seen_at AT TIME ZONE {zoneId}::text)::date) AS period_date,
+                    (t.counterparty_iban IS NOT NULL
+                        AND upper(regexp_replace(t.counterparty_iban, '[[:space:]]+', '', 'g'))
+                            IN (SELECT iban FROM own_accounts WHERE iban <> '')) AS is_transfer
+                FROM transactions t
+                JOIN accounts a ON a.id = t.account_id
+                WHERE a.sync_enabled
+                  AND t.status = 'booked'
+                  AND t.counterparty_name IS NOT NULL
+                  AND (cardinality({accountKeys}::text[]) = 0 OR a.account_key = ANY({accountKeys}::text[]))
+                  AND btrim(regexp_replace(t.counterparty_name, '[[:space:]]+', ' ', 'g')) ILIKE {pattern}
+            )
+            SELECT
+                counterparty_name AS "Name",
+                currency AS "Currency",
+                COUNT(*)::int AS "Count",
+                COALESCE(SUM(-amount) FILTER (WHERE amount < 0), 0) AS "MoneyOut",
+                COALESCE(SUM(amount) FILTER (WHERE amount > 0), 0) AS "MoneyIn",
+                MIN(period_date) AS "FirstDate",
+                MAX(period_date) AS "LastDate",
+                (array_agg(DISTINCT counterparty_iban) FILTER (WHERE counterparty_iban IS NOT NULL))[1:3] AS "Accounts"
+            FROM scoped
+            WHERE NOT is_transfer
+              AND (NOT {hasRange}::boolean OR period_date BETWEEN {from}::date AND {to}::date)
+            GROUP BY counterparty_name, currency
+            """).ToListAsync(cancellationToken);
+    }
+
+    private sealed class CounterpartyRow
+    {
+        public string Name { get; set; } = string.Empty;
+
+        public string Currency { get; set; } = string.Empty;
+
+        public int Count { get; set; }
+
+        public decimal MoneyOut { get; set; }
+
+        public decimal MoneyIn { get; set; }
+
+        public DateOnly FirstDate { get; set; }
+
+        public DateOnly LastDate { get; set; }
+
+        public string[]? Accounts { get; set; }
     }
 
     private sealed class SearchRow

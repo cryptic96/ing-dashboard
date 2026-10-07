@@ -32,7 +32,8 @@ public class LedgerTools(LedgerQueryService queries)
         + "and different currencies are never added together. Days, months and years follow the Europe/Amsterdam calendar. "
         + "Categories do not exist yet: pass the counterparty or description words that identify what is asked, for example the "
         + "supermarkets you mean, and say that the result is grouped by counterparty, not by category. The result lists the top "
-        + "counterparties with a counterparty_ref you can pass back to focus on exactly one.")]
+        + "counterparties with a counterparty_ref you can pass back to focus on exactly one. When you are unsure how a "
+        + "merchant is spelled, look it up with find_counterparties first.")]
     public async Task<TotalsResult> MoneyTotals(
         [Description("A named period: today, yesterday, this_week, last_week, this_month, last_month, last_30_days, last_90_days, this_year or last_year. Use this or fromDate with toDate, not both.")]
         string? period = null,
@@ -115,6 +116,44 @@ public class LedgerTools(LedgerQueryService queries)
         {
             return await queries.SearchAsync(
                 new SearchRequest(period, fromDate, toDate, counterparty, counterpartyRef, description, accounts, direction, minAmount, maxAmount, status, limit, cursor),
+                cancellationToken);
+        }
+        catch (LedgerQueryException exception)
+        {
+            throw new McpException(exception.Message);
+        }
+    }
+
+    /// <summary>Lists the counterparty names that contain a text, every spelling merged under one reference, so filters can be built.</summary>
+    [McpServerTool(Name = "find_counterparties", Title = "Find counterparties", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
+    [Description(
+        "Finds how a merchant or payer is spelled in the ledger. Give a few letters of the name, at least two, and it lists the "
+        + "counterparties whose name contains them, case-insensitive, with every spelling that differs only in case or spacing "
+        + "merged under one counterparty_ref, how many booked transactions each has, money out and in per currency, the first "
+        + "and last date and masked account numbers. Transfers between the household's own accounts are left out. Use the "
+        + "counterparty_ref or the spellings as filters for money_totals and search_transactions. Results are counterparty "
+        + "names, not categories, and the list is capped and says when it was cut short.")]
+    public async Task<CounterpartiesResult> FindCounterparties(
+        [Description("Part of the counterparty name to look for, 2 to 100 characters, case-insensitive.")]
+        string text,
+        [Description("A named period: today, yesterday, this_week, last_week, this_month, last_month, last_30_days, last_90_days, this_year or last_year. Omit period and dates to search all history.")]
+        string? period = null,
+        [Description("First day, inclusive, as yyyy-MM-dd. Use together with toDate instead of period.")]
+        string? fromDate = null,
+        [Description("Last day, inclusive, as yyyy-MM-dd. Use together with fromDate instead of period.")]
+        string? toDate = null,
+        [Description("account_key values from ledger_overview to narrow to; omit to include every synced account.")]
+        string[]? accounts = null,
+        [Description("Counterparties to list, 1 to 100. Default 25.")]
+        int? limit = null,
+        CancellationToken cancellationToken = default)
+    {
+        McpMetrics.ToolCalled("find_counterparties");
+
+        try
+        {
+            return await queries.FindCounterpartiesAsync(
+                new CounterpartiesRequest(text, period, fromDate, toDate, accounts, limit),
                 cancellationToken);
         }
         catch (LedgerQueryException exception)
