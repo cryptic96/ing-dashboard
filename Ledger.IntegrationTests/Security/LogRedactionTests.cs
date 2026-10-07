@@ -250,15 +250,18 @@ public class LogRedactionTests(DatabaseFixture fixture)
         try
         {
             var keyPath = Path.Combine(directory, "key.pem");
+            List<string> keyMaterial;
             using (var rsa = RSA.Create(2048))
             {
                 await File.WriteAllTextAsync(
                     keyPath,
                     rsa.ExportEncryptedPkcs8PrivateKeyPem(keyPassword, new PbeParameters(PbeEncryptionAlgorithm.Aes256Cbc, HashAlgorithmName.SHA256, 1000)),
                     TestContext.Current.CancellationToken);
+
+                keyMaterial = DecryptedKeyMaterial(rsa);
             }
 
-            var firstKeyBodyLine = File.ReadAllLines(keyPath)[1];
+            keyMaterial.Add(File.ReadAllLines(keyPath)[1]);
 
             var scenario = SyntheticBankScenario.Create();
             var account = scenario.AddAccount(AccountKind.Current);
@@ -310,9 +313,13 @@ public class LogRedactionTests(DatabaseFixture fixture)
 
             var sentinels = authorizationValues
                 .SelectMany(value => new[] { value, value.Replace("Bearer ", string.Empty, StringComparison.Ordinal) })
-                .Concat([keyPassword, firstKeyBodyLine, scenario.SessionId, scenario.AuthorizationCode, wrongCode])
+                .Concat(authorizationValues.Select(SignatureSegment))
+                .Concat(keyMaterial)
+                .Concat([keyPassword, scenario.SessionId, scenario.AuthorizationCode, wrongCode])
                 .Distinct()
                 .ToList();
+
+            sentinels.Count.Should().BeGreaterThan(20, "the decrypted key material and the signature of every token must be among the sentinels");
 
             foreach (var sentinel in sentinels)
             {
@@ -325,6 +332,34 @@ public class LogRedactionTests(DatabaseFixture fixture)
         {
             Directory.Delete(directory, recursive: true);
         }
+    }
+
+    /// <summary>
+    /// The decrypted private key in every form a careless log line could print: the whole DER as base64, every body line of the
+    /// unencrypted PEM after the constant header line, and the private numbers as base64 and hex. Held in memory only.
+    /// </summary>
+    private static List<string> DecryptedKeyMaterial(RSA rsa)
+    {
+        var material = new List<string> { Convert.ToBase64String(rsa.ExportPkcs8PrivateKey()) };
+
+        material.AddRange(rsa.ExportPkcs8PrivateKeyPem()
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Where(line => !line.StartsWith("-----", StringComparison.Ordinal))
+            .Skip(1));
+
+        var parameters = rsa.ExportParameters(includePrivateParameters: true);
+        foreach (var number in new[] { parameters.D, parameters.P, parameters.Q })
+        {
+            material.Add(Convert.ToBase64String(number!));
+            material.Add(Convert.ToHexString(number!));
+        }
+
+        return material;
+    }
+
+    private static string SignatureSegment(string authorizationValue)
+    {
+        return authorizationValue.Split('.')[^1];
     }
 
     private async Task<BankLinkTestHost> StartAdapterHostAsync(FakeEnableBankingHandler fake, string keyPath, string keyPassword)
