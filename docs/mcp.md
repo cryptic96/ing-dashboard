@@ -144,14 +144,16 @@ ledger host:
 
 ```bash
 sudo ledger-login create example-login
-sudo ledger-login confirm-totp example-login 123456
+sudo ledger-login confirm-totp example-login
 ```
 
 `create` asks for a password twice without echo. Take it from the password
 manager. It then shows the authenticator secret once. Put it in an
 authenticator app or the password manager and nowhere else. `confirm-totp`
-switches the login on after its first code, here `123456`, taken from the
-authenticator. Adding a second household member is just another `create`.
+asks for the current code from the authenticator at a prompt (or reads it from
+standard input when piped) and switches the login on after that first code. The
+code is never an argument, so it does not land in the shell history. Adding a
+second household member is just another `create`.
 The other commands (`reset-totp`, `set-password`, `list`, `remove`) are in
 [the monitoring guide](monitoring.md#claude-access).
 

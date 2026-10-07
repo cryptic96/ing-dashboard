@@ -135,7 +135,7 @@ already past validation when you ran it may still finish.
 Logins are managed with `ledger-login` on the same host: `sudo ledger-login
 create NAME` enrols a login (the password is typed without echo and never goes
 on the command line, and the authenticator secret is shown once), `confirm-totp
-NAME CODE` switches the login on after its first code, `reset-totp NAME` issues
+NAME` asks for the current authenticator code (at a prompt, or on standard input when piped; never as an argument) and switches the login on after that first code, `reset-totp NAME` issues
 a new authenticator secret, `set-password NAME` replaces the password and
 `remove NAME` deletes the login. Resetting the authenticator, setting a new
 password and removing a login each revoke that login's connections. Adding a
