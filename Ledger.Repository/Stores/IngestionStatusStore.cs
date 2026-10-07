@@ -119,8 +119,10 @@ public class IngestionStatusStore(LedgerDbContext dbContext) : IIngestionStatusS
     /// <summary>
     /// Reads the account's reconciliation as the metric and the dashboard show it. The latest snapshot with a verdict decides:
     /// a match is true, and a mismatch is false only when the previous snapshot with a verdict of the same kind, taken at most
-    /// <see cref="BalanceReconciler.MaxDaysBetweenFlaggedMismatches"/> days earlier, also mismatched. A first mismatch is reported as null, an unconfirmed result, because the bank's expected balance can include
-    /// a card payment that books the next day. The snapshots themselves keep their exact result either way.
+    /// <see cref="BalanceReconciler.MaxDaysBetweenFlaggedMismatches"/> days earlier, also mismatched. A first mismatch is reported
+    /// as null, an unconfirmed result, because the bank can deduct a reservation from the expected balance without exposing it
+    /// as a pending item and it resolves when that item books; pending items the bank does expose never cause a mismatch.
+    /// The snapshots themselves keep their exact result either way.
     /// </summary>
     private async Task<bool?> ReadFlaggedReconciliationAsync(Guid accountId, CancellationToken cancellationToken)
     {

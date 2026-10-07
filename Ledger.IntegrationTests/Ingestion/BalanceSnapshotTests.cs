@@ -297,7 +297,7 @@ public class BalanceSnapshotTests(DatabaseFixture fixture)
         scenario.Remove(account, account.Transactions.Count - 1);
         scenario.AddTransaction(account, IngestionTestSupport.Pending("entry-still-pending", -30.00m, DayOne) with { BookingDate = DayOne });
         scenario.AddTransaction(account, IngestionTestSupport.Booked("entry-counted", -10.00m, DayTwo));
-        scenario.SetBalances(account, UndatedBalances(990.00m));
+        scenario.SetBalances(account, UndatedBalances(960.00m));
         host.Clock.SetUtcNow(InstantFor(DayTwo));
         await SyncAsync(host, connection.Id);
 
@@ -308,7 +308,7 @@ public class BalanceSnapshotTests(DatabaseFixture fixture)
     }
 
     [Fact]
-    public async Task A_card_payment_in_progress_shows_as_one_recorded_drift_that_resolves_when_it_books()
+    public async Task A_reservation_the_bank_deducts_without_exposing_a_pending_item_shows_as_one_recorded_drift_that_resolves_when_it_books()
     {
         var (scenario, account) = ScenarioWithUndatedBalance(1000.00m);
         await using var host = await StartAsync(scenario, DayOne, UndatedConfiguration);
@@ -401,7 +401,7 @@ public class BalanceSnapshotTests(DatabaseFixture fixture)
     }
 
     [Fact]
-    public async Task A_pending_item_inside_the_baseline_balance_that_has_not_booked_yet_shows_its_amount_as_drift()
+    public async Task A_pending_item_that_stays_pending_for_several_snapshots_and_then_books_never_causes_drift_or_the_flag()
     {
         var (scenario, account) = ScenarioWithUndatedBalance(990.00m);
         scenario.AddTransaction(account, IngestionTestSupport.Pending("entry-card-slow", -10.00m, DayOne));
@@ -410,13 +410,66 @@ public class BalanceSnapshotTests(DatabaseFixture fixture)
         var accountKey = connection.Accounts[0].AccountKey;
         await SyncAsync(host, connection.Id);
 
+        for (var offset = 1; offset <= 3; offset++)
+        {
+            host.Clock.SetUtcNow(InstantFor(DayOne.AddDays(offset)));
+            await SyncAsync(host, connection.Id);
+        }
+
+        scenario.Remove(account, account.Transactions.Count - 1);
+        scenario.AddTransaction(account, IngestionTestSupport.Booked("entry-card-slow", -10.00m, DayOne));
+        host.Clock.SetUtcNow(InstantFor(DayOne.AddDays(4)));
+        await SyncAsync(host, connection.Id);
+
+        var snapshots = (await ReadSnapshotsAsync(host, accountKey)).Where(snapshot => snapshot.SnapshotDate > DayOne).ToList();
+        snapshots.Should().HaveCount(4);
+        snapshots.Should().OnlyContain(snapshot => snapshot.Reconciled == true && snapshot.Drift == 0m);
+        snapshots.Take(3).Should().OnlyContain(snapshot => snapshot.Expected == 1000.00m);
+        snapshots[3].Expected.Should().Be(990.00m);
+        (await ReadFlaggedReconciliationAsync(host, accountKey)).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task A_pending_item_that_appears_after_the_baseline_and_is_still_pending_causes_no_drift()
+    {
+        var (scenario, account) = ScenarioWithUndatedBalance(1000.00m);
+        await using var host = await StartAsync(scenario, DayOne, UndatedConfiguration);
+        var connection = await host.LinkAsync(selectFirstAccountOnly: false);
+        var accountKey = connection.Accounts[0].AccountKey;
+        await SyncAsync(host, connection.Id);
+
+        scenario.AddTransaction(account, IngestionTestSupport.Pending("entry-card-new", -10.00m, DayTwo));
+        scenario.SetBalances(account, UndatedBalances(990.00m));
         host.Clock.SetUtcNow(InstantFor(DayTwo));
         await SyncAsync(host, connection.Id);
 
         var dayTwo = (await ReadSnapshotsAsync(host, accountKey)).Single(snapshot => snapshot.SnapshotDate == DayTwo);
-        dayTwo.Reconciled.Should().BeFalse();
+        dayTwo.Reconciled.Should().BeTrue();
         dayTwo.Expected.Should().Be(1000.00m);
-        dayTwo.Drift.Should().Be(-10.00m);
+        dayTwo.Drift.Should().Be(0m);
+    }
+
+    [Fact]
+    public async Task A_difference_that_nothing_explains_still_flags_on_the_second_snapshot_while_a_pending_item_is_exposed()
+    {
+        var (scenario, account) = ScenarioWithUndatedBalance(990.00m);
+        scenario.AddTransaction(account, IngestionTestSupport.Pending("entry-card-open", -10.00m, DayOne));
+        await using var host = await StartAsync(scenario, DayOne, UndatedConfiguration);
+        var connection = await host.LinkAsync(selectFirstAccountOnly: false);
+        var accountKey = connection.Accounts[0].AccountKey;
+        await SyncAsync(host, connection.Id);
+
+        scenario.SetBalances(account, UndatedBalances(990.01m));
+        host.Clock.SetUtcNow(InstantFor(DayTwo));
+        await SyncAsync(host, connection.Id);
+        (await ReadFlaggedReconciliationAsync(host, accountKey)).Should().BeNull();
+
+        host.Clock.SetUtcNow(InstantFor(DayTwo.AddDays(1)));
+        await SyncAsync(host, connection.Id);
+
+        var snapshots = (await ReadSnapshotsAsync(host, accountKey)).Where(snapshot => snapshot.SnapshotDate > DayOne).ToList();
+        snapshots.Should().OnlyContain(snapshot => snapshot.Reconciled == false && snapshot.Drift == 0.01m);
+        (await ReadFlaggedReconciliationAsync(host, accountKey)).Should().BeFalse();
     }
 
     [Fact]
@@ -440,6 +493,15 @@ public class BalanceSnapshotTests(DatabaseFixture fixture)
         await SyncAsync(host, connection.Id);
 
         (await ReadSnapshotsAsync(host, connection.Accounts[0].AccountKey)).Should().OnlyContain(snapshot => snapshot.Reconciled == null);
+    }
+
+    private static async Task<bool?> ReadFlaggedReconciliationAsync(SchedulerTestHost host, string accountKey)
+    {
+        using var scope = host.Factory.Services.CreateScope();
+        var status = await scope.ServiceProvider.GetRequiredService<IIngestionStatusStore>()
+            .ReadAsync(host.Clock.GetUtcNow(), TestContext.Current.CancellationToken);
+
+        return status.Accounts.Single(account => account.AccountKey == accountKey).LatestReconciled;
     }
 
     private static (SyntheticBankScenario Scenario, SyntheticAccount Account) ScenarioWithUndatedBalance(decimal expected)

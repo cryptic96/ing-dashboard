@@ -217,7 +217,11 @@ public class SyncOrchestrator(
             ? await balanceStore.SumPendingAtAsync(accountId, baselineFetchedAt, cancellationToken)
             : 0m;
 
-        return BalanceReconciler.CheckUndated(previous, balance, sinceSum, pendingSum);
+        var currentPendingSum = previous is null
+            ? 0m
+            : await balanceStore.SumPendingAtAsync(accountId, fetchedAt, cancellationToken);
+
+        return BalanceReconciler.CheckUndated(previous, balance, sinceSum, pendingSum, currentPendingSum);
     }
 
     private static TransactionQuery ChooseQuery(SyncTrigger trigger, FetchWindow window, int overlapDays)

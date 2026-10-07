@@ -230,15 +230,75 @@ public class BalanceReconcilerTests
     }
 
     [Fact]
-    public void A_baseline_with_a_pending_item_that_has_not_booked_yet_shows_the_drift_instead_of_hiding_it()
+    public void A_pending_item_the_bank_exposes_never_causes_drift_however_long_it_stays_pending_and_counts_once_when_it_books()
     {
         var baseline = UndatedPrevious(990.00m);
 
-        var stillPending = BalanceReconciler.CheckUndated(baseline, Undated(990.00m), 0m, pendingSumAtPrevious: -10.00m);
+        var dayTwo = BalanceReconciler.CheckUndated(baseline, Undated(990.00m), 0m, -10.00m, -10.00m);
+        var dayThree = BalanceReconciler.CheckUndated(
+            UndatedPrevious(990.00m) with { ExpectedAmount = dayTwo.Expected },
+            Undated(990.00m),
+            0m,
+            -10.00m,
+            -10.00m);
+        var dayFour = BalanceReconciler.CheckUndated(
+            UndatedPrevious(990.00m) with { ExpectedAmount = dayThree.Expected },
+            Undated(990.00m),
+            0m,
+            -10.00m,
+            -10.00m);
+        var booked = BalanceReconciler.CheckUndated(
+            UndatedPrevious(990.00m) with { ExpectedAmount = dayFour.Expected },
+            Undated(990.00m),
+            -10.00m,
+            -10.00m,
+            0m);
 
-        stillPending.Reconciled.Should().BeFalse();
-        stillPending.Expected.Should().Be(1000.00m);
-        stillPending.Drift.Should().Be(-10.00m);
+        new[] { dayTwo, dayThree, dayFour, booked }.Should().OnlyContain(check => check.Reconciled == true && check.Drift == 0m);
+        booked.Expected.Should().Be(990.00m);
+    }
+
+    [Fact]
+    public void A_pending_item_that_appears_after_the_previous_fetch_and_is_still_pending_causes_no_drift()
+    {
+        var previous = UndatedPrevious(1000.00m) with { ExpectedAmount = 1000.00m };
+
+        var check = BalanceReconciler.CheckUndated(previous, Undated(990.00m), 0m, 0m, -10.00m);
+
+        check.Reconciled.Should().BeTrue();
+        check.Expected.Should().Be(1000.00m);
+    }
+
+    [Fact]
+    public void A_reservation_the_bank_deducts_without_a_pending_item_gives_one_mismatch_and_matches_after_it_books()
+    {
+        var previous = UndatedPrevious(1000.00m) with { ExpectedAmount = 1000.00m };
+
+        var deducted = BalanceReconciler.CheckUndated(previous, Undated(950.00m), 0m, 0m, 0m);
+
+        deducted.Reconciled.Should().BeFalse();
+        deducted.Drift.Should().Be(-50.00m);
+
+        var booked = BalanceReconciler.CheckUndated(
+            UndatedPrevious(950.00m) with { ExpectedAmount = deducted.Expected },
+            Undated(950.00m),
+            -50.00m,
+            0m,
+            0m);
+
+        booked.Reconciled.Should().BeTrue();
+        booked.Drift.Should().Be(0m);
+    }
+
+    [Fact]
+    public void An_unexplained_cent_keeps_mismatching_with_pending_items_taken_out_on_both_sides()
+    {
+        var previous = UndatedPrevious(990.00m) with { ExpectedAmount = 1000.00m };
+
+        var check = BalanceReconciler.CheckUndated(previous, Undated(990.01m), 0m, -10.00m, -10.00m);
+
+        check.Reconciled.Should().BeFalse();
+        check.Drift.Should().Be(0.01m);
     }
 
     [Fact]
