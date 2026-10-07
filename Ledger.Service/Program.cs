@@ -7,6 +7,8 @@ using Ledger.Service.Endpoints;
 using Ledger.Service.Health;
 using Ledger.Service.Hosting;
 using Ledger.Service.Ingestion;
+using Ledger.Service.Mcp;
+using Ledger.Service.OAuth;
 using Ledger.Service.Security;
 using Ledger.Domain.Security;
 using Microsoft.AspNetCore.Authentication;
@@ -88,11 +90,15 @@ builder.Services.AddAuthorization(options =>
         .Build();
 });
 
+builder.Services.AddLedgerOAuth(builder.Configuration);
+builder.Services.AddLedgerMcp(builder.Configuration);
+
 var app = builder.Build();
 
 var opsPort = OpsEndpoint.FromConfiguration(app.Configuration);
 
 LedgerMetrics.RecordBuildInfo(Assembly.GetExecutingAssembly());
+McpMetrics.InitialiseCounters();
 
 app.UseForwardedHeaders();
 
@@ -118,6 +124,8 @@ app.UseAuthorization();
 
 app.MapStatusEndpoints();
 app.MapBankEndpoints();
+app.MapLedgerOAuth();
+app.MapLedgerMcp();
 
 await app.RunAsync();
 
