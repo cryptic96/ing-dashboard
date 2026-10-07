@@ -55,6 +55,23 @@ public partial class CapturedPairReplayTests
     }
 
     [Fact]
+    public void Captures_with_the_same_second_and_account_replay_in_label_order()
+    {
+        using var directory = new TempDirectory();
+        var pending = EnableBankingFixtures.Transaction("synthetic-order", amount: "5.00", status: "PDNG", bookingDate: "2026-10-01");
+        var booked = EnableBankingFixtures.Transaction("synthetic-order", amount: "5.00", status: "BOOK", bookingDate: "2026-10-01");
+        WriteCapture(directory.Path, "20261001T080000Z", "b-second", 1, 1, Page(null, booked));
+        WriteCapture(directory.Path, "20261001T080000Z", "a-first", 1, 1, Page(null, pending));
+
+        var result = CaptureReplay.Run(directory.Path, null);
+
+        result.Captures.Should().Be(2);
+        result.Rows.Should().Be(1);
+        result.Upgraded.Should().Be(1, "the pending capture sorts first by label, so the booked one upgrades it");
+        result.LiveBooked.Should().Be(1);
+    }
+
+    [Fact]
     public void The_report_line_holds_only_labels_and_numbers()
     {
         using var directory = new TempDirectory();
@@ -446,7 +463,8 @@ public static partial class CaptureReplay
         var captures = pages
             .GroupBy(page => (page.Timestamp, page.Label, page.Account))
             .OrderBy(group => group.Key.Timestamp, StringComparer.Ordinal)
-            .ThenBy(group => group.Key.Account);
+            .ThenBy(group => group.Key.Account)
+            .ThenBy(group => group.Key.Label, StringComparer.Ordinal);
 
         foreach (var capture in captures)
         {
