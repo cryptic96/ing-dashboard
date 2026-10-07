@@ -2,8 +2,6 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
 using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Hosting.Server;
-using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
@@ -120,10 +118,31 @@ public class LedgerWebApplicationFactory : WebApplicationFactory<Program>
         }
     }
 
-    /// <inheritdoc />
+    /// <summary>
+    /// The services of the one running host. The base class would hand out the services of its in-memory host, which never
+    /// starts; resolving from the running host keeps every test on the same singletons the real endpoints use.
+    /// </summary>
+    public override IServiceProvider Services => _realHost?.Services ?? base.Services;
+
+    /// <summary>
+    /// Builds the Kestrel host that serves every request and runs every background service. The base class insists on an
+    /// in-memory test server host and builds the application once per host builder call, so a second, dormant host exists too;
+    /// it keeps only the web server itself, so no application background service runs twice and the dormant host opens no
+    /// database connection.
+    /// </summary>
     protected override IHost CreateHost(IHostBuilder builder)
     {
-        var testHost = builder.Build();
+        var dormant = true;
+        builder.ConfigureServices((_, services) =>
+        {
+            if (dormant)
+            {
+                RemoveBackgroundServices(services);
+            }
+        });
+
+        var dormantHost = builder.Build();
+        dormant = false;
 
         builder.ConfigureWebHost(webHostBuilder => webHostBuilder.UseKestrel());
 
@@ -131,19 +150,9 @@ public class LedgerWebApplicationFactory : WebApplicationFactory<Program>
         realHost.Start();
         _realHost = realHost;
 
-        var addresses = realHost.Services.GetRequiredService<IServer>()
-            .Features.Get<IServerAddressesFeature>();
+        dormantHost.Start();
 
-        testHost.Start();
-        var testHostAddresses = testHost.Services.GetRequiredService<IServer>()
-            .Features.Get<IServerAddressesFeature>()!.Addresses;
-        testHostAddresses.Clear();
-        foreach (var address in addresses!.Addresses)
-        {
-            testHostAddresses.Add(address);
-        }
-
-        return testHost;
+        return dormantHost;
     }
 
     /// <inheritdoc />
@@ -168,6 +177,19 @@ public class LedgerWebApplicationFactory : WebApplicationFactory<Program>
         }
 
         await base.DisposeAsync();
+    }
+
+    private static void RemoveBackgroundServices(IServiceCollection services)
+    {
+        var background = services
+            .Where(descriptor => descriptor.ServiceType == typeof(IHostedService)
+                && descriptor.ImplementationType?.Name != "GenericWebHostService")
+            .ToList();
+
+        foreach (var descriptor in background)
+        {
+            services.Remove(descriptor);
+        }
     }
 
     /// <summary>Accesses Server, which is the only thing that makes WebApplicationFactory build and start the host; our own port-bound HttpClients never trigger it on their own.</summary>

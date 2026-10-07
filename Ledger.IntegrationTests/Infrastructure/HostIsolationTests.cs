@@ -1,4 +1,6 @@
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 
 namespace Ledger.IntegrationTests.Infrastructure;
 
@@ -67,5 +69,34 @@ public class HostIsolationTests(DatabaseFixture fixture)
         act.Should().Throw<Exception>();
         Environment.GetEnvironmentVariable(CertificatePasswordVariable).Should().Be("ambient-value");
         Environment.GetEnvironmentVariable(CertificatePathVariable).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Every_hosted_service_runs_exactly_once_and_the_resolved_services_belong_to_the_running_host()
+    {
+        var counter = new StartCounter();
+
+        await using var factory = new LedgerWebApplicationFactory(
+            fixture.ConnectionStringFor("ledger_runtime"),
+            configureTestServices: services => services.AddSingleton<IHostedService>(counter));
+
+        counter.Starts.Should().Be(1);
+        factory.Services.GetServices<IHostedService>().OfType<StartCounter>().Should().ContainSingle().Which.Should().BeSameAs(counter);
+    }
+
+    /// <summary>Counts how often the host starts it, so a second running host would show up as a second start.</summary>
+    private sealed class StartCounter : IHostedService
+    {
+        private int _starts;
+
+        public int Starts => Volatile.Read(ref _starts);
+
+        public Task StartAsync(CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _starts);
+            return Task.CompletedTask;
+        }
+
+        public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
     }
 }
