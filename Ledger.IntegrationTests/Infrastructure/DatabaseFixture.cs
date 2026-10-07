@@ -31,7 +31,7 @@ public partial class DatabaseFixture : IAsyncLifetime
     /// <inheritdoc />
     public async ValueTask InitializeAsync()
     {
-        _adminConnectionString = ResolveAdminConnectionString();
+        _adminConnectionString = WithShortIdleLifetime(ResolveAdminConnectionString());
         _repositoryRoot = FindRepositoryRoot();
 
         try
@@ -276,6 +276,20 @@ public partial class DatabaseFixture : IAsyncLifetime
 
     [GeneratedRegex("^ledger_it_(?<created>[0-9]{14})_[0-9a-f]{16}$")]
     private static partial Regex ThrowawayDatabaseName();
+
+    /// <summary>
+    /// Every throwaway database and role gets its own connection pool, and Npgsql keeps an idle connection for five minutes by
+    /// default. Over a whole run those idle connections add up past the server's limit, so pooled connections are released after a
+    /// few seconds instead.
+    /// </summary>
+    private static string WithShortIdleLifetime(string connectionString)
+    {
+        return new NpgsqlConnectionStringBuilder(connectionString)
+        {
+            ConnectionIdleLifetime = 5,
+            ConnectionPruningInterval = 2
+        }.ConnectionString;
+    }
 
     private static string ResolveAdminConnectionString()
     {
