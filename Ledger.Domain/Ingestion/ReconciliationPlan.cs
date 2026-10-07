@@ -5,8 +5,11 @@ namespace Ledger.Domain.Ingestion;
 /// <summary>Describes what a fetch covered, so the reconciler knows what absence from the feed means.</summary>
 public record FetchCoverage(DateOnly? From, bool Complete, int ItemCount);
 
-/// <summary>Tunable reconciliation behaviour.</summary>
-public record ReconcilerOptions(int MatchWindowDays = 5);
+/// <summary>
+/// Tunable reconciliation behaviour: how many days apart a pending and a booked item may be to still match, and the calendar
+/// zone in which the day a row was first seen is worked out when the bank gave it no date.
+/// </summary>
+public record ReconcilerOptions(int MatchWindowDays, TimeZoneInfo Zone);
 
 /// <summary>A transaction to add, together with the provider reference it is remembered under.</summary>
 public record PlannedInsert(ProviderTransaction Item, string Ref, MatchFlag Flag);

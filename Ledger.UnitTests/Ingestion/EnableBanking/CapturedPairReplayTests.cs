@@ -409,7 +409,7 @@ public static partial class CaptureReplay
     private static ReplayResult Replay(string directory)
     {
         var options = new IngestionOptions();
-        var reconcilerOptions = new ReconcilerOptions(options.MatchWindowDays);
+        var reconcilerOptions = new ReconcilerOptions(options.MatchWindowDays, options.ResolveTimeZone());
 
         var pages = new List<CapturePage>();
         var excludedSandbox = 0;

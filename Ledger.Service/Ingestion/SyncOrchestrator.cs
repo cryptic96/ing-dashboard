@@ -133,7 +133,7 @@ public class SyncOrchestrator(
             existing,
             items,
             new FetchCoverage(query.DateFrom, complete, items.Count),
-            new ReconcilerOptions(settings.MatchWindowDays));
+            new ReconcilerOptions(settings.MatchWindowDays, settings.ResolveTimeZone()));
 
         var applied = await ledgerStore.ApplyAsync(
             account.AccountId,

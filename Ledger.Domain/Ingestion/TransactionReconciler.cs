@@ -13,8 +13,6 @@ public static class TransactionReconciler
     private const decimal AmountMagnitudeLimit = 1_000_000_000_000_000m;
     private const int CurrencyLength = 3;
 
-    private static readonly TimeZoneInfo AmsterdamZone = TimeZoneInfo.FindSystemTimeZoneById("Europe/Amsterdam");
-
     /// <summary>
     /// Plans the changes for one account. Known references become updates and unknown references are matched against pending
     /// rows: a booked item that is certainly the booked version of exactly one pending row merges into it, a doubtful pairing
@@ -108,7 +106,7 @@ public static class TransactionReconciler
             inserts.Add(new PlannedInsert(item, reference, MatchFlag.None));
         }
 
-        AddDropsForAbsentPendingRows(existing, resolved, matches, coverage, drops);
+        AddDropsForAbsentPendingRows(existing, resolved, matches, coverage, options.Zone, drops);
 
         return new ReconciliationPlan(inserts, updates, merges, matches.Flagged, drops);
     }
@@ -118,6 +116,7 @@ public static class TransactionReconciler
         HashSet<Guid> resolved,
         MatchOutcome matches,
         FetchCoverage coverage,
+        TimeZoneInfo zone,
         List<Guid> drops)
     {
         if (!coverage.Complete || coverage.ItemCount <= 0)
@@ -139,7 +138,7 @@ public static class TransactionReconciler
                 continue;
             }
 
-            if (coverage.From is { } from && EffectiveDate(state) < from)
+            if (coverage.From is { } from && EffectiveDate(state, zone) < from)
             {
                 continue;
             }
@@ -170,7 +169,7 @@ public static class TransactionReconciler
             }
 
             var matching = pendingRows
-                .Where(state => IsCandidate(state, item, itemDate, options.MatchWindowDays))
+                .Where(state => IsCandidate(state, item, itemDate, options))
                 .ToList();
 
             if (matching.Count == 0)
@@ -223,14 +222,14 @@ public static class TransactionReconciler
             && itemCounterparty == NormalisedCounterparty(matching[0].CounterpartyName);
     }
 
-    private static bool IsCandidate(LedgerTransactionState state, ProviderTransaction item, DateOnly itemDate, int windowDays)
+    private static bool IsCandidate(LedgerTransactionState state, ProviderTransaction item, DateOnly itemDate, ReconcilerOptions options)
     {
         if (state.Amount != item.Amount || !string.Equals(state.Currency, item.Currency, StringComparison.Ordinal))
         {
             return false;
         }
 
-        if (Math.Abs(EffectiveDate(state).DayNumber - itemDate.DayNumber) > windowDays)
+        if (Math.Abs(EffectiveDate(state, options.Zone).DayNumber - itemDate.DayNumber) > options.MatchWindowDays)
         {
             return false;
         }
@@ -246,12 +245,12 @@ public static class TransactionReconciler
         return string.IsNullOrEmpty(normalised) ? null : normalised;
     }
 
-    private static DateOnly EffectiveDate(LedgerTransactionState state)
+    private static DateOnly EffectiveDate(LedgerTransactionState state, TimeZoneInfo zone)
     {
         return state.TransactionDate
             ?? state.BookingDate
             ?? state.ValueDate
-            ?? SyncSchedule.LocalDate(state.FirstSeenAt, AmsterdamZone);
+            ?? SyncSchedule.LocalDate(state.FirstSeenAt, zone);
     }
 
     private static DateOnly? ItemDate(ProviderTransaction item)

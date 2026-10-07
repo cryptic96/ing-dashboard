@@ -10,7 +10,7 @@ namespace Ledger.UnitTests.Ingestion;
 public class TransactionReconcilerTests
 {
     private static readonly FetchCoverage Coverage = new(null, true, 0);
-    private static readonly ReconcilerOptions Options = new();
+    private static readonly ReconcilerOptions Options = new(5, TimeZoneInfo.FindSystemTimeZoneById("Europe/Amsterdam"));
 
     [Fact]
     public void Unknown_booked_item_with_an_entry_reference_becomes_one_insert_under_that_reference()
@@ -391,6 +391,23 @@ public class TransactionReconcilerTests
         var plan = TransactionReconciler.Plan([pending], [], coverage, Options);
 
         plan.Drops.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("Europe/Amsterdam", 1)]
+    [InlineData("UTC", 0)]
+    public void The_day_a_dateless_pending_row_was_first_seen_is_worked_out_in_the_configured_zone(string zoneId, int expectedDrops)
+    {
+        var undated = PendingState("er:A", Day) with
+        {
+            TransactionDate = null,
+            FirstSeenAt = new DateTimeOffset(2026, 9, 19, 22, 30, 0, TimeSpan.Zero)
+        };
+        var options = new ReconcilerOptions(5, TimeZoneInfo.FindSystemTimeZoneById(zoneId));
+
+        var plan = TransactionReconciler.Plan([undated], [], new FetchCoverage(Day, true, 1), options);
+
+        plan.Drops.Should().HaveCount(expectedDrops);
     }
 
     [Fact]
