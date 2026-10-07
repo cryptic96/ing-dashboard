@@ -152,9 +152,16 @@ public sealed partial class OAuthTestDriver(HttpClient browser)
         string redirectUri,
         bool approve = true,
         string? resource = null,
-        string scope = "ledger.read offline_access")
+        string scope = "ledger.read offline_access",
+        string? extraQuery = null)
     {
         var (authorizeUrl, verifier, state) = BuildAuthorizeAddress(discovery, clientId, redirectUri, resource, scope);
+
+        if (extraQuery is not null)
+        {
+            authorizeUrl += "&" + extraQuery;
+        }
+
 
         using var first = await browser.GetAsync(authorizeUrl, TestContext.Current.CancellationToken);
 
@@ -335,7 +342,8 @@ public sealed partial class OAuthTestDriver(HttpClient browser)
             && response.Headers.Location?.ToString().StartsWith(redirectUri, StringComparison.Ordinal) == true;
     }
 
-    private static Dictionary<string, string> HiddenFields(string html)
+    /// <summary>The hidden form fields of a page, by name, as a browser would post them back.</summary>
+    public static Dictionary<string, string> HiddenFields(string html)
     {
         var fields = new Dictionary<string, string>(StringComparer.Ordinal);
 
