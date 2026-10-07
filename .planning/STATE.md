@@ -6,14 +6,14 @@ current_phase: 03
 current_phase_name: claude-reads-the-ledger
 status: executing
 stopped_at: Phase 3 context gathered
-last_updated: "2026-10-07T20:37:52.376Z"
+last_updated: "2026-10-07T21:29:12.007Z"
 last_activity: 2026-10-07
 last_activity_desc: Phase 2 complete, transitioned to Phase 3
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 36
-  completed_plans: 33
+  completed_plans: 34
 ---
 
 # Project State
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-09-26)
 ## Current Position
 
 Phase: 03 (claude-reads-the-ledger) — EXECUTING
-Plan: 6 of 8
+Plan: 7 of 8
 Status: Ready to execute
 Last activity: 2026-10-07 — Phase 03 execution started
 
@@ -83,6 +83,12 @@ Recent decisions affecting current work:
 - Phase 3: The OAuth server choice is open (separate Authentik vs embedded lightweight server). Settle it in phase research; it depends on claude.ai client-registration requirements and the single-LXC resource budget.
 - Phase 3: If the Anthropic IP allowlist also covers the browser-facing authorize/login step, connecting claude.ai only works from the home network or VPN. Confirm that is acceptable and that refresh-token lifetimes keep re-authorisation rare.
 - Phase 6: The research summary favoured the app calling the Messages API for reviews. The household decided on Claude-side scheduling (PROJECT.md), and that decision stands. Phase research should only pick the Claude-side scheduler.
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 261007-vrj | Encrypt TOTP authenticator secrets at rest with the Data Protection key ring; operator commands share the real key ring | 2026-10-07 | 3eb9648 | [261007-vrj-encrypt-totp-authenticator-secrets-at-re](./quick/261007-vrj-encrypt-totp-authenticator-secrets-at-re/) |
 
 ## Deferred Items
 
