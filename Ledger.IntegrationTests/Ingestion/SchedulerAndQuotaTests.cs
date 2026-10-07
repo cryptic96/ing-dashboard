@@ -472,23 +472,35 @@ public class SchedulerAndQuotaTests(DatabaseFixture fixture)
     }
 
     [Fact]
-    public async Task A_connection_without_a_selected_account_warns_exactly_once_after_thirty_minutes()
+    public async Task A_connection_without_a_selected_account_warns_within_minutes_and_once_more_when_the_history_window_has_closed()
     {
         var scenario = SyntheticScenario(pagesForFirstAccount: 1);
         await using var host = await SchedulerTestHost.StartAsync(fixture, scenario, AmsterdamInstant(Monday, 5, 0));
         var linked = await host.LinkAsync(selectFirstAccountOnly: false, selectAnyAccount: false);
 
-        host.Clock.Advance(TimeSpan.FromMinutes(10));
+        host.Clock.Advance(TimeSpan.FromMinutes(4));
         await host.RunDueAsync();
         host.WarningsNaming(linked.ConnectionKey).Should().BeEmpty();
 
-        for (var tick = 0; tick < 4; tick++)
+        host.Clock.Advance(TimeSpan.FromMinutes(2));
+        await host.RunDueAsync();
+        host.Clock.Advance(TimeSpan.FromMinutes(1));
+        await host.RunDueAsync();
+        host.WarningsNaming(linked.ConnectionKey).Should().ContainSingle().Which.Should().Contain("about an hour");
+
+        host.Clock.Advance(TimeSpan.FromMinutes(33));
+        await host.RunDueAsync();
+        host.WarningsNaming(linked.ConnectionKey).Should().ContainSingle();
+
+        for (var tick = 0; tick < 3; tick++)
         {
-            host.Clock.Advance(TimeSpan.FromMinutes(11));
+            host.Clock.Advance(TimeSpan.FromMinutes(3));
             await host.RunDueAsync();
         }
 
-        host.WarningsNaming(linked.ConnectionKey).Should().ContainSingle();
+        var warnings = host.WarningsNaming(linked.ConnectionKey);
+        warnings.Should().HaveCount(2);
+        warnings[1].Should().Contain("renew the connection");
         (await host.ReadRunsAsync()).Should().BeEmpty();
     }
 

@@ -17,11 +17,12 @@ public class SyncScheduler(
     ILogger<SyncScheduler> logger) : BackgroundService
 {
     private static readonly TimeSpan TickInterval = TimeSpan.FromMinutes(1);
-    private static readonly TimeSpan UnselectedWarningAge = TimeSpan.FromMinutes(30);
+    private static readonly TimeSpan UnselectedFirstWarningAge = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan UnselectedSecondWarningAge = TimeSpan.FromMinutes(45);
     private static readonly TimeSpan PostLinkRecoveryAge = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan PostLinkRecoveryWindow = TimeSpan.FromHours(2);
 
-    private readonly ConcurrentDictionary<string, bool> _warnedConnections = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<(string ConnectionKey, int Stage), bool> _warnedConnections = new();
     private ScheduleSettings? _settings;
 
     /// <summary>Starts every sync that is due at the given instant and returns how many runs were started.</summary>
@@ -183,13 +184,21 @@ public class SyncScheduler(
         return !await services.GetRequiredService<IBankConnectionStore>().HasAnySyncRunAsync(connection.Id, cancellationToken);
     }
 
+    /// <summary>
+    /// Warns, early and again later, about a connection that was approved but has no selected account and never synced. The bank
+    /// returns the full history only for about an hour after approval, so the first warning comes within minutes while there is
+    /// still time to act, and the second says the window has probably closed and the connection must be renewed for a full read.
+    /// </summary>
     private async Task WarnOnceIfLongHistoryMayBeLostAsync(
         ConnectionSummary connection,
         DateTimeOffset now,
         IServiceProvider services,
         CancellationToken cancellationToken)
     {
-        if (now - connection.AuthorizedAt <= UnselectedWarningAge || _warnedConnections.ContainsKey(connection.ConnectionKey))
+        var age = now - connection.AuthorizedAt;
+        var stage = age > UnselectedSecondWarningAge ? 2 : age > UnselectedFirstWarningAge ? 1 : 0;
+
+        if (stage == 0 || _warnedConnections.ContainsKey((connection.ConnectionKey, stage)))
         {
             return;
         }
@@ -197,13 +206,24 @@ public class SyncScheduler(
         var hasSynced = await services.GetRequiredService<IBankConnectionStore>()
             .HasAnySyncRunAsync(connection.Id, cancellationToken);
 
-        if (!hasSynced && _warnedConnections.TryAdd(connection.ConnectionKey, true))
+        if (hasSynced || !_warnedConnections.TryAdd((connection.ConnectionKey, stage), true))
+        {
+            return;
+        }
+
+        if (stage == 1)
         {
             logger.LogWarning(
-                "Connection {ConnectionKey} was authorised more than {Minutes} minutes ago and still has no selected account or sync, so the bank may no longer return its full history. Select the accounts to sync.",
+                "Connection {ConnectionKey} was authorised {Minutes} minutes ago and has no selected account or sync yet. Select the accounts to sync now: the bank returns the full history only for about an hour after approval.",
                 connection.ConnectionKey,
-                (int)UnselectedWarningAge.TotalMinutes);
+                (int)UnselectedFirstWarningAge.TotalMinutes);
+            return;
         }
+
+        logger.LogWarning(
+            "Connection {ConnectionKey} was authorised more than {Minutes} minutes ago and still has no selected account or sync, so the bank probably no longer returns its full history. Select the accounts and renew the connection to read the full history.",
+            connection.ConnectionKey,
+            (int)UnselectedSecondWarningAge.TotalMinutes);
     }
 
     private ScheduleSettings ResolveSettings()
