@@ -46,6 +46,26 @@ services_render_msmtprc() {
 }
 
 ###
+### Creates the msmtp log file when it is absent, owned by root with group
+### adm and mode 640 when run as root. The installer unit runs with a
+### read-only /var/log and can only write this one file, so it has to exist
+### before the first deploy notification is sent. An existing file, and the
+### mail history in it, is never touched.
+###
+services_ensure_msmtp_log() {
+  local log_path="$1"
+
+  if [[ -e "$log_path" ]]; then
+    return 0
+  fi
+  if [[ "$(id -u)" -eq 0 ]]; then
+    install -m 640 -o root -g adm /dev/null "$log_path"
+  else
+    install -m 640 /dev/null "$log_path"
+  fi
+}
+
+###
 ### Renders OUTPUT from an example env-style file at SOURCE, replacing the
 ### value of each key named in a following "KEY=VALUE" override argument
 ### and leaving every other line (comments, and any key without an
@@ -140,6 +160,7 @@ if [[ "${LEDGER_PROVISION_LIB_ONLY:-0}" != "1" ]]; then
   services_render_msmtprc "${LEDGER_SMTP_RELAY:-}" "${LEDGER_MAIL_FROM:-}" "${LEDGER_SMTP_STARTTLS:-on}" "$msmtprc_rendered"
   install -m 644 -o root -g root "$msmtprc_rendered" /etc/msmtprc
   rm -f "$msmtprc_rendered"
+  services_ensure_msmtp_log /var/log/msmtp.log
 
   provision_log "Installing initial Grafana and Prometheus provisioning"
 
