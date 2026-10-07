@@ -52,11 +52,11 @@ Filled in by the planner/executor per task. Requirement → test coverage from r
 | SEC-04 | Wrong-audience token → 401; expired → 401; API key on `/mcp` → 401; bearer on `/api/*` → 401; no outbound HTTP during a tool call | integration | `--filter-trait "Category=OAuth"` | ❌ W0 | ⬜ pending |
 | SEC-04 | Refresh rotation; reuse outside leeway revokes the grant; revoke-all CLI kills the next call; tokens survive restart | integration | `--filter-trait "Category=OAuth"` | ❌ W0 | ⬜ pending |
 | SEC-04 | Host/path guard: MCP hostname answers only MCP/OAuth paths; sign-in paths reject non-LAN/VPN clients; metadata ignores spoofed Host headers | integration | `--filter-trait "Category=OAuth"` | ❌ W0 | ⬜ pending |
-| SEC-04 | Traefik template: exact paths only, Anthropic range present, phased-out addresses absent, placeholders only | unit | `--filter-trait "Category=Configuration"` | extend `CommittedConfigurationTests` | ⬜ pending |
-| SEC-06 | No bearer token, tool argument or counterparty text in captured logs | integration | `--filter-trait "Category=Security"` | extend `LogRedactionTests.cs` | ⬜ pending |
-| Metrics/alert | Metrics present at zero from startup; opaque labels; alert rule parses | unit + config | `--filter-trait "Category=Metrics"` | ❌ W0 | ⬜ pending |
+| SEC-04 | Traefik template: exact paths only, Anthropic range present, phased-out addresses absent, placeholders only | unit | `--filter-trait "Category=Configuration"` | ❌ W0 `Ledger.UnitTests/Configuration/TraefikTemplateTests.cs` (plan 03-06) | ⬜ pending |
+| SEC-06 | No bearer token, tool argument or counterparty text in captured logs | integration | `--filter-trait "Category=LogRedaction"` and `--filter-trait "Category=McpTools"` | extend `LogRedactionTests.cs` (plan 03-02), `ToolSurfaceTests.cs` (plan 03-04) | ⬜ pending |
+| Metrics/alert | Metrics present at zero from startup; opaque labels; alert rule parses | unit + config | `--filter-trait "Category=Metrics"` | ❌ W0 `Ledger.UnitTests/Mcp/McpMetricsTests.cs`, `build/tests/access-alert-expressions-test.sh` (plan 03-05) | ⬜ pending |
 | Selfcheck | Fails when an unexpected login has sudo | shell | `bash deploy/tests/selfcheck-logic-test.sh` | extend existing | ⬜ pending |
-| Exposure | Outside-in check expected-status matrix | shell | `bash deploy/tests/exposure-check-logic-test.sh` | ❌ W0 | ⬜ pending |
+| Exposure | Outside-in check expected-status matrix | shell | `bash build/tests/check-exposure-logic-test.sh` | ❌ W0 (plan 03-06) | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 

@@ -148,7 +148,35 @@ Plans:
   4. Searching a full year of transactions returns paginated results under a server-side cap and says explicitly when a result was truncated.
   5. From outside the network, only `/mcp` and its OAuth endpoints respond, and only to Anthropic's published IP ranges. OAuth discovery works from outside the network. A token issued for a different audience is rejected, and the caller's token is never forwarded to any other service.
 
-**Plans**: TBD
+**Plans**: 8 plans
+
+Plans:
+**Wave 1**
+
+- [ ] 03-01-PLAN.md — Tracer: embedded OpenIddict with Identity logins, consent and pre-registered Claude clients; Claude Code's discovery chain, PKCE sign-in and /mcp with ledger_overview end to end; rotating refresh tokens that survive a restart
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 03-02-PLAN.md — Second factor (TOTP with replay guard) and hardened sign-in pages; the app enforces the public boundary itself: host and path allow-list, home/VPN-only sign-in, one audience, one scheme per surface, rate and size limits, no outbound calls
+- [ ] 03-03-PLAN.md — money_totals: out, in and net from booked transactions in Amsterdam periods, pending and own-account transfers reported beside, per-counterparty breakdown, time and account grouping, full provenance
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 03-04-PLAN.md — search_transactions with a capped keyset cursor and truncation notice, find_counterparties, masked counterparty accounts, the final four-tool surface and instructions
+- [ ] 03-05-PLAN.md — Operator controls: ledger-login enrolment, ledger-grants kill switch, MCP and token metrics, access alerts
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 03-06-PLAN.md — Exposure as code: Traefik MCP routers with Anthropic's range, provisioning keys, selfcheck sudo and MCP checks, outside-in exposure check, connection guide
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [ ] 03-07-PLAN.md — Home-network go-live (operator): release v0.3.0, host configured, routes on the home/VPN allowlist, login enrolled, Claude Code reads the real ledger
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [ ] 03-08-PLAN.md — Public go-live (operator): temporary SSH access removed, Anthropic range enabled, exposure proven from outside, claude.ai on web, mobile and Desktop, kill switch observed
+
 **UI hint**: no
 **Open decision**: Separate Authentik service vs a lightweight embedded OAuth server. Do not decide this before phase research. It depends on whether claude.ai custom connectors accept a pre-registered client (or client metadata documents) instead of dynamic client registration, and on what fits the single-LXC resource budget on a low-power host.
 **Research flags**: Check the current claude.ai custom-connector OAuth requirements and whether Anthropic publishes egress IP ranges. The user's browser must reach the authorize/login step, and a phone on mobile data is outside Anthropic's ranges. So confirm that connecting while on the home network or VPN is enough, and that refresh-token lifetimes keep re-authorisation rare.
@@ -217,7 +245,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 |-------|----------------|--------|-----------|
 | 1. Secure Platform & Release Pipeline | 12/12 | Complete    | 2026-09-29 |
 | 2. Automatic ING Sync | 16/16 | Complete    | 2026-10-07 |
-| 3. Claude Reads the Ledger | 0/TBD | Not started | - |
+| 3. Claude Reads the Ledger | 0/8 | Planned | - |
 | 4. Trustworthy Categorisation | 0/TBD | Not started | - |
 | 5. Budgets, Goals & Forecast | 0/TBD | Not started | - |
 | 6. Advisor Memory & Scheduled Reviews | 0/TBD | Not started | - |
