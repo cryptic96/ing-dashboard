@@ -155,6 +155,77 @@ public partial class CommittedConfigurationTests
         options.MatchWindowDays.Should().Be(5);
     }
 
+    [Fact]
+    [Trait("Category", "Configuration")]
+    public void Ci_and_release_workflows_run_the_whole_suite_with_the_migration_bundle()
+    {
+        var workflows = Path.Combine(FindRepositoryRoot(), ".github", "workflows");
+
+        foreach (var name in new[] { "ci.yml", "release.yml" })
+        {
+            WholeSuiteStepViolations(File.ReadAllText(Path.Combine(workflows, name)), requireCiTrue: true)
+                .Should().BeEmpty($"workflow {name} must run the whole suite with the migration bundle");
+        }
+    }
+
+    [Theory]
+    [Trait("Category", "Configuration")]
+    [InlineData("dotnet test --solution Ledger.slnx --no-restore", "dotnet test --solution Ledger.slnx --no-restore --filter-not-trait \"Category=Integration\"")]
+    [InlineData("dotnet test --solution Ledger.slnx --no-restore", "dotnet test --solution Ledger.slnx --no-restore --filter-trait \"Category=Unit\"")]
+    [InlineData("dotnet test --solution Ledger.slnx --no-restore", "dotnet test --project Ledger.UnitTests --no-restore")]
+    [InlineData("          LEDGER_EFBUNDLE:", "          LEDGER_EFBUNDLE_OFF:")]
+    [InlineData("          CI: true", "          CI: false")]
+    [InlineData("          CI: true", "          NOT_CI: true")]
+    public void The_whole_suite_workflow_check_rejects_a_weakened_test_step(string original, string weakened)
+    {
+        var workflows = Path.Combine(FindRepositoryRoot(), ".github", "workflows");
+        var yaml = File.ReadAllText(Path.Combine(workflows, "ci.yml"));
+
+        yaml.Should().Contain(original);
+
+        WholeSuiteStepViolations(yaml.Replace(original, weakened), requireCiTrue: true).Should().NotBeEmpty();
+    }
+
+    private static List<string> WholeSuiteStepViolations(string workflowYaml, bool requireCiTrue)
+    {
+        var violations = new List<string>();
+        var lines = workflowYaml.Replace("\r\n", "\n").Split('\n');
+        var start = Array.FindIndex(lines, line => line.Trim() == "- name: Run tests");
+        if (start < 0)
+        {
+            return ["no step named Run tests"];
+        }
+
+        var step = new List<string> { lines[start] };
+        for (var i = start + 1; i < lines.Length && !lines[i].TrimStart().StartsWith("- name:", StringComparison.Ordinal); i++)
+        {
+            step.Add(lines[i]);
+        }
+
+        var runLines = step.Where(line => line.TrimStart().StartsWith("run:", StringComparison.Ordinal)).ToList();
+        if (runLines.Count != 1 || runLines[0].Trim() != "run: dotnet test --solution Ledger.slnx --no-restore")
+        {
+            violations.Add("the test step must run exactly: dotnet test --solution Ledger.slnx --no-restore");
+        }
+
+        if (step.Any(line => line.Contains("filter", StringComparison.OrdinalIgnoreCase)))
+        {
+            violations.Add("the test step must not filter tests");
+        }
+
+        if (!step.Any(line => line.Trim().StartsWith("LEDGER_EFBUNDLE:", StringComparison.Ordinal) && line.Trim().Length > "LEDGER_EFBUNDLE:".Length))
+        {
+            violations.Add("the test step must set a non-empty LEDGER_EFBUNDLE");
+        }
+
+        if (requireCiTrue && !step.Any(line => line.Trim() == "CI: true"))
+        {
+            violations.Add("the test step must set CI to true");
+        }
+
+        return violations;
+    }
+
     private static string FindRepositoryRoot() => Path.GetDirectoryName(FindLedgerServiceDirectory())!;
 
     private static string FindLedgerServiceDirectory()
