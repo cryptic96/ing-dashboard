@@ -94,6 +94,7 @@ public class LedgerQueryService(
         var direction = ParseDirection(request.Direction);
         var grouping = ParseGrouping(request.GroupBy);
         CheckAmounts(request.MinAmount, request.MaxAmount);
+        TotalsAggregator.CheckGrouping(grouping, period.Range);
 
         var filter = new LedgerQueryFilter(
             period.Range,

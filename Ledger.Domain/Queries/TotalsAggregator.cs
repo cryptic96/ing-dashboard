@@ -1,3 +1,4 @@
+using System.Globalization;
 using Ledger.Domain.Ingestion;
 
 namespace Ledger.Domain.Queries;
@@ -154,6 +155,12 @@ public static class TotalsAggregator
     /// <summary>How many counterparties a counterparty grouping names before the remainder.</summary>
     public const int CounterpartyGroupSize = 100;
 
+    /// <summary>The longest period, in days, that can be grouped by day.</summary>
+    public const int MaxDaysForDayGrouping = 92;
+
+    /// <summary>The longest period, in days, that can be grouped by week.</summary>
+    public const int MaxDaysForWeekGrouping = 731;
+
     /// <summary>Sums the rows per currency and builds the breakdown and the requested grouping.</summary>
     /// <param name="data">What the store read.</param>
     /// <param name="grouping">How to cut the result up beyond the totals.</param>
@@ -185,7 +192,7 @@ public static class TotalsAggregator
         var merged = MergeCounterparties(rows);
 
         var breakdown = Capped(merged, BreakdownSize);
-        var groups = Groups(grouping, rows, merged, data.Accounts, range);
+        var groups = Groups(grouping, rows, merged, data.Accounts, currency, range);
 
         return new CurrencyTotals(
             currency,
@@ -248,13 +255,143 @@ public static class TotalsAggregator
         return shown;
     }
 
+    /// <summary>
+    /// Refuses a grouping that would return too many groups for the period, with a fixed message that advises a shorter period or a
+    /// coarser grouping.
+    /// </summary>
+    /// <param name="grouping">The requested grouping.</param>
+    /// <param name="range">The inclusive days the result covers.</param>
+    /// <exception cref="LedgerQueryException">The period holds too many days for the grouping.</exception>
+    public static void CheckGrouping(TotalsGrouping grouping, DateRange range)
+    {
+        if (grouping == TotalsGrouping.Day && range.Days > MaxDaysForDayGrouping)
+        {
+            throw new LedgerQueryException("Grouping by day covers at most 92 days. Use a shorter period or group by week or month.");
+        }
+
+        if (grouping == TotalsGrouping.Week && range.Days > MaxDaysForWeekGrouping)
+        {
+            throw new LedgerQueryException("Grouping by week covers at most 731 days. Use a shorter period or group by month.");
+        }
+    }
+
     private static List<TotalsBucket> Groups(
         TotalsGrouping grouping,
         IReadOnlyList<TotalsRow> rows,
         List<CounterpartyShare> merged,
         IReadOnlyList<TotalsAccount> accounts,
+        string currency,
         DateRange range)
     {
-        return [];
+        CheckGrouping(grouping, range);
+
+        return grouping switch
+        {
+            TotalsGrouping.Counterparty => CounterpartyGroups(merged),
+            TotalsGrouping.Month => TimeGroups(rows, MonthSlices(range)),
+            TotalsGrouping.Week => TimeGroups(rows, WeekSlices(range)),
+            TotalsGrouping.Day => TimeGroups(rows, DaySlices(range)),
+            TotalsGrouping.Account => AccountGroups(rows, accounts, currency),
+            _ => []
+        };
     }
+
+    private static List<TotalsBucket> CounterpartyGroups(List<CounterpartyShare> merged)
+    {
+        return Capped(merged, CounterpartyGroupSize)
+            .Select(share => new TotalsBucket(
+                share.Name,
+                null,
+                null,
+                null,
+                share.Ref,
+                share.MoneyOut,
+                share.MoneyIn,
+                share.Count,
+                share.MergedCounterparties))
+            .ToList();
+    }
+
+    private static List<TotalsBucket> AccountGroups(IReadOnlyList<TotalsRow> rows, IReadOnlyList<TotalsAccount> accounts, string currency)
+    {
+        return accounts
+            .Where(account => account.Currency == currency || rows.Any(row => row.AccountKey == account.AccountKey))
+            .OrderBy(account => account.CreatedAt)
+            .ThenBy(account => account.AccountKey, StringComparer.Ordinal)
+            .Select(account =>
+            {
+                var own = rows.Where(row => row.AccountKey == account.AccountKey).ToList();
+
+                return new TotalsBucket(
+                    account.DisplayName ?? "Account " + account.AccountKey,
+                    null,
+                    null,
+                    account.AccountKey,
+                    null,
+                    own.Sum(row => row.MoneyOut),
+                    own.Sum(row => row.MoneyIn),
+                    own.Sum(row => row.Count));
+            })
+            .ToList();
+    }
+
+    private static List<TotalsBucket> TimeGroups(IReadOnlyList<TotalsRow> rows, IEnumerable<TimeSlice> slices)
+    {
+        return slices
+            .Select(slice =>
+            {
+                var inSlice = rows.Where(row => row.PeriodDate >= slice.From && row.PeriodDate <= slice.To).ToList();
+
+                return new TotalsBucket(
+                    slice.Label,
+                    slice.From,
+                    slice.To,
+                    null,
+                    null,
+                    inSlice.Sum(row => row.MoneyOut),
+                    inSlice.Sum(row => row.MoneyIn),
+                    inSlice.Sum(row => row.Count));
+            })
+            .ToList();
+    }
+
+    private static IEnumerable<TimeSlice> DaySlices(DateRange range)
+    {
+        for (var day = range.From; day <= range.To; day = day.AddDays(1))
+        {
+            yield return new TimeSlice(day.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), day, day);
+        }
+    }
+
+    private static IEnumerable<TimeSlice> WeekSlices(DateRange range)
+    {
+        var monday = range.From.AddDays(-(((int)range.From.DayOfWeek + 6) % 7));
+
+        for (; monday <= range.To; monday = monday.AddDays(7))
+        {
+            var moment = monday.ToDateTime(TimeOnly.MinValue);
+            var label = string.Create(CultureInfo.InvariantCulture, $"{ISOWeek.GetYear(moment)}-W{ISOWeek.GetWeekOfYear(moment):00}");
+            var from = monday < range.From ? range.From : monday;
+            var sunday = monday.AddDays(6);
+            var to = sunday > range.To ? range.To : sunday;
+
+            yield return new TimeSlice(label, from, to);
+        }
+    }
+
+    private static IEnumerable<TimeSlice> MonthSlices(DateRange range)
+    {
+        var first = new DateOnly(range.From.Year, range.From.Month, 1);
+
+        for (var month = first; month <= range.To; month = month.AddMonths(1))
+        {
+            var last = month.AddMonths(1).AddDays(-1);
+            var from = month < range.From ? range.From : month;
+            var to = last > range.To ? range.To : last;
+
+            yield return new TimeSlice(month.ToString("yyyy-MM", CultureInfo.InvariantCulture), from, to);
+        }
+    }
+
+    private sealed record TimeSlice(string Label, DateOnly From, DateOnly To);
 }
