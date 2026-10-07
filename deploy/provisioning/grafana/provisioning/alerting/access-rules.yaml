@@ -1,0 +1,131 @@
+# Claude access alert rules. Every rule queries the Prometheus datasource (uid
+# prometheus) and evaluates a threshold expression node. Titles and summaries
+# are fixed text: nothing a client sent and no query result is ever
+# interpolated into an alert, so no token, client address, amount or
+# counterparty can reach an alert email. They go to the operator through the
+# same contact point as every other alert, grouped by the Access folder under
+# the root notification route.
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: access
+    folder: Access
+    interval: 1m
+    rules:
+      - uid: ledger-mcp-rejected-tokens-burst
+        title: Many Claude access tokens were rejected
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: sum(increase(ledger_mcp_rejected_tokens_total[10m]))
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [10]
+                  operator:
+                    type: and
+                  query:
+                    params: [A]
+                  reducer:
+                    type: last
+                    params: []
+              refId: C
+        for: 0m
+        noDataState: OK
+        execErrState: Alerting
+        annotations:
+          summary: More than 10 access tokens were rejected in 10 minutes. Check ledger-grants list on the ledger host.
+        labels: {}
+
+      - uid: ledger-oauth-grant-created
+        title: A new Claude connection was approved
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: sum(increase(ledger_oauth_grants_created_total[10m]))
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+                  operator:
+                    type: and
+                  query:
+                    params: [A]
+                  reducer:
+                    type: last
+                    params: []
+              refId: C
+        for: 0m
+        noDataState: OK
+        execErrState: Alerting
+        annotations:
+          summary: A new Claude connection was approved. Check ledger-grants list on the ledger host.
+        labels: {}
+
+      - uid: ledger-oauth-refresh-token-reused
+        title: A Claude refresh token was reused and its connection revoked
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: sum(increase(ledger_oauth_refresh_token_reuse_total[10m]))
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+                  operator:
+                    type: and
+                  query:
+                    params: [A]
+                  reducer:
+                    type: last
+                    params: []
+              refId: C
+        for: 0m
+        noDataState: OK
+        execErrState: Alerting
+        annotations:
+          summary: A refresh token was used again after it had already been used. Check ledger-grants list on the ledger host.
+        labels: {}

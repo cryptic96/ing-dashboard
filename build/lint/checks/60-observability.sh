@@ -182,6 +182,8 @@ fi
 ALERTING_DIR="$PROVISIONING_DIR/alerting"
 HOUSEHOLD_RULES="$ALERTING_DIR/household-rules.yaml"
 SYNC_METRICS_SOURCE="$REPO_ROOT/Ledger.Service/Metrics/SyncMetrics.cs"
+ACCESS_RULES="$ALERTING_DIR/access-rules.yaml"
+MCP_METRICS_SOURCE="$REPO_ROOT/Ledger.Service/Mcp/McpMetrics.cs"
 
 echo "Asserting no alert rule file contains a template marker"
 for rule_file in "$ALERTING_DIR"/*.yaml; do
@@ -200,6 +202,19 @@ fi
 for metric in $household_metrics; do
   if ! grep -qF "\"$metric\"" "$SYNC_METRICS_SOURCE"; then
     echo "household rules query $metric, which $SYNC_METRICS_SOURCE does not define" >&2
+    status=1
+  fi
+done
+
+echo "Asserting every metric the access rules query exists in the application's metrics code"
+access_metrics="$(grep -oE 'ledger_[a-z_]+' "$ACCESS_RULES" | sort -u || true)"
+if [ -z "$access_metrics" ]; then
+  echo "no ledger_ metric names found in $ACCESS_RULES" >&2
+  status=1
+fi
+for metric in $access_metrics; do
+  if ! grep -qF "\"$metric\"" "$MCP_METRICS_SOURCE"; then
+    echo "access rules query $metric, which $MCP_METRICS_SOURCE does not define" >&2
     status=1
   fi
 done
@@ -302,8 +317,8 @@ fi
 alert_rules_json="$(curl -s -u "admin:${ADMIN_PASSWORD}" "$BASE_URL/api/v1/provisioning/alert-rules")"
 alert_rule_uids="$(grep -oE '"uid":"ledger-[a-z0-9-]+"' <<<"$(tr -d ' \n' <<<"$alert_rules_json")" | sort -u)"
 alert_rule_count="$(grep -c . <<<"$alert_rule_uids" || true)"
-if [ "$alert_rule_count" -ne 16 ]; then
-  echo "expected 16 provisioned alert rule uids, found $alert_rule_count" >&2
+if [ "$alert_rule_count" -ne 19 ]; then
+  echo "expected 19 provisioned alert rule uids, found $alert_rule_count" >&2
   status=1
 fi
 
@@ -320,6 +335,18 @@ household_uids=(
 for uid in "${household_uids[@]}"; do
   if ! grep -qF "\"uid\":\"${uid}\"" <<<"$alert_rule_uids"; then
     echo "household alert rule uid $uid is not provisioned" >&2
+    status=1
+  fi
+done
+
+access_uids=(
+  ledger-mcp-rejected-tokens-burst
+  ledger-oauth-grant-created
+  ledger-oauth-refresh-token-reused
+)
+for uid in "${access_uids[@]}"; do
+  if ! grep -qF "\"uid\":\"${uid}\"" <<<"$alert_rule_uids"; then
+    echo "access alert rule uid $uid is not provisioned" >&2
     status=1
   fi
 done
