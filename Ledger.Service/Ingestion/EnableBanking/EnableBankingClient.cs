@@ -80,24 +80,15 @@ public sealed class EnableBankingClient(
 
         var sessionId = ReadString(root, "session_id") ?? throw EnableBankingErrors.ForMalformed("session_without_id");
 
-        if (!root.TryGetProperty("access", out var access)
-            || access.ValueKind != JsonValueKind.Object
-            || ReadString(access, "valid_until") is not { } validUntilText)
+        try
         {
-            throw EnableBankingErrors.ForMalformed("session_without_validity");
+            return ReadSession(sessionId, root);
         }
-
-        var accounts = new List<ProviderAccount>();
-
-        if (root.TryGetProperty("accounts", out var accountList) && accountList.ValueKind == JsonValueKind.Array)
+        catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            foreach (var account in accountList.EnumerateArray())
-            {
-                accounts.Add(EnableBankingJson.MapAccount(account));
-            }
+            await EndUnusableSessionAsync(sessionId);
+            throw;
         }
-
-        return new ProviderSession(sessionId, EnableBankingJson.ParseInstant(validUntilText), accounts);
     }
 
     /// <inheritdoc />
@@ -188,6 +179,44 @@ public sealed class EnableBankingClient(
         }
         catch (BankProviderException exception) when (
             exception.ProviderCode is not null && EnableBankingErrors.SessionAlreadyEndedCodes.Contains(exception.ProviderCode))
+        {
+        }
+    }
+
+    /// <summary>Reads the validity and accounts of a session the aggregator just created.</summary>
+    private static ProviderSession ReadSession(string sessionId, JsonElement root)
+    {
+        if (!root.TryGetProperty("access", out var access)
+            || access.ValueKind != JsonValueKind.Object
+            || ReadString(access, "valid_until") is not { } validUntilText)
+        {
+            throw EnableBankingErrors.ForMalformed("session_without_validity");
+        }
+
+        var accounts = new List<ProviderAccount>();
+
+        if (root.TryGetProperty("accounts", out var accountList) && accountList.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var account in accountList.EnumerateArray())
+            {
+                accounts.Add(EnableBankingJson.MapAccount(account));
+            }
+        }
+
+        return new ProviderSession(sessionId, EnableBankingJson.ParseInstant(validUntilText), accounts);
+    }
+
+    /// <summary>
+    /// Ends a session the aggregator created but whose answer could not be used, so no consent stays live at the bank that the
+    /// caller never learns about. A failure to end it is ignored: the original failure is the one worth reporting.
+    /// </summary>
+    private async Task EndUnusableSessionAsync(string sessionId)
+    {
+        try
+        {
+            await RevokeSessionAsync(sessionId, CancellationToken.None);
+        }
+        catch (BankProviderException)
         {
         }
     }

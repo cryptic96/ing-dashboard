@@ -166,26 +166,63 @@ public class BankLinkService(
 
         if (session.Accounts.Count == 0)
         {
+            await EndUnrecordedSessionAsync(session);
             logger.LogWarning("Bank link callback finished with outcome {Outcome}.", CallbackResult.NoAccounts);
             return new CallbackOutcome(CallbackResult.NoAccounts, 0);
         }
 
-        if (consumed.Purpose == AuthorizationPurposes.Renew)
-        {
-            return await CompleteRenewalAsync(consumed.ConnectionId!.Value, session, psu, cancellationToken);
-        }
+        return consumed.Purpose == AuthorizationPurposes.Renew
+            ? await CompleteRenewalAsync(consumed.ConnectionId!.Value, session, psu)
+            : await CompleteLinkAsync(session);
+    }
 
-        var linked = await connections.AddConnectionAsync(
-            provider.Name,
-            options.Value.AspspName,
-            options.Value.AspspCountry,
-            session,
-            secretProtector.Protect(session.SessionId),
-            timeProvider.GetUtcNow(),
-            cancellationToken);
+    /// <summary>
+    /// Records the session as a new connection. Once the provider has created the session, recording it is not tied to the
+    /// request, so a browser that disconnects cannot strand a consent the ledger never recorded.
+    /// </summary>
+    private async Task<CallbackOutcome> CompleteLinkAsync(ProviderSession session)
+    {
+        LinkedConnection linked;
+
+        try
+        {
+            linked = await connections.AddConnectionAsync(
+                provider.Name,
+                options.Value.AspspName,
+                options.Value.AspspCountry,
+                session,
+                secretProtector.Protect(session.SessionId),
+                timeProvider.GetUtcNow(),
+                CancellationToken.None);
+        }
+        catch (Exception)
+        {
+            await EndUnrecordedSessionAsync(session);
+            throw;
+        }
 
         logger.LogInformation("Bank link callback finished with outcome {Outcome}.", CallbackResult.Completed);
         return new CallbackOutcome(CallbackResult.Completed, linked.Accounts.Count);
+    }
+
+    /// <summary>
+    /// Ends a session the provider created but the ledger did not record, so no consent stays live at the bank that the
+    /// operator can neither see nor end from here. A failure to end it is logged by kind only and never replaces the original
+    /// failure.
+    /// </summary>
+    private async Task EndUnrecordedSessionAsync(ProviderSession session)
+    {
+        try
+        {
+            await provider.RevokeSessionAsync(session.SessionId, CancellationToken.None);
+            logger.LogInformation("A bank session that could not be recorded was ended at the bank.");
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(
+                "A bank session that could not be recorded could not be ended at the bank ({Kind}). End it in the aggregator's control panel.",
+                exception is BankProviderException providerException ? providerException.Kind.ToString() : exception.GetType().Name);
+        }
     }
 
     /// <summary>
@@ -423,8 +460,7 @@ public class BankLinkService(
     private async Task<CallbackOutcome> CompleteRenewalAsync(
         Guid supersededConnectionId,
         ProviderSession session,
-        PsuContext? psu,
-        CancellationToken cancellationToken)
+        PsuContext? psu)
     {
         RenewalResult renewal;
 
@@ -438,11 +474,17 @@ public class BankLinkService(
                 session,
                 secretProtector.Protect(session.SessionId),
                 timeProvider.GetUtcNow(),
-                cancellationToken);
+                CancellationToken.None);
         }
         catch (InvalidOperationException)
         {
+            await EndUnrecordedSessionAsync(session);
             return Reject("connection can no longer be renewed");
+        }
+        catch (Exception)
+        {
+            await EndUnrecordedSessionAsync(session);
+            throw;
         }
 
         if (!dispatcher.TryEnqueue(new SyncRequest(renewal.Connection.Id, SyncTrigger.PostLink, new FetchContext(psu))))
