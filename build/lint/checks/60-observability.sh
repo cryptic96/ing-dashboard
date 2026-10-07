@@ -289,6 +289,16 @@ for uid in ledger-reporting prometheus; do
   fi
 done
 
+# Grafana's PostgreSQL datasource reads its default database from jsonData only;
+# without it every panel fails with "no default database configured", even
+# though the datasource itself provisions and lists fine.
+reporting_ds_json="$(curl -s -u "admin:${ADMIN_PASSWORD}" "$BASE_URL/api/datasources/uid/ledger-reporting")"
+reporting_json_data="$(grep -oE '"jsonData":\{[^}]*\}' <<<"$(tr -d ' \n' <<<"$reporting_ds_json")" || true)"
+if ! grep -q '"database":"ledger"' <<<"$reporting_json_data"; then
+  echo "datasource ledger-reporting has no jsonData.database \"ledger\"; Grafana cannot run its queries" >&2
+  status=1
+fi
+
 alert_rules_json="$(curl -s -u "admin:${ADMIN_PASSWORD}" "$BASE_URL/api/v1/provisioning/alert-rules")"
 alert_rule_uids="$(grep -oE '"uid":"ledger-[a-z0-9-]+"' <<<"$(tr -d ' \n' <<<"$alert_rules_json")" | sort -u)"
 alert_rule_count="$(grep -c . <<<"$alert_rule_uids" || true)"
