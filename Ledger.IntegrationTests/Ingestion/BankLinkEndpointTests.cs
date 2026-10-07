@@ -243,18 +243,21 @@ public class BankLinkEndpointTests(DatabaseFixture fixture)
         await using var host = await BankLinkTestHost.StartAsync(fixture, scenario);
 
         var expiringKey = await host.LinkAsync(scenario);
-        scenario.SessionValidUntil = DateTimeOffset.UtcNow.AddDays(90);
-        var linkedKey = await host.LinkAsync(scenario);
-
-        var connections = await host.ListConnectionsAsync();
-        var expiring = connections.Single(connection => connection.GetProperty("connectionKey").GetString() == expiringKey);
-        var linked = connections.Single(connection => connection.GetProperty("connectionKey").GetString() == linkedKey);
+        var expiring = (await host.ListConnectionsAsync()).Single(connection => connection.GetProperty("connectionKey").GetString() == expiringKey);
 
         expiring.GetProperty("consentState").GetString().Should().Be("expiring");
         expiring.GetProperty("daysUntilExpiry").GetInt32().Should().Be(10);
         expiring.GetProperty("status").GetString().Should().Be("active");
+
+        scenario.SessionValidUntil = DateTimeOffset.UtcNow.AddDays(90);
+        var linkedKey = await host.LinkAsync(scenario);
+
+        var connections = await host.ListConnectionsAsync();
+        var linked = connections.Single(connection => connection.GetProperty("connectionKey").GetString() == linkedKey);
+
         linked.GetProperty("consentState").GetString().Should().Be("linked");
         linked.GetProperty("daysUntilExpiry").GetInt32().Should().BeInRange(89, 90);
+        linked.GetProperty("status").GetString().Should().Be("active");
 
         var raw = System.Text.Json.JsonSerializer.Serialize(connections);
         raw.Should().NotContain(scenario.SessionId).And.NotContainEquivalentOf("session");
