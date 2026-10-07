@@ -141,7 +141,7 @@ groups:
               to: 0
             datasourceUid: prometheus
             model:
-              expr: time() - min(ledger_sync_last_success_timestamp_seconds)
+              expr: max((time() - ledger_sync_last_success_timestamp_seconds) or (ledger_sync_calls_remaining * 0 + 1000000000))
               instant: true
               intervalMs: 1000
               maxDataPoints: 43200
@@ -154,7 +154,7 @@ groups:
               conditions:
                 - evaluator:
                     type: gt
-                    params: [93600]
+                    params: [129600]
                   operator:
                     type: and
                   query:
@@ -163,11 +163,11 @@ groups:
                     type: last
                     params: []
               refId: C
-        for: 10m
+        for: 2h
         noDataState: OK
         execErrState: Alerting
         annotations:
-          summary: No bank sync has succeeded for more than 26 hours.
+          summary: No bank sync has succeeded for more than 36 hours, or a selected account has never synced.
         labels: {}
 
       - uid: ledger-bank-consent-expiring-14d
