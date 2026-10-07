@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Net;
 using Ledger.Domain.Ingestion;
 using Ledger.Repository;
 using Ledger.Service.Ingestion;
@@ -19,6 +20,7 @@ public static class ProductionConfigurationValidator
     private const string PrivateKeyPasswordKey = "EnableBanking:PrivateKeyPassword";
     private const string TimeZoneKey = "Ingestion:TimeZone";
     private const string ScheduleLocalTimeKey = "Ingestion:ScheduleLocalTime";
+    private const string KnownProxiesKey = "ReverseProxy:KnownProxies";
 
     /// <summary>Throws one InvalidOperationException listing every offending configuration key when the Production configuration is unsafe.</summary>
     public static void ThrowIfInvalid(IConfiguration configuration)
@@ -122,6 +124,22 @@ public static class ProductionConfigurationValidator
         }
 
         AddAggregatorCredentialProblems(configuration, offendingKeys);
+        AddReverseProxyProblems(configuration, offendingKeys);
+    }
+
+    /// <summary>
+    /// The bank is sent the operator's address, which is only the real one when the reverse proxy's own address is trusted to
+    /// forward it. At least one parseable proxy address is therefore required, and an entry that cannot be parsed is rejected
+    /// rather than silently ignored.
+    /// </summary>
+    private static void AddReverseProxyProblems(IConfiguration configuration, List<string> offendingKeys)
+    {
+        var proxies = configuration.GetSection(KnownProxiesKey).Get<string[]>() ?? [];
+
+        if (proxies.Length == 0 || proxies.Any(proxy => !IPAddress.TryParse(proxy, out _)))
+        {
+            offendingKeys.Add(KnownProxiesKey);
+        }
     }
 
     private static void AddAggregatorCredentialProblems(IConfiguration configuration, List<string> offendingKeys)

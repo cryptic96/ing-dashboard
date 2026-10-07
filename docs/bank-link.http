@@ -19,7 +19,7 @@ X-Api-Key: {{apiKey}}
 GET {{host}}/api/v1/bank/connections/{{connectionKey}}/accounts
 X-Api-Key: {{apiKey}}
 
-### Select the accounts to sync and name them. Do this right after approving: the first sync starts now and reads the longest history.
+### Select the accounts to sync and name them. Do this right after approving: the bank returns the full history only for about an hour, and the first sync starts now and reads whatever it still offers.
 PUT {{host}}/api/v1/bank/connections/{{connectionKey}}/accounts
 X-Api-Key: {{apiKey}}
 Content-Type: application/json

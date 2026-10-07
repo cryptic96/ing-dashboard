@@ -29,10 +29,10 @@ public class BalanceSnapshotEntity
     /// <summary>The date the bank says the balance is as of, or null when it gave none.</summary>
     public DateOnly? ReferenceDate { get; set; }
 
-    /// <summary>The balance the ledger expected from the previous snapshot and the booked transactions, or null when unknown.</summary>
+    /// <summary>The booked balance the ledger expected from the previous snapshot and the booked transactions, without pending items, or null when unknown.</summary>
     public decimal? ExpectedAmount { get; set; }
 
-    /// <summary>The bank's balance minus the expected one, or null when unknown.</summary>
+    /// <summary>The bank's balance minus the pending items live at the fetch, minus the expected one, or null when unknown.</summary>
     public decimal? DriftAmount { get; set; }
 
     /// <summary>True when the balance matched to the cent, false when it did not, null when no verdict was possible.</summary>

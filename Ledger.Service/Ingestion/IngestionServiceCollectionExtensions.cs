@@ -31,6 +31,8 @@ public static class IngestionServiceCollectionExtensions
         services.TryAddSingleton<IBankDataProvider, DisabledBankDataProvider>();
         services.AddScoped<SyncOrchestrator>();
 
+        services.AddSingleton<OrphanedRunRecovery>();
+        services.AddHostedService(provider => provider.GetRequiredService<OrphanedRunRecovery>());
         services.AddSingleton<ChannelSyncDispatcher>();
         services.AddSingleton<ISyncDispatcher>(provider => provider.GetRequiredService<ChannelSyncDispatcher>());
         services.AddHostedService<SyncWorker>();

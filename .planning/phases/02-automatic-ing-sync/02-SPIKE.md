@@ -235,3 +235,9 @@ No reconciler fix is needed before the real link.
 7. **Consent renewal and control panel link.** Open: confirm at the first real renewal that the Control Panel link persists and that a renewal also grants the full advertised validity. The initial 180 days are confirmed.
 8. **Deletion of old server backups.** Done on 2026-10-01. The nightly backup at 02:43 UTC succeeded under the new key. The operator then deleted the five older backups made with the exposed key. The orchestrator confirmed that only the new backup remains and that the host self-check backup lines all pass.
 9. **Spike teardown.** Mostly done: session revoked and state deleted on 2026-10-05, and all real spike data, keys and captures deleted the same day after the replay. Only the ING app check is pending (operator). See "Spike cleanup".
+
+## Live observation after go-live (2026-10-06)
+
+The server's first post-link sync (with PSU headers, longest strategy) succeeded in 29 seconds with 38 calls and inserted 3481 transactions: 2474 and 1007 on the two joint accounts, both reaching back to 2024-10-06 (two years). No reference sits on two rows. Two balance snapshots of kind expected were stored as the reconciliation baseline.
+
+**Correction to the booked-only conclusion:** the second account returned 2 pending transactions (no booking date, first seen on the link day). ING does expose pending items; the spike simply never caught one. The pending-to-booked reconciliation, kept as a safety net, is therefore in real use. The next scheduled sync shows how these two pending rows turn into booked ones (same reference, changed reference, or certain match).

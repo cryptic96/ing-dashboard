@@ -10,7 +10,7 @@ namespace Ledger.UnitTests.Ingestion;
 public class TransactionReconcilerTests
 {
     private static readonly FetchCoverage Coverage = new(null, true, 0);
-    private static readonly ReconcilerOptions Options = new();
+    private static readonly ReconcilerOptions Options = new(5, TimeZoneInfo.FindSystemTimeZoneById("Europe/Amsterdam"));
 
     [Fact]
     public void Unknown_booked_item_with_an_entry_reference_becomes_one_insert_under_that_reference()
@@ -182,6 +182,43 @@ public class TransactionReconcilerTests
         var act = () => TransactionReconciler.Plan([], [item], Coverage, Options);
 
         act.Should().Throw<BankProviderException>().Which.Kind.Should().Be(ProviderErrorKind.MalformedData);
+    }
+
+    [Theory]
+    [InlineData("counterparty")]
+    [InlineData("description")]
+    [InlineData("iban")]
+    [InlineData("reference")]
+    [InlineData("payload_value")]
+    [InlineData("payload_key")]
+    public void A_NUL_character_anywhere_in_the_stored_text_is_rejected_as_malformed_with_its_own_code(string where)
+    {
+        var item = Item(entryReference: "entry-010");
+        item = where switch
+        {
+            "counterparty" => item with { CounterpartyName = "Example\0Grocer" },
+            "description" => item with { Description = "Groceries\0" },
+            "iban" => item with { CounterpartyIban = "\0XX00SYNT0000000001" },
+            "reference" => item with { EntryReference = "entry\0-010" },
+            "payload_value" => item with { RawJson = "{\"note\":\"a\\u0000b\"}" },
+            _ => item with { RawJson = "{\"a\\u0000b\":\"x\"}" }
+        };
+
+        var act = () => TransactionReconciler.Plan([], [item], Coverage, Options);
+
+        var thrown = act.Should().Throw<BankProviderException>().Which;
+        thrown.Kind.Should().Be(ProviderErrorKind.MalformedData);
+        thrown.ProviderCode.Should().Be("text_nul");
+    }
+
+    [Fact]
+    public void An_escaped_backslash_followed_by_u0000_text_is_not_a_NUL_character()
+    {
+        var item = Item(entryReference: "entry-011") with { RawJson = "{\"note\":\"\\\\u0000\"}" };
+
+        var plan = TransactionReconciler.Plan([], [item], Coverage, Options);
+
+        plan.Inserts.Should().ContainSingle();
     }
 
     [Fact]
@@ -393,6 +430,23 @@ public class TransactionReconcilerTests
         plan.Drops.Should().BeEmpty();
     }
 
+    [Theory]
+    [InlineData("Europe/Amsterdam", 1)]
+    [InlineData("UTC", 0)]
+    public void The_day_a_dateless_pending_row_was_first_seen_is_worked_out_in_the_configured_zone(string zoneId, int expectedDrops)
+    {
+        var undated = PendingState("er:A", Day) with
+        {
+            TransactionDate = null,
+            FirstSeenAt = new DateTimeOffset(2026, 9, 19, 22, 30, 0, TimeSpan.Zero)
+        };
+        var options = new ReconcilerOptions(5, TimeZoneInfo.FindSystemTimeZoneById(zoneId));
+
+        var plan = TransactionReconciler.Plan([undated], [], new FetchCoverage(Day, true, 1), options);
+
+        plan.Drops.Should().HaveCount(expectedDrops);
+    }
+
     [Fact]
     public void Pending_row_present_in_the_feed_is_not_dropped()
     {
@@ -405,7 +459,7 @@ public class TransactionReconcilerTests
     }
 
     [Fact]
-    public void Merged_and_flagged_pending_rows_are_never_dropped()
+    public void Rows_merged_or_flagged_in_this_fetch_are_never_dropped_but_an_older_flag_does_not_protect_a_row_the_bank_stopped_listing()
     {
         var merged = PendingState("er:A", Day, amount: -5.00m);
         var firstDoubtful = PendingState("er:B1", Day, amount: -7.00m);
@@ -426,7 +480,19 @@ public class TransactionReconcilerTests
 
         plan.Merges.Should().ContainSingle().Which.PendingTransactionId.Should().Be(merged.Id);
         plan.FlagAmbiguous.Should().BeEquivalentTo([firstDoubtful.Id, secondDoubtful.Id]);
-        plan.Drops.Should().ContainSingle().Which.Should().Be(unrelated.Id);
+        plan.Drops.Should().BeEquivalentTo([alreadyFlagged.Id, unrelated.Id]);
+    }
+
+    [Fact]
+    public void A_flagged_pending_row_the_bank_still_lists_stays_pending_and_flagged()
+    {
+        var flagged = PendingState("er:A", Day) with { Flag = MatchFlag.Ambiguous };
+        var stillPending = BookedItem("A", Day, status: ProviderTransactionStatus.Pending);
+
+        var plan = TransactionReconciler.Plan([flagged], [stillPending], new FetchCoverage(null, true, 1), Options);
+
+        plan.Drops.Should().BeEmpty();
+        plan.FlagAmbiguous.Should().BeEmpty();
     }
 
     [Fact]

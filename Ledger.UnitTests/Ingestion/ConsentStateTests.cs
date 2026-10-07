@@ -73,11 +73,4 @@ public class ConsentStateTests
         ConsentState.Derive(ConnectionStatus.Superseded, Now.AddDays(100), Now).State.Should().Be(ConsentView.Superseded);
         ConsentState.Derive(ConnectionStatus.Superseded, Now.AddDays(-100), Now).State.Should().Be(ConsentView.Superseded);
     }
-
-    [Fact]
-    public void The_warning_period_can_be_changed()
-    {
-        ConsentState.Derive(ConnectionStatus.Active, Now.AddDays(20), Now, warnDays: 30).State.Should().Be(ConsentView.Expiring);
-        ConsentState.Derive(ConnectionStatus.Active, Now.AddDays(30), Now, warnDays: 30).State.Should().Be(ConsentView.Linked);
-    }
 }

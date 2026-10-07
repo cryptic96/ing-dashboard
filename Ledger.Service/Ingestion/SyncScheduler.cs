@@ -17,9 +17,12 @@ public class SyncScheduler(
     ILogger<SyncScheduler> logger) : BackgroundService
 {
     private static readonly TimeSpan TickInterval = TimeSpan.FromMinutes(1);
-    private static readonly TimeSpan UnselectedWarningAge = TimeSpan.FromMinutes(30);
+    private static readonly TimeSpan UnselectedFirstWarningAge = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan UnselectedSecondWarningAge = TimeSpan.FromMinutes(45);
+    private static readonly TimeSpan PostLinkRecoveryAge = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan PostLinkRecoveryWindow = TimeSpan.FromHours(2);
 
-    private readonly ConcurrentDictionary<string, bool> _warnedConnections = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<(string ConnectionKey, int Stage), bool> _warnedConnections = new();
     private ScheduleSettings? _settings;
 
     /// <summary>Starts every sync that is due at the given instant and returns how many runs were started.</summary>
@@ -51,22 +54,6 @@ public class SyncScheduler(
         return started;
     }
 
-    /// <summary>Marks every run left unfinished by a stopped process as abandoned and returns how many there were.</summary>
-    public async Task<int> AbandonOrphanedRunsAsync(CancellationToken cancellationToken)
-    {
-        using var scope = scopeFactory.CreateScope();
-        var runStore = scope.ServiceProvider.GetRequiredService<ISyncRunStore>();
-
-        var abandoned = await runStore.AbandonUnfinishedAsync(timeProvider.GetUtcNow(), cancellationToken);
-
-        if (abandoned > 0)
-        {
-            logger.LogWarning("{Count} sync run(s) left unfinished by a restart were marked abandoned.", abandoned);
-        }
-
-        return abandoned;
-    }
-
     /// <inheritdoc />
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -78,7 +65,6 @@ public class SyncScheduler(
         try
         {
             ResolveSettings();
-            await AbandonOrphanedRunsAsync(stoppingToken);
             await TickAsync(stoppingToken);
 
             using var timer = new PeriodicTimer(TickInterval, timeProvider);
@@ -129,6 +115,17 @@ public class SyncScheduler(
                 return false;
             }
 
+            var orchestrator = services.GetRequiredService<SyncOrchestrator>();
+
+            if (await NeedsPostLinkRecoveryAsync(connection, now, services, cancellationToken))
+            {
+                logger.LogWarning(
+                    "Connection {ConnectionKey} has selected accounts but never synced, so its first sync is started now as a recovery.",
+                    connection.ConnectionKey);
+                await orchestrator.SyncConnectionAsync(connection.Id, SyncTrigger.PostLink, FetchContext.Background, cancellationToken);
+                return true;
+            }
+
             var runStore = services.GetRequiredService<ISyncRunStore>();
             var runs = await runStore.ListRunsSinceAsync(
                 connection.Id,
@@ -143,7 +140,6 @@ public class SyncScheduler(
             }
 
             var trigger = decision == SyncDecisionKind.Retry ? SyncTrigger.Retry : SyncTrigger.Scheduled;
-            var orchestrator = services.GetRequiredService<SyncOrchestrator>();
 
             await orchestrator.SyncConnectionAsync(connection.Id, trigger, FetchContext.Background, cancellationToken);
             return true;
@@ -167,13 +163,42 @@ public class SyncScheduler(
         }
     }
 
+    /// <summary>
+    /// Whether a connection that was approved a few minutes ago, has selected accounts and has never synced needs its first sync
+    /// started here. The queued request for it lives in memory only, so a restart in between would lose it, and the first sync
+    /// must read the full history while the bank still returns it. Beyond the window the daily schedule takes over.
+    /// </summary>
+    private static async Task<bool> NeedsPostLinkRecoveryAsync(
+        ConnectionSummary connection,
+        DateTimeOffset now,
+        IServiceProvider services,
+        CancellationToken cancellationToken)
+    {
+        var age = now - connection.AuthorizedAt;
+
+        if (age < PostLinkRecoveryAge || age > PostLinkRecoveryWindow)
+        {
+            return false;
+        }
+
+        return !await services.GetRequiredService<IBankConnectionStore>().HasAnySyncRunAsync(connection.Id, cancellationToken);
+    }
+
+    /// <summary>
+    /// Warns, early and again later, about a connection that was approved but has no selected account and never synced. The bank
+    /// returns the full history only for about an hour after approval, so the first warning comes within minutes while there is
+    /// still time to act, and the second says the window has probably closed and the connection must be renewed for a full read.
+    /// </summary>
     private async Task WarnOnceIfLongHistoryMayBeLostAsync(
         ConnectionSummary connection,
         DateTimeOffset now,
         IServiceProvider services,
         CancellationToken cancellationToken)
     {
-        if (now - connection.AuthorizedAt <= UnselectedWarningAge || _warnedConnections.ContainsKey(connection.ConnectionKey))
+        var age = now - connection.AuthorizedAt;
+        var stage = age > UnselectedSecondWarningAge ? 2 : age > UnselectedFirstWarningAge ? 1 : 0;
+
+        if (stage == 0 || _warnedConnections.ContainsKey((connection.ConnectionKey, stage)))
         {
             return;
         }
@@ -181,13 +206,24 @@ public class SyncScheduler(
         var hasSynced = await services.GetRequiredService<IBankConnectionStore>()
             .HasAnySyncRunAsync(connection.Id, cancellationToken);
 
-        if (!hasSynced && _warnedConnections.TryAdd(connection.ConnectionKey, true))
+        if (hasSynced || !_warnedConnections.TryAdd((connection.ConnectionKey, stage), true))
+        {
+            return;
+        }
+
+        if (stage == 1)
         {
             logger.LogWarning(
-                "Connection {ConnectionKey} was authorised more than {Minutes} minutes ago and still has no selected account or sync, so the bank may no longer return its full history. Select the accounts to sync.",
+                "Connection {ConnectionKey} was authorised {Minutes} minutes ago and has no selected account or sync yet. Select the accounts to sync now: the bank returns the full history only for about an hour after approval.",
                 connection.ConnectionKey,
-                (int)UnselectedWarningAge.TotalMinutes);
+                (int)UnselectedFirstWarningAge.TotalMinutes);
+            return;
         }
+
+        logger.LogWarning(
+            "Connection {ConnectionKey} was authorised more than {Minutes} minutes ago and still has no selected account or sync, so the bank probably no longer returns its full history. Select the accounts and renew the connection to read the full history.",
+            connection.ConnectionKey,
+            (int)UnselectedSecondWarningAge.TotalMinutes);
     }
 
     private ScheduleSettings ResolveSettings()

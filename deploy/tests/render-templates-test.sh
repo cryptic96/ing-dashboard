@@ -227,6 +227,23 @@ else
   pass "provision_validate_age_public_key: rejects more than one key/line"
 fi
 
+###
+### --- msmtp log file exists for the sandboxed installer ------------------
+###
+
+msmtp_log_dir="$(mktemp -d)"
+msmtp_log="${msmtp_log_dir}/msmtp.log"
+services_ensure_msmtp_log "$msmtp_log"
+assert_eq "services_ensure_msmtp_log: creates a missing log file" "1" "$([[ -f "$msmtp_log" ]] && echo 1 || echo 0)"
+assert_eq "services_ensure_msmtp_log: the new log file is mode 640" "640" "$(stat -c '%a' "$msmtp_log")"
+
+printf 'earlier mail history\n' > "$msmtp_log"
+chmod 600 "$msmtp_log"
+services_ensure_msmtp_log "$msmtp_log"
+assert_eq "services_ensure_msmtp_log: an existing log file keeps its content" "earlier mail history" "$(cat "$msmtp_log")"
+assert_eq "services_ensure_msmtp_log: an existing log file keeps its mode" "600" "$(stat -c '%a' "$msmtp_log")"
+rm -rf "$msmtp_log_dir"
+
 echo "----"
 echo "${TESTS_RUN} test(s) run, ${FAILURES} failure(s)"
 if [[ "$FAILURES" -gt 0 ]]; then

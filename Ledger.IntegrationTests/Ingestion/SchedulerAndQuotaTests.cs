@@ -245,7 +245,7 @@ public class SchedulerAndQuotaTests(DatabaseFixture fixture)
     }
 
     [Fact]
-    public async Task A_run_left_unfinished_by_a_restart_is_marked_abandoned_when_the_scheduler_starts()
+    public async Task A_run_left_unfinished_by_a_restart_is_marked_abandoned_when_the_service_starts_even_with_the_scheduler_off()
     {
         var scenario = SyntheticScenario(pagesForFirstAccount: 1);
         var start = AmsterdamInstant(Monday, 5, 0);
@@ -263,7 +263,7 @@ public class SchedulerAndQuotaTests(DatabaseFixture fixture)
             fixture,
             scenario,
             start.AddMinutes(10),
-            new Dictionary<string, string?> { ["Ingestion:SchedulerEnabled"] = "true" },
+            new Dictionary<string, string?> { ["Ingestion:SchedulerEnabled"] = "false" },
             databaseName);
 
         var abandoned = await second.WaitForRunOutcomeAsync(runId);
@@ -292,6 +292,17 @@ public class SchedulerAndQuotaTests(DatabaseFixture fixture)
         runs.Select(run => (run.Trigger, run.Outcome)).Should().Equal(
             ("scheduled", "abandoned"),
             ("retry", "succeeded"));
+    }
+
+    [Fact]
+    public async Task Waiting_for_runs_that_never_finish_fails_with_a_descriptive_timeout_instead_of_returning_early()
+    {
+        await using var host = await SchedulerTestHost.StartAsync(fixture, SyntheticScenario(pagesForFirstAccount: 1), AmsterdamInstant(Monday, 14, 0));
+
+        var act = () => host.WaitForFinishedRunsAsync(1, TimeSpan.FromMilliseconds(300));
+
+        var timeout = await act.Should().ThrowAsync<TimeoutException>();
+        timeout.Which.Message.Should().Contain("1 finished sync runs").And.Contain("0 finished and 0 unfinished runs");
     }
 
     [Fact]
@@ -472,23 +483,35 @@ public class SchedulerAndQuotaTests(DatabaseFixture fixture)
     }
 
     [Fact]
-    public async Task A_connection_without_a_selected_account_warns_exactly_once_after_thirty_minutes()
+    public async Task A_connection_without_a_selected_account_warns_within_minutes_and_once_more_when_the_history_window_has_closed()
     {
         var scenario = SyntheticScenario(pagesForFirstAccount: 1);
         await using var host = await SchedulerTestHost.StartAsync(fixture, scenario, AmsterdamInstant(Monday, 5, 0));
         var linked = await host.LinkAsync(selectFirstAccountOnly: false, selectAnyAccount: false);
 
-        host.Clock.Advance(TimeSpan.FromMinutes(10));
+        host.Clock.Advance(TimeSpan.FromMinutes(4));
         await host.RunDueAsync();
         host.WarningsNaming(linked.ConnectionKey).Should().BeEmpty();
 
-        for (var tick = 0; tick < 4; tick++)
+        host.Clock.Advance(TimeSpan.FromMinutes(2));
+        await host.RunDueAsync();
+        host.Clock.Advance(TimeSpan.FromMinutes(1));
+        await host.RunDueAsync();
+        host.WarningsNaming(linked.ConnectionKey).Should().ContainSingle().Which.Should().Contain("about an hour");
+
+        host.Clock.Advance(TimeSpan.FromMinutes(33));
+        await host.RunDueAsync();
+        host.WarningsNaming(linked.ConnectionKey).Should().ContainSingle();
+
+        for (var tick = 0; tick < 3; tick++)
         {
-            host.Clock.Advance(TimeSpan.FromMinutes(11));
+            host.Clock.Advance(TimeSpan.FromMinutes(3));
             await host.RunDueAsync();
         }
 
-        host.WarningsNaming(linked.ConnectionKey).Should().ContainSingle();
+        var warnings = host.WarningsNaming(linked.ConnectionKey);
+        warnings.Should().HaveCount(2);
+        warnings[1].Should().Contain("renew the connection");
         (await host.ReadRunsAsync()).Should().BeEmpty();
     }
 
@@ -713,25 +736,18 @@ public sealed class SchedulerTestHost : IAsyncDisposable
         return await client.SendAsync(request, TestContext.Current.CancellationToken);
     }
 
-    /// <summary>Waits up to ten seconds until the expected number of runs have finished and returns every run.</summary>
-    public async Task<IReadOnlyList<RunRow>> WaitForFinishedRunsAsync(int expected)
+    /// <summary>
+    /// Waits until at least the expected number of runs have finished and none is still running, then returns every run, so the
+    /// caller sees the settled state. Throws a <see cref="TimeoutException"/> when that never happens.
+    /// </summary>
+    public async Task<IReadOnlyList<RunRow>> WaitForFinishedRunsAsync(int expected, TimeSpan? timeout = null)
     {
-        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(10);
-        IReadOnlyList<RunRow> runs = [];
-
-        while (DateTimeOffset.UtcNow < deadline)
-        {
-            runs = await ReadRunsAsync();
-
-            if (runs.Count(run => run.Outcome is not null) >= expected)
-            {
-                return runs;
-            }
-
-            await Task.Delay(TimeSpan.FromMilliseconds(100), TestContext.Current.CancellationToken);
-        }
-
-        return runs;
+        return await Wait.UntilAsync(
+            ReadRunsAsync,
+            runs => runs.Count(run => run.Outcome is not null) >= expected && runs.All(run => run.Outcome is not null),
+            $"{expected} finished sync runs and none still running",
+            runs => $"{runs.Count(run => run.Outcome is not null)} finished and {runs.Count(run => run.Outcome is null)} unfinished runs",
+            timeout);
     }
 
     /// <summary>Reads the stored status of every connection, oldest first.</summary>
@@ -799,31 +815,24 @@ public sealed class SchedulerTestHost : IAsyncDisposable
         return await store.StartAsync(connectionId, trigger, Clock.GetUtcNow(), TestContext.Current.CancellationToken);
     }
 
-    /// <summary>Marks unfinished runs as abandoned the way the scheduler does when it starts.</summary>
+    /// <summary>Marks unfinished runs as abandoned the way the service does when it starts.</summary>
     public async Task AbandonOrphanedRunsAsync()
     {
-        var scheduler = Factory.Services.GetRequiredService<SyncScheduler>();
-        await scheduler.AbandonOrphanedRunsAsync(TestContext.Current.CancellationToken);
+        var recovery = Factory.Services.GetRequiredService<OrphanedRunRecovery>();
+        await recovery.AbandonAsync(Clock.GetUtcNow(), TestContext.Current.CancellationToken);
     }
 
-    /// <summary>Waits up to ten seconds for a run to have an outcome and returns it, or null when it never gets one.</summary>
-    public async Task<string?> WaitForRunOutcomeAsync(Guid runId)
+    /// <summary>Waits for a run to have an outcome and returns it; throws a <see cref="TimeoutException"/> when it never gets one.</summary>
+    public async Task<string> WaitForRunOutcomeAsync(Guid runId, TimeSpan? timeout = null)
     {
-        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(10);
+        var run = await Wait.UntilAsync(
+            async () => (await ReadRunsAsync()).Single(candidate => candidate.Id == runId),
+            candidate => candidate.Outcome is not null,
+            "a sync run to record an outcome",
+            candidate => "no outcome yet",
+            timeout);
 
-        while (DateTimeOffset.UtcNow < deadline)
-        {
-            var run = (await ReadRunsAsync()).Single(candidate => candidate.Id == runId);
-
-            if (run.Outcome is not null)
-            {
-                return run.Outcome;
-            }
-
-            await Task.Delay(TimeSpan.FromMilliseconds(100), TestContext.Current.CancellationToken);
-        }
-
-        return null;
+        return run.Outcome!;
     }
 
     /// <inheritdoc />
@@ -875,10 +884,10 @@ public sealed class RecordingSyncDispatcher : ISyncDispatcher
     public IReadOnlyList<SyncRequest> Requests => _requests.ToArray();
 
     /// <inheritdoc />
-    public bool TryEnqueue(SyncRequest request)
+    public EnqueueResult TryEnqueue(SyncRequest request)
     {
         _requests.Enqueue(request);
-        return true;
+        return EnqueueResult.Queued;
     }
 }
 

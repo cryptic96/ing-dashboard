@@ -22,7 +22,7 @@ public partial class ApiKeyAuthTests(DatabaseFixture fixture)
     {
         await using var factory = new LedgerWebApplicationFactory(fixture.ConnectionStringFor("ledger_runtime"));
         using var client = factory.CreateApiClient();
-        await WaitUntilReadyAsync(factory);
+        await Wait.UntilReadyAsync(factory);
 
         var endpointDataSource = factory.Services.GetRequiredService<EndpointDataSource>();
         var routeEndpoints = endpointDataSource.Endpoints.OfType<RouteEndpoint>().ToList();
@@ -51,7 +51,7 @@ public partial class ApiKeyAuthTests(DatabaseFixture fixture)
 
         await using var factory = new LedgerWebApplicationFactory(fixture.ConnectionStringFor("ledger_runtime"));
         using var client = factory.CreateApiClient();
-        await WaitUntilReadyAsync(factory);
+        await Wait.UntilReadyAsync(factory);
 
         await AssertUnauthorizedAsync(client, "");
         await AssertUnauthorizedAsync(client, "not-a-valid-token");
@@ -68,7 +68,7 @@ public partial class ApiKeyAuthTests(DatabaseFixture fixture)
 
         await using var factory = new LedgerWebApplicationFactory(fixture.ConnectionStringFor("ledger_runtime"));
         using var client = factory.CreateApiClient();
-        await WaitUntilReadyAsync(factory);
+        await Wait.UntilReadyAsync(factory);
 
         using var response = await SendStatusRequestAsync(client, token);
 
@@ -87,7 +87,7 @@ public partial class ApiKeyAuthTests(DatabaseFixture fixture)
 
         await using var factory = new LedgerWebApplicationFactory(fixture.ConnectionStringFor("ledger_runtime"));
         using var client = factory.CreateApiClient();
-        await WaitUntilReadyAsync(factory);
+        await Wait.UntilReadyAsync(factory);
 
         using (var beforeRevoke = await SendStatusRequestAsync(client, token))
         {
@@ -111,7 +111,7 @@ public partial class ApiKeyAuthTests(DatabaseFixture fixture)
 
         await using var factory = new LedgerWebApplicationFactory(fixture.ConnectionStringFor("ledger_runtime"));
         using var client = factory.CreateApiClient();
-        await WaitUntilReadyAsync(factory);
+        await Wait.UntilReadyAsync(factory);
 
         var tokens = Enumerable.Range(0, 40)
             .Select(i => (i % 3) switch
@@ -150,7 +150,7 @@ public partial class ApiKeyAuthTests(DatabaseFixture fixture)
 
         await using var factory = new LedgerWebApplicationFactory(fixture.ConnectionStringFor("ledger_runtime"));
         using var client = factory.CreateApiClient();
-        await WaitUntilReadyAsync(factory);
+        await Wait.UntilReadyAsync(factory);
 
         using var healthRequest = new HttpRequestMessage(HttpMethod.Get, "/health");
         healthRequest.Headers.Add("X-Api-Key", token);
@@ -175,7 +175,7 @@ public partial class ApiKeyAuthTests(DatabaseFixture fixture)
 
         await using var factory = new LedgerWebApplicationFactory(fixture.ConnectionStringFor("ledger_runtime"));
         using var client = factory.CreateApiClient();
-        await WaitUntilReadyAsync(factory);
+        await Wait.UntilReadyAsync(factory);
 
         using (await SendStatusRequestAsync(client, validToken))
         {
@@ -250,31 +250,6 @@ public partial class ApiKeyAuthTests(DatabaseFixture fixture)
         var optionsBuilder = new DbContextOptionsBuilder<LedgerDbContext>();
         optionsBuilder.UseNpgsql(fixture.ConnectionStringFor("ledger_runtime"));
         return new LedgerDbContext(optionsBuilder.Options);
-    }
-
-    private static async Task WaitUntilReadyAsync(LedgerWebApplicationFactory factory)
-    {
-        using var opsClient = factory.CreateOpsClient();
-        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(30);
-
-        while (DateTimeOffset.UtcNow < deadline)
-        {
-            try
-            {
-                using var response = await opsClient.GetAsync("/health", TestContext.Current.CancellationToken);
-                if (response.StatusCode == HttpStatusCode.OK)
-                {
-                    return;
-                }
-            }
-            catch (HttpRequestException)
-            {
-            }
-
-            await Task.Delay(TimeSpan.FromMilliseconds(250), TestContext.Current.CancellationToken);
-        }
-
-        throw new TimeoutException("The ops endpoint never became healthy within the timeout.");
     }
 
     private sealed record StatusResponseModel(string Version, string Client);

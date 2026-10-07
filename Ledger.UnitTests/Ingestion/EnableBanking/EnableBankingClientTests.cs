@@ -158,6 +158,39 @@ public class EnableBankingClientTests
         body.RootElement.EnumerateObject().Select(property => property.Name).Should().Equal("code");
     }
 
+    [Theory]
+    [InlineData("""{"session_id":"SESSION_ID","aspsp":{"name":"ING","country":"NL"},"accounts":[]}""")]
+    [InlineData("""{"session_id":"SESSION_ID","access":{"valid_until":"2027-03-29T10:15:30+00:00"},"accounts":[{"uid":"11111111-1111-1111-1111-111111111111","currency":"EUR","cash_account_type":"CACC"}]}""")]
+    public async Task A_session_whose_answer_cannot_be_used_is_ended_at_the_bank_before_the_failure_is_reported(string answerTemplate)
+    {
+        using var harness = new ClientHarness();
+        var sessionPath = $"/sessions/{EnableBankingFixtures.SessionId}";
+        harness.Handler.Respond("POST", "/sessions", HttpStatusCode.OK, answerTemplate.Replace("SESSION_ID", EnableBankingFixtures.SessionId, StringComparison.Ordinal));
+        harness.Handler.Respond("DELETE", sessionPath, HttpStatusCode.OK, "{\"message\":\"OK\"}");
+
+        var act = () => harness.Client.CompleteAuthorizationAsync("code-value", CancellationToken.None);
+
+        var thrown = (await act.Should().ThrowAsync<BankProviderException>()).Which;
+        thrown.Kind.Should().Be(ProviderErrorKind.MalformedData);
+        harness.Handler.Requests.Select(request => (request.Method, request.Path))
+            .Should().Equal(("POST", "/sessions"), ("DELETE", sessionPath));
+    }
+
+    [Fact]
+    public async Task A_failure_to_end_an_unusable_session_does_not_hide_the_original_failure()
+    {
+        using var harness = new ClientHarness();
+        var sessionPath = $"/sessions/{EnableBankingFixtures.SessionId}";
+        harness.Handler.Respond("POST", "/sessions", HttpStatusCode.OK, $$"""{"session_id":"{{EnableBankingFixtures.SessionId}}","accounts":[]}""");
+        harness.Handler.Respond("DELETE", sessionPath, HttpStatusCode.InternalServerError, "{}");
+
+        var act = () => harness.Client.CompleteAuthorizationAsync("code-value", CancellationToken.None);
+
+        var thrown = (await act.Should().ThrowAsync<BankProviderException>()).Which;
+        thrown.Kind.Should().Be(ProviderErrorKind.MalformedData);
+        thrown.ProviderCode.Should().Be("session_without_validity");
+    }
+
     [Fact]
     public async Task A_rejected_code_fails_as_a_rejected_consent_without_echoing_the_code_or_the_body()
     {

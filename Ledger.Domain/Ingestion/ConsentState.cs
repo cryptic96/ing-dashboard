@@ -41,8 +41,11 @@ public record ConsentSnapshot(ConsentView State, double DaysUntilExpiry);
 /// <summary>Derives the consent state from what is stored and the current time, rather than trusting a stored label.</summary>
 public static class ConsentState
 {
-    /// <summary>The default number of days before the end at which a consent counts as expiring.</summary>
-    public const int DefaultWarnDays = 14;
+    /// <summary>
+    /// The number of days before the end at which a consent counts as expiring. The account status view, the expiry alert rules
+    /// and the monitoring documentation use the same number, so it is a constant rather than a setting.
+    /// </summary>
+    public const int WarnDays = 14;
 
     /// <summary>
     /// Derives the state: revoked and superseded connections keep those states, a consent the provider reported expired is
@@ -52,8 +55,7 @@ public static class ConsentState
     public static ConsentSnapshot Derive(
         ConnectionStatus status,
         DateTimeOffset validUntil,
-        DateTimeOffset now,
-        int warnDays = DefaultWarnDays)
+        DateTimeOffset now)
     {
         var remaining = validUntil - now;
 
@@ -63,7 +65,7 @@ public static class ConsentState
             ConnectionStatus.Superseded => ConsentView.Superseded,
             ConnectionStatus.ProviderExpired => ConsentView.Expired,
             _ when remaining <= TimeSpan.Zero => ConsentView.Expired,
-            _ when remaining < TimeSpan.FromDays(warnDays) => ConsentView.Expiring,
+            _ when remaining < TimeSpan.FromDays(WarnDays) => ConsentView.Expiring,
             _ => ConsentView.Linked
         };
 

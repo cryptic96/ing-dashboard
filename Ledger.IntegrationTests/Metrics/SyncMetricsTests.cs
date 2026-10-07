@@ -253,6 +253,30 @@ public class SyncMetricsTests(DatabaseFixture fixture)
     }
 
     [Fact]
+    public async Task Two_mismatches_weeks_apart_do_not_raise_the_drift_flag_because_the_drift_did_not_persist()
+    {
+        var scenario = Scenario(sessionEndsAfterDays: 90);
+        var account = scenario.Accounts[0];
+        scenario.SetBalances(account, Balances(1000.00m, Monday.AddDays(-1)));
+        await using var host = await StartAsync(scenario, At(Monday, 14, 0));
+        var linked = await host.LinkAsync(selectFirstAccountOnly: true);
+        var series = $"ledger_balance_reconciliation_drift{{account=\"{linked.Accounts[0].AccountKey}\"}}";
+
+        await SyncAsync(host, linked.Id);
+
+        scenario.SetBalances(account, Balances(9999.99m, Monday));
+        host.Clock.SetUtcNow(At(Tuesday, 14, 0));
+        await SyncAsync(host, linked.Id);
+
+        scenario.SetBalances(account, Balances(10000.00m, Tuesday.AddDays(20)));
+        host.Clock.SetUtcNow(At(Tuesday.AddDays(21), 14, 0));
+        await SyncAsync(host, linked.Id);
+        await RefreshAsync(host);
+
+        ValueOf(await ScrapeAsync(host), series).Should().Be(0);
+    }
+
+    [Fact]
     public async Task Pending_transactions_with_an_ambiguous_match_are_counted_per_account()
     {
         var scenario = SyntheticBankScenario.Create();

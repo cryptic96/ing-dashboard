@@ -83,7 +83,9 @@ public sealed class EnableBankingPipelineTests(DatabaseFixture fixture) : IDispo
         second.Outcome.Should().Be(SyncOutcome.Succeeded);
         second.Inserted.Should().Be(0);
         (await IngestionTestSupport.ReadCountsAsync(fixture, jointKey)).Should().Be(before);
-        fake.Requests.Where(IsTransactionRequest).Skip(3).Should().OnlyContain(request => request.Parameter("date_from") != null);
+        var secondFetch = fake.Requests.Where(IsTransactionRequest).Skip(3).ToList();
+        secondFetch.Should().HaveCount(3, "the second sync fetched the same three pages again");
+        secondFetch.Should().OnlyContain(request => request.Parameter("date_from") != null);
 
         (await IngestionTestSupport.CountIdentityViolationsAsync(fixture)).Should().Be(0);
         (await host.ReadAsync($"SELECT provider FROM public.accounts WHERE account_key = '{jointKey}'")).Single().Should().Be("enablebanking");
@@ -177,23 +179,12 @@ public sealed class EnableBankingPipelineTests(DatabaseFixture fixture) : IDispo
             ["Ingestion:BackgroundCallsPerDay"] = "1000"
         };
 
-        const string providerVariable = "Ingestion__Provider";
-        Environment.SetEnvironmentVariable(providerVariable, "EnableBanking");
-
-        LedgerWebApplicationFactory factory;
-
-        try
-        {
-            factory = new LedgerWebApplicationFactory(
-                fixture.ConnectionStringFor("ledger_runtime"),
-                configureTestServices: services =>
-                    services.AddHttpClient<EnableBankingClient>().ConfigurePrimaryHttpMessageHandler(() => fake),
-                additionalConfiguration: configuration);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable(providerVariable, null);
-        }
+        var factory = new LedgerWebApplicationFactory(
+            fixture.ConnectionStringFor("ledger_runtime"),
+            configureTestServices: services =>
+                services.AddHttpClient<EnableBankingClient>().ConfigurePrimaryHttpMessageHandler(() => fake),
+            additionalConfiguration: configuration,
+            startupEnvironment: new Dictionary<string, string?> { ["Ingestion__Provider"] = "EnableBanking" });
 
         return await BankLinkTestHost.StartWithFactoryAsync(fixture, factory);
     }

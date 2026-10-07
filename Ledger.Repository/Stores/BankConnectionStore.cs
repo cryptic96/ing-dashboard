@@ -21,18 +21,60 @@ public class BankConnectionStore(LedgerDbContext dbContext) : IBankConnectionSto
         DateTimeOffset authorizedAt,
         CancellationToken cancellationToken)
     {
-        var createdAt = DateTimeOffset.UtcNow;
-        var connection = NewConnection(provider, aspspName, aspspCountry, session, protectedSessionId, authorizedAt, createdAt);
+        await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
 
-        dbContext.BankConnections.Add(connection);
-        var attached = await AttachAccountsAsync(connection.Id, provider, session, createdAt, cancellationToken);
+        try
+        {
+            var createdAt = DateTimeOffset.UtcNow;
+            var connection = NewConnection(provider, aspspName, aspspCountry, session, protectedSessionId, authorizedAt, createdAt);
 
-        await dbContext.SaveChangesAsync(cancellationToken);
+            dbContext.BankConnections.Add(connection);
+            var attached = await AttachAccountsAsync(connection.Id, provider, session, createdAt, cancellationToken);
 
-        return new LinkedConnection(
-            connection.Id,
-            connection.ConnectionKey,
-            attached.Accounts.Select(ToLinkedAccount).ToList());
+            await dbContext.SaveChangesAsync(cancellationToken);
+
+            if (attached.Mapped > 0)
+            {
+                await SupersedeConnectionsWithoutAccountsAsync(connection.Id, provider, createdAt, cancellationToken);
+            }
+
+            await transaction.CommitAsync(cancellationToken);
+
+            return new LinkedConnection(
+                connection.Id,
+                connection.ConnectionKey,
+                attached.Accounts.Select(ToLinkedAccount).ToList());
+        }
+        catch
+        {
+            dbContext.ChangeTracker.Clear();
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Marks every other live connection of the provider that no longer owns an account as superseded by the new one. Linking
+    /// accounts the ledger already knew moves them off their old connection, which would otherwise stay active with its own
+    /// consent expiry and nothing to sync.
+    /// </summary>
+    private async Task SupersedeConnectionsWithoutAccountsAsync(
+        Guid newConnectionId,
+        string provider,
+        DateTimeOffset at,
+        CancellationToken cancellationToken)
+    {
+        await dbContext.BankConnections
+            .Where(candidate => candidate.Id != newConnectionId
+                && candidate.Provider == provider
+                && (candidate.Status == BankConnectionEntity.Statuses.Active
+                    || candidate.Status == BankConnectionEntity.Statuses.ProviderExpired)
+                && !dbContext.Accounts.Any(account => account.BankConnectionId == candidate.Id))
+            .ExecuteUpdateAsync(
+                setters => setters
+                    .SetProperty(candidate => candidate.Status, BankConnectionEntity.Statuses.Superseded)
+                    .SetProperty(candidate => candidate.SupersededById, (Guid?)newConnectionId)
+                    .SetProperty(candidate => candidate.ClosedAt, (DateTimeOffset?)at),
+                cancellationToken);
     }
 
     /// <inheritdoc />
@@ -97,18 +139,32 @@ public class BankConnectionStore(LedgerDbContext dbContext) : IBankConnectionSto
         CancellationToken cancellationToken)
     {
         var text = EnumText.ToText(status);
-        var closedAt = status is ConnectionStatus.Revoked or ConnectionStatus.Superseded ? (DateTimeOffset?)at : null;
-
-        var onlyFromActive = status == ConnectionStatus.ProviderExpired;
+        var closing = status is ConnectionStatus.Revoked or ConnectionStatus.Superseded;
+        var allowedFrom = StatusesFrom(status);
 
         await dbContext.BankConnections
-            .Where(connection => connection.Id == connectionId
-                && (!onlyFromActive || connection.Status == BankConnectionEntity.Statuses.Active))
+            .Where(connection => connection.Id == connectionId && allowedFrom.Contains(connection.Status))
             .ExecuteUpdateAsync(
                 setters => setters
                     .SetProperty(connection => connection.Status, text)
-                    .SetProperty(connection => connection.ClosedAt, connection => closedAt ?? connection.ClosedAt),
+                    .SetProperty(connection => connection.ClosedAt, connection => closing ? connection.ClosedAt ?? at : connection.ClosedAt),
                 cancellationToken);
+    }
+
+    private static string[] StatusesFrom(ConnectionStatus target)
+    {
+        return target switch
+        {
+            ConnectionStatus.Active => [BankConnectionEntity.Statuses.ProviderExpired],
+            ConnectionStatus.ProviderExpired => [BankConnectionEntity.Statuses.Active],
+            ConnectionStatus.Revoked =>
+            [
+                BankConnectionEntity.Statuses.Active,
+                BankConnectionEntity.Statuses.ProviderExpired,
+                BankConnectionEntity.Statuses.Superseded
+            ],
+            _ => [BankConnectionEntity.Statuses.Active, BankConnectionEntity.Statuses.ProviderExpired]
+        };
     }
 
     private static BankConnectionEntity NewConnection(
@@ -146,9 +202,14 @@ public class BankConnectionStore(LedgerDbContext dbContext) : IBankConnectionSto
         var mapped = 0;
         var created = 0;
 
-        for (var index = 0; index < session.Accounts.Count; index++)
+        var distinctAccounts = session.Accounts
+            .GroupBy(providerAccount => providerAccount.IdentificationHash, StringComparer.Ordinal)
+            .Select(group => group.First())
+            .ToList();
+
+        for (var index = 0; index < distinctAccounts.Count; index++)
         {
-            var providerAccount = session.Accounts[index];
+            var providerAccount = distinctAccounts[index];
 
             var account = await dbContext.Accounts.SingleOrDefaultAsync(
                 existing => existing.Provider == provider && existing.IdentificationHash == providerAccount.IdentificationHash,

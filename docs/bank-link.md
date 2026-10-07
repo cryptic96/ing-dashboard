@@ -32,21 +32,25 @@ You need an account with the aggregator, a few minutes on the host and the bank 
    sudo systemctl restart ledger.service
    ```
 
-   `configure` checks both values, selects the aggregator as the transaction source and stores the callback address. After the restart the service refuses to start in production if the application id is missing or not a GUID, if the key file is missing or if its password is empty. The error names only the setting, never its value.
+   `configure` checks both values, selects the aggregator as the transaction source and stores the callback address. After the restart the service refuses to start in production if the application id is missing or not a GUID, if the key file is missing or if its password is empty, or if `ReverseProxy__KnownProxies__0` does not hold the address of your reverse proxy (provisioning writes it): without it the bank would be told the proxy's address as yours. The error names only the setting, never its value.
 6. **Keep the key safe.** Copy the key file `/etc/ledger/enablebanking-key.pem` and the environment file `/etc/ledger/ledger.env` into the password manager now. Database backups never contain either of them, on purpose, so losing the host without a copy means generating a new key and registering it again. Never put either file in a repository, a chat or an email.
 
 The settings these steps write are listed, with placeholder values, in `deploy/ledger.env.example`. More background on the key files is in `docs/lxc-setup.md`.
 
 ## Linking and selecting
 
-Do these two steps back to back. The bank hands out the full transaction history only for a short time right after you approve the consent, and a later sync can only reach back about 90 days. The first sync starts the moment you confirm the account selection.
+Do these steps back to back, and select the accounts right after you approve the consent. The bank hands out the full transaction history (up to two years) only for about an hour after you approve; a later sync can only reach back about 90 days, and no later sync can recover what was missed. The first sync starts the moment you confirm the account selection and takes whatever history the bank still offers.
+
+Accounts are chosen first on purpose: an account you do not select is recorded but never read, so its transactions never reach the ledger. That is also why the ledger cannot start reading everything by itself right after approval.
+
+The ledger keeps reminding you while a connection waits for its selection. The page the bank sends your browser to says so, the connection list shows `selectionPending` with a hint, and the service log carries a warning five minutes after approval and a second one after 45 minutes, when the full history has probably gone. If you miss the window, select the accounts anyway and then renew the connection: the renewal is approved right then, so its sync asks for the longest history again and fills the gap.
 
 The requests are ready to run in `docs/bank-link.http`; every endpoint is described in `docs/rest-api.md`.
 
 1. Start the link. The answer holds an address to open.
-2. Open that address in a browser on the home network or over the VPN and approve the consent in the bank app. Your browser is sent back to the callback, which only tells you how many accounts were found.
+2. Open that address in a browser on the home network or over the VPN and approve the consent in the bank app. Your browser is sent back to the callback, which tells you how many accounts were found and reminds you to select them now.
 3. List the connections to find the new connection key, then list its accounts. The accounts are shown with a masked account number.
-4. Select the accounts to sync and give each a display name. Accounts you do not select are recorded but never fetched.
+4. Select the accounts to sync and give each a display name. Accounts you do not select are recorded but never fetched. Linking again with accounts that were selected before keeps that selection and queues the first sync by itself.
 
 The connection list shows the consent state (`linked`, `expiring`, `expired`, `revoked` or `superseded`) and the whole days left.
 
@@ -57,14 +61,16 @@ The connection list shows the consent state (`linked`, `expiring`, `expired`, `r
 - The ledger counts every call it makes to the bank per account. A sync that would exceed `Ingestion:BackgroundCallsPerDay` (12 by default) in the trailing 24 hours stops before calling. A normal morning sync costs about two calls per account.
 - Between mornings you can ask for fresh data with a sync now request. It passes your client address on to the bank, so it counts as attended access and spends none of the unattended allowance.
 
-Nothing about a run is silent: every run is recorded with how it ended and the provider's short error code.
+Nothing about a run is silent: every run is recorded with how it ended and the provider's short error code. A run that a restart interrupted is marked abandoned when the service starts, whether or not the scheduler is on, and the start is retried if the database is briefly unavailable. If the queued first sync after an approval is lost, for example because the service restarted, the scheduler starts it a few minutes later for a connection with selected accounts that has never synced.
+
+If linking or renewing fails after the bank has already approved the consent, the ledger ends that session at the bank before it answers, so no consent is left behind that you cannot see.
 
 ## Renewing
 
 The consent lasts up to 180 days. Two alerts warn you, at 14 days and at 7 days before it ends; a third fires when it has ended. When the first one arrives:
 
 1. Start a renewal for the connection and approve it in the bank app, the same way as when linking.
-2. The accounts keep their keys, names, selection and all their history. The old connection becomes `superseded` and a sync with the longest available history runs straight away.
+2. The accounts keep their keys, names, selection and all their history. The old connection becomes `superseded` and a sync with the longest available history runs straight away. That sync is never held back by the allowance for unattended calls. Accounts the renewal exposes for the first time are recorded unselected, so select them right away.
 
 If the consent is allowed to end, no new transactions arrive until you renew. Because the renewal is approved right then, its sync asks for the longest history the bank offers and fills the gap.
 

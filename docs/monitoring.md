@@ -80,7 +80,7 @@ cannot be trusted.
 | Bank sync is failing | A sync failed for a temporary reason and the day's retry did not fix it, or no retry could follow. | Check the application's logs and the status page of the bank aggregator, then use sync now once. |
 | Bank sync was rate limited | The bank or aggregator refused the sync because a call allowance was used up. | Wait for the next day. The scheduler tries again on its own; do not keep using sync now. |
 | Bank rejected the consent or credentials | The bank rejected the consent, or the aggregator rejected the application's credentials. | Renew the consent through the bank-link flow. If the consent is still valid, check the application's credentials with the aggregator. |
-| Bank sync is stale | No sync has succeeded for more than 26 hours. | Look at the failing, rate limited and consent alerts first; if none fires, check the scheduler's logs and the sync status of the account. |
+| Bank sync is stale | A selected account has had no successful sync for more than 36 hours, or has still not had one 2 hours after it was selected. The 36 hours cover a failed morning sync that the same day's retry then fixes. | Look at the failing, rate limited and consent alerts first; if none fires, check the scheduler's logs and the sync status of the account. |
 | Bank consent expires within 14 days | A bank consent ends in 14 days or less, but not yet within 7. | Renew the consent through the bank-link flow at a convenient moment. |
 | Bank consent expires within 7 days | A bank consent ends in less than 7 days. | Renew the consent through the bank-link flow now. |
 | Bank consent has expired | A bank consent has ended, so no new transactions arrive. | Renew the consent through the bank-link flow. Accounts keep their history and their selection. |
@@ -93,7 +93,8 @@ hourly grouping that caps alert mail, but one that is still firing is
 repeated once a day rather than every 12 hours; to change how often, edit
 the repeat interval of the Household route in the notification policy file.
 No data series exists before the first bank link, so these alerts stay quiet
-until then.
+until then. The stale alert starts watching an account as soon as it is
+selected, so an account that never completes its first sync is reported too.
 
 Alert emails only ever say which rule fired, for which service, and its
 current state. They never contain a query result, a connection string or

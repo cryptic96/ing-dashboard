@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using Ledger.Domain.Banking;
 
@@ -13,17 +14,16 @@ public static class TransactionReconciler
     private const decimal AmountMagnitudeLimit = 1_000_000_000_000_000m;
     private const int CurrencyLength = 3;
 
-    private static readonly TimeZoneInfo AmsterdamZone = TimeZoneInfo.FindSystemTimeZoneById("Europe/Amsterdam");
-
     /// <summary>
     /// Plans the changes for one account. Known references become updates and unknown references are matched against pending
     /// rows: a booked item that is certainly the booked version of exactly one pending row merges into it, a doubtful pairing
     /// is stored separately and the pending rows are flagged, and everything else is inserted. A cancelled status drops a
     /// known pending row, a dropped row the bank reports again is restored, and a pending row the bank no longer lists is
-    /// dropped only when the fetch was complete and returned at least one item. A pending item never downgrades a booked
-    /// transaction, and items of any other status are ignored.
+    /// dropped only when the fetch was complete and returned at least one item. That holds for a row flagged as ambiguous too:
+    /// a flagged row the bank no longer lists is the pending version of something that booked, so dropping it removes the
+    /// duplicate. A pending item never downgrades a booked transaction, and items of any other status are ignored.
     /// </summary>
-    /// <exception cref="BankProviderException">An item has an amount, currency or payload that cannot be stored faithfully.</exception>
+    /// <exception cref="BankProviderException">An item has an amount, currency, text or payload that cannot be stored faithfully.</exception>
     public static ReconciliationPlan Plan(
         IReadOnlyList<LedgerTransactionState> existing,
         IReadOnlyList<ProviderTransaction> incoming,
@@ -108,7 +108,7 @@ public static class TransactionReconciler
             inserts.Add(new PlannedInsert(item, reference, MatchFlag.None));
         }
 
-        AddDropsForAbsentPendingRows(existing, resolved, matches, coverage, drops);
+        AddDropsForAbsentPendingRows(existing, resolved, matches, coverage, options.Zone, drops);
 
         return new ReconciliationPlan(inserts, updates, merges, matches.Flagged, drops);
     }
@@ -118,6 +118,7 @@ public static class TransactionReconciler
         HashSet<Guid> resolved,
         MatchOutcome matches,
         FetchCoverage coverage,
+        TimeZoneInfo zone,
         List<Guid> drops)
     {
         if (!coverage.Complete || coverage.ItemCount <= 0)
@@ -132,14 +133,13 @@ public static class TransactionReconciler
         foreach (var state in existing)
         {
             if (state.Status != LedgerTransactionStatus.Pending
-                || state.Flag == MatchFlag.Ambiguous
                 || unclear.Contains(state.Id)
                 || drops.Contains(state.Id))
             {
                 continue;
             }
 
-            if (coverage.From is { } from && EffectiveDate(state) < from)
+            if (coverage.From is { } from && EffectiveDate(state, zone) < from)
             {
                 continue;
             }
@@ -170,7 +170,7 @@ public static class TransactionReconciler
             }
 
             var matching = pendingRows
-                .Where(state => IsCandidate(state, item, itemDate, options.MatchWindowDays))
+                .Where(state => IsCandidate(state, item, itemDate, options))
                 .ToList();
 
             if (matching.Count == 0)
@@ -223,14 +223,14 @@ public static class TransactionReconciler
             && itemCounterparty == NormalisedCounterparty(matching[0].CounterpartyName);
     }
 
-    private static bool IsCandidate(LedgerTransactionState state, ProviderTransaction item, DateOnly itemDate, int windowDays)
+    private static bool IsCandidate(LedgerTransactionState state, ProviderTransaction item, DateOnly itemDate, ReconcilerOptions options)
     {
         if (state.Amount != item.Amount || !string.Equals(state.Currency, item.Currency, StringComparison.Ordinal))
         {
             return false;
         }
 
-        if (Math.Abs(EffectiveDate(state).DayNumber - itemDate.DayNumber) > windowDays)
+        if (Math.Abs(EffectiveDate(state, options.Zone).DayNumber - itemDate.DayNumber) > options.MatchWindowDays)
         {
             return false;
         }
@@ -246,12 +246,24 @@ public static class TransactionReconciler
         return string.IsNullOrEmpty(normalised) ? null : normalised;
     }
 
-    private static DateOnly EffectiveDate(LedgerTransactionState state)
+    private static DateOnly EffectiveDate(LedgerTransactionState state, TimeZoneInfo zone)
     {
-        return state.TransactionDate
-            ?? state.BookingDate
-            ?? state.ValueDate
-            ?? SyncSchedule.LocalDate(state.FirstSeenAt, AmsterdamZone);
+        return EffectiveDate(state.TransactionDate, state.BookingDate, state.ValueDate, state.FirstSeenAt, zone);
+    }
+
+    /// <summary>
+    /// The calendar date a stored row is placed on: its transaction date, else its booking date, else its value date, else the
+    /// local day the ledger first saw it. Matching, the drop rule and the fetch window all use this one definition, so a row
+    /// the bank gave no date is judged the same way everywhere.
+    /// </summary>
+    public static DateOnly EffectiveDate(
+        DateOnly? transactionDate,
+        DateOnly? bookingDate,
+        DateOnly? valueDate,
+        DateTimeOffset firstSeenAt,
+        TimeZoneInfo zone)
+    {
+        return transactionDate ?? bookingDate ?? valueDate ?? SyncSchedule.LocalDate(firstSeenAt, zone);
     }
 
     private static DateOnly? ItemDate(ProviderTransaction item)
@@ -326,6 +338,35 @@ public static class TransactionReconciler
         {
             throw Malformed("payload", "A transaction payload is not valid JSON.");
         }
+
+        if (HasNul(item.EntryReference)
+            || HasNul(item.CounterpartyName)
+            || HasNul(item.CounterpartyIban)
+            || HasNul(item.Description)
+            || JsonTextHasNul(item.RawJson))
+        {
+            throw Malformed("text_nul", "A transaction contains a NUL character, which the database cannot store.");
+        }
+    }
+
+    private static bool HasNul(string? text)
+    {
+        return text is not null && text.Contains('\0', StringComparison.Ordinal);
+    }
+
+    private static bool JsonTextHasNul(string rawJson)
+    {
+        var reader = new Utf8JsonReader(Encoding.UTF8.GetBytes(rawJson));
+
+        while (reader.Read())
+        {
+            if (reader.TokenType is JsonTokenType.String or JsonTokenType.PropertyName && HasNul(reader.GetString()))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool IsCurrencyCode(string? currency)

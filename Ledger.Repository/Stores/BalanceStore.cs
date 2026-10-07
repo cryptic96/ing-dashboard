@@ -76,6 +76,22 @@ public class BalanceStore(LedgerDbContext dbContext) : IBalanceStore
     }
 
     /// <inheritdoc />
+    public async Task<decimal> SumPendingAtAsync(Guid accountId, DateTimeOffset instant, CancellationToken cancellationToken)
+    {
+        var sum = await dbContext.Transactions
+            .AsNoTracking()
+            .Where(transaction => transaction.AccountId == accountId
+                && transaction.FirstSeenAt <= instant
+                && (transaction.Status != LedgerTransactionStatus.Booked
+                    || (transaction.BookedAt != null && transaction.BookedAt > instant))
+                && (transaction.Status != LedgerTransactionStatus.Dropped
+                    || (transaction.DroppedAt != null && transaction.DroppedAt > instant)))
+            .SumAsync(transaction => (decimal?)transaction.Amount, cancellationToken);
+
+        return sum ?? 0m;
+    }
+
+    /// <inheritdoc />
     public async Task SaveAsync(
         Guid accountId,
         Guid syncRunId,

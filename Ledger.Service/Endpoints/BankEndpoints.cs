@@ -13,6 +13,7 @@ public static class BankEndpoints
 {
     private const string CallbackFailureText = "This bank link could not be completed. Start again with a new link request.";
     private const string SyncNowRefusedText = "Sync now would use the last remaining bank call of the day for an account; try again later.";
+    private const string SelectionPendingHint = "No account is selected yet, so nothing is synced. Select the accounts now: the bank returns the full transaction history only for about an hour after approval. If that time has passed, renew the connection to get another full-history window.";
     private const string NoAccountsText = "The bank approved the link but exposes no accounts. Link the accounts in the aggregator's control panel first, then start again with a new link request.";
 
     /// <summary>Maps the bank endpoints under /api/v1/bank.</summary>
@@ -57,6 +58,7 @@ public static class BankEndpoints
                 SyncNowResult.NoConnection => Results.Problem(title: "There is no active bank connection to sync.", statusCode: StatusCodes.Status409Conflict),
                 SyncNowResult.NoAccountsSelected => Results.Problem(title: "No accounts are selected for this connection. Select the accounts to sync first.", statusCode: StatusCodes.Status409Conflict),
                 SyncNowResult.AlreadyRunning => Results.Problem(title: "A sync is running for this connection. Wait for it to finish.", statusCode: StatusCodes.Status409Conflict),
+                SyncNowResult.AlreadyQueued => Results.Problem(title: "A sync is already queued for this connection. Wait for it to finish.", statusCode: StatusCodes.Status409Conflict),
                 _ => Results.Problem(title: SyncNowRefusedText, statusCode: StatusCodes.Status429TooManyRequests)
             };
         });
@@ -115,7 +117,7 @@ public static class BankEndpoints
 
             return outcome.Result switch
             {
-                CallbackResult.Completed => Results.Text(CompletedText(outcome.AccountCount), "text/plain"),
+                CallbackResult.Completed => Results.Text(CompletedText(outcome), "text/plain"),
                 CallbackResult.NoAccounts => Results.Text(NoAccountsText, "text/plain", statusCode: StatusCodes.Status400BadRequest),
                 _ => GenericFailure()
             };
@@ -140,7 +142,9 @@ public static class BankEndpoints
             overview.Consent.State.ToString().ToLowerInvariant(),
             (int)Math.Floor(overview.Consent.DaysUntilExpiry),
             overview.Connection.ValidUntil,
-            overview.Connection.AuthorizedAt)).ToList());
+            overview.Connection.AuthorizedAt,
+            overview.SelectionPending,
+            overview.SelectionPending ? SelectionPendingHint : null)).ToList());
     }
 
     private static async Task<IResult> ListAccountsAsync(
@@ -208,10 +212,24 @@ public static class BankEndpoints
         return Results.Text(CallbackFailureText, "text/plain", statusCode: StatusCodes.Status400BadRequest);
     }
 
-    private static string CompletedText(int accountCount)
+    private static string CompletedText(CallbackOutcome outcome)
     {
-        var noun = accountCount == 1 ? "account" : "accounts";
-        return $"The bank link is complete and {accountCount} {noun} were found. You can close this page and select the accounts to sync.";
+        var noun = outcome.AccountCount == 1 ? "account" : "accounts";
+        var action = outcome.Renewed ? "was renewed" : "is complete";
+        var text = $"The bank link {action} and {outcome.AccountCount} {noun} were found.";
+
+        if (!outcome.SyncQueued)
+        {
+            text += " The first sync could not be queued. Start it now with a sync request.";
+        }
+
+        if (outcome.UnselectedCount > 0)
+        {
+            var which = outcome.Renewed ? "new accounts" : "accounts";
+            text += $" Select the {which} to sync now, before anything else: the bank returns the full transaction history only for about an hour after approval, and an account you do not select is never read. You can close this page and select the accounts through the API.";
+        }
+
+        return text;
     }
 
     private static AccountResponse ToResponse(LinkedAccount account)
@@ -243,7 +261,9 @@ public static class BankEndpoints
         string ConsentState,
         int DaysUntilExpiry,
         DateTimeOffset ValidUntil,
-        DateTimeOffset AuthorizedAt);
+        DateTimeOffset AuthorizedAt,
+        bool SelectionPending,
+        string? Hint);
 
     private sealed record SyncQueuedResponse(string Status);
 

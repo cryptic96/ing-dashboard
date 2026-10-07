@@ -33,6 +33,13 @@ public interface IBalanceStore
         CancellationToken cancellationToken);
 
     /// <summary>
+    /// Sums the signed amounts of the account's transactions that were pending at the given instant: first seen at or before it
+    /// and neither booked nor dropped by then. A row that has since booked or been dropped still counts, because it was pending
+    /// at that time. Returns zero when there are none.
+    /// </summary>
+    Task<decimal> SumPendingAtAsync(Guid accountId, DateTimeOffset instant, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Saves one snapshot row per returned balance kind for the local date. The check is attached to the row of the reconciled
     /// kind only; every other row records an unknown result.
     /// </summary>

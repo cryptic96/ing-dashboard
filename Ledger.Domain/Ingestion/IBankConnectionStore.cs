@@ -60,8 +60,9 @@ public interface IBankConnectionStore
         CancellationToken cancellationToken);
 
     /// <summary>
-    /// Sets the stored status of a connection, recording the closing time for a revoked one. Marking a connection provider-expired
-    /// only applies to an active connection, so a revoked or superseded one is never changed back to expired.
+    /// Moves a connection to the given status, recording the closing time of a revoked or superseded one the first time only.
+    /// A transition that is not allowed changes nothing: a connection returns to active only from provider-expired, becomes
+    /// provider-expired or superseded only from active or provider-expired, and a revoked connection never leaves revoked.
     /// </summary>
     Task MarkStatusAsync(Guid connectionId, ConnectionStatus status, DateTimeOffset at, CancellationToken cancellationToken);
 }

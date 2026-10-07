@@ -25,7 +25,7 @@ public class DataProtectionCertificateTests(DatabaseFixture fixture)
             certificatePassword: CertificatePassword))
         {
             using var opsClient = host.CreateOpsClient();
-            using var response = await WaitForStatusAsync(opsClient, HttpStatusCode.OK);
+            using var response = await Wait.ForHealthStatusAsync(opsClient, HttpStatusCode.OK);
             response.StatusCode.Should().Be(HttpStatusCode.OK);
         }
 
@@ -52,14 +52,14 @@ public class DataProtectionCertificateTests(DatabaseFixture fixture)
             connectionString, contentRootA, certificatePath, CertificatePassword))
         {
             using var opsClientA = hostA.CreateOpsClient();
-            using var responseA = await WaitForStatusAsync(opsClientA, HttpStatusCode.OK);
+            using var responseA = await Wait.ForHealthStatusAsync(opsClientA, HttpStatusCode.OK);
             responseA.StatusCode.Should().Be(HttpStatusCode.OK);
         }
 
         await using var hostB = new LedgerWebApplicationFactory(
             connectionString, contentRootB, certificatePath, CertificatePassword);
         using var opsClientB = hostB.CreateOpsClient();
-        using var responseB = await WaitForStatusAsync(opsClientB, HttpStatusCode.OK);
+        using var responseB = await Wait.ForHealthStatusAsync(opsClientB, HttpStatusCode.OK);
 
         responseB.StatusCode.Should().Be(HttpStatusCode.OK);
     }
@@ -78,7 +78,7 @@ public class DataProtectionCertificateTests(DatabaseFixture fixture)
             connectionString, certificatePath: correctCertificatePath, certificatePassword: CertificatePassword))
         {
             using var opsClientA = hostA.CreateOpsClient();
-            using var responseA = await WaitForStatusAsync(opsClientA, HttpStatusCode.OK);
+            using var responseA = await Wait.ForHealthStatusAsync(opsClientA, HttpStatusCode.OK);
             responseA.StatusCode.Should().Be(HttpStatusCode.OK);
         }
 
@@ -87,7 +87,7 @@ public class DataProtectionCertificateTests(DatabaseFixture fixture)
         await using var hostC = new LedgerWebApplicationFactory(
             connectionString, certificatePath: wrongCertificatePath, certificatePassword: CertificatePassword);
         using var opsClientC = hostC.CreateOpsClient();
-        using var responseC = await WaitForStatusAsync(opsClientC, HttpStatusCode.ServiceUnavailable);
+        using var responseC = await Wait.ForHealthStatusAsync(opsClientC, HttpStatusCode.ServiceUnavailable);
 
         responseC.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
 
@@ -171,37 +171,5 @@ public class DataProtectionCertificateTests(DatabaseFixture fixture)
         await reader.ReadAsync();
 
         return (reader.GetString(0), (byte[])reader.GetValue(1));
-    }
-
-    private static async Task<HttpResponseMessage> WaitForStatusAsync(
-        HttpClient client,
-        HttpStatusCode expectedStatus,
-        TimeSpan? timeout = null)
-    {
-        var deadline = DateTimeOffset.UtcNow + (timeout ?? TimeSpan.FromSeconds(30));
-        HttpResponseMessage? last = null;
-
-        while (DateTimeOffset.UtcNow < deadline)
-        {
-            try
-            {
-                last?.Dispose();
-                last = await client.GetAsync("/health", TestContext.Current.CancellationToken);
-
-                if (last.StatusCode == expectedStatus)
-                {
-                    return last;
-                }
-            }
-            catch (HttpRequestException)
-            {
-                last = null;
-            }
-
-            await Task.Delay(TimeSpan.FromMilliseconds(250), TestContext.Current.CancellationToken);
-        }
-
-        return last ?? throw new TimeoutException(
-            $"The ops endpoint never reached status {expectedStatus} within the timeout.");
     }
 }

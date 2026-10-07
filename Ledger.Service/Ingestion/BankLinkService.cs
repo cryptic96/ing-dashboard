@@ -50,11 +50,23 @@ public enum CallbackResult
     Failed
 }
 
-/// <summary>The outcome of a bank redirect, carrying only the number of accounts found.</summary>
-public record CallbackOutcome(CallbackResult Result, int AccountCount);
+/// <summary>
+/// The outcome of a bank redirect, carrying only the number of accounts found, how many of them still need to be selected,
+/// whether the connection replaced an earlier consent, and whether the sync that must follow was queued. A first link queues
+/// no sync of its own for accounts that were never selected, because accounts are chosen afterwards.
+/// </summary>
+public record CallbackOutcome(
+    CallbackResult Result,
+    int AccountCount,
+    bool SyncQueued = true,
+    int UnselectedCount = 0,
+    bool Renewed = false);
 
-/// <summary>A connection together with its derived consent state.</summary>
-public record ConnectionOverview(ConnectionSummary Connection, ConsentSnapshot Consent);
+/// <summary>
+/// A connection together with its derived consent state and whether it is still waiting for the operator to select accounts,
+/// which is when the bank's full history can still be lost.
+/// </summary>
+public record ConnectionOverview(ConnectionSummary Connection, ConsentSnapshot Consent, bool SelectionPending = false);
 
 /// <summary>The result of saving an account selection: the accounts afterwards and whether a first sync was queued.</summary>
 public record SelectionResult(IReadOnlyList<LinkedAccount> Accounts, bool FirstSyncQueued);
@@ -76,6 +88,9 @@ public enum SyncNowResult
 
     /// <summary>A sync of the connection is already running.</summary>
     AlreadyRunning,
+
+    /// <summary>A sync of the connection is already waiting to run.</summary>
+    AlreadyQueued,
 
     /// <summary>The sync would use the last background call of the day for an account, and nobody is present to make it a foreground call.</summary>
     WouldUseLastCall
@@ -166,26 +181,88 @@ public class BankLinkService(
 
         if (session.Accounts.Count == 0)
         {
+            await EndUnrecordedSessionAsync(session);
             logger.LogWarning("Bank link callback finished with outcome {Outcome}.", CallbackResult.NoAccounts);
             return new CallbackOutcome(CallbackResult.NoAccounts, 0);
         }
 
-        if (consumed.Purpose == AuthorizationPurposes.Renew)
+        return consumed.Purpose == AuthorizationPurposes.Renew
+            ? await CompleteRenewalAsync(consumed.ConnectionId!.Value, session, psu)
+            : await CompleteLinkAsync(session, psu);
+    }
+
+    /// <summary>
+    /// Records the session as a new connection. Once the provider has created the session, recording it is not tied to the
+    /// request, so a browser that disconnects cannot strand a consent the ledger never recorded.
+    /// </summary>
+    private async Task<CallbackOutcome> CompleteLinkAsync(ProviderSession session, PsuContext? psu)
+    {
+        LinkedConnection linked;
+
+        try
         {
-            return await CompleteRenewalAsync(consumed.ConnectionId!.Value, session, psu, cancellationToken);
+            linked = await connections.AddConnectionAsync(
+                provider.Name,
+                options.Value.AspspName,
+                options.Value.AspspCountry,
+                session,
+                secretProtector.Protect(session.SessionId),
+                timeProvider.GetUtcNow(),
+                CancellationToken.None);
+        }
+        catch (Exception)
+        {
+            await EndUnrecordedSessionAsync(session);
+            throw;
         }
 
-        var linked = await connections.AddConnectionAsync(
-            provider.Name,
-            options.Value.AspspName,
-            options.Value.AspspCountry,
-            session,
-            secretProtector.Protect(session.SessionId),
-            timeProvider.GetUtcNow(),
-            cancellationToken);
+        var syncQueued = !linked.Accounts.Any(account => account.SyncEnabled)
+            || QueueFirstSync(linked.Id, linked.ConnectionKey, psu);
 
         logger.LogInformation("Bank link callback finished with outcome {Outcome}.", CallbackResult.Completed);
-        return new CallbackOutcome(CallbackResult.Completed, linked.Accounts.Count);
+        return new CallbackOutcome(
+            CallbackResult.Completed,
+            linked.Accounts.Count,
+            syncQueued,
+            linked.Accounts.Count(account => !account.SyncEnabled));
+    }
+
+    /// <summary>
+    /// Queues the first sync of a connection whose accounts were already selected before, so it needs no selection step. A full
+    /// queue is reported loudly, because the bank returns the full history only shortly after approval.
+    /// </summary>
+    private bool QueueFirstSync(Guid connectionId, string connectionKey, PsuContext? psu)
+    {
+        var queued = dispatcher.TryEnqueue(new SyncRequest(connectionId, SyncTrigger.PostLink, new FetchContext(psu))) != EnqueueResult.Full;
+
+        if (!queued)
+        {
+            logger.LogError(
+                "The first sync of connection {ConnectionKey} could not be queued because the queue is full. Start it with a sync request now, because the bank returns the full history only shortly after approval.",
+                connectionKey);
+        }
+
+        return queued;
+    }
+
+    /// <summary>
+    /// Ends a session the provider created but the ledger did not record, so no consent stays live at the bank that the
+    /// operator can neither see nor end from here. A failure to end it is logged by kind only and never replaces the original
+    /// failure.
+    /// </summary>
+    private async Task EndUnrecordedSessionAsync(ProviderSession session)
+    {
+        try
+        {
+            await provider.RevokeSessionAsync(session.SessionId, CancellationToken.None);
+            logger.LogInformation("A bank session that could not be recorded was ended at the bank.");
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(
+                "A bank session that could not be recorded could not be ended at the bank ({Kind}). End it in the aggregator's control panel.",
+                exception is BankProviderException providerException ? providerException.Kind.ToString() : exception.GetType().Name);
+        }
     }
 
     /// <summary>
@@ -227,12 +304,30 @@ public class BankLinkService(
     {
         var now = timeProvider.GetUtcNow();
         var all = await connections.ListConnectionsAsync(cancellationToken);
+        var overviews = new List<ConnectionOverview>(all.Count);
 
-        return all
-            .Select(connection => new ConnectionOverview(
+        foreach (var connection in all)
+        {
+            overviews.Add(new ConnectionOverview(
                 connection,
-                ConsentState.Derive(connection.Status, connection.ValidUntil, now)))
-            .ToList();
+                ConsentState.Derive(connection.Status, connection.ValidUntil, now),
+                await IsSelectionPendingAsync(connection, cancellationToken)));
+        }
+
+        return overviews;
+    }
+
+    private async Task<bool> IsSelectionPendingAsync(ConnectionSummary connection, CancellationToken cancellationToken)
+    {
+        if (connection.Status != ConnectionStatus.Active)
+        {
+            return false;
+        }
+
+        var accounts = await connections.ListAccountsAsync(connection.Id, cancellationToken);
+
+        return !accounts.Any(account => account.SyncEnabled)
+            && !await connections.HasAnySyncRunAsync(connection.Id, cancellationToken);
     }
 
     /// <summary>Lists the accounts of a connection without any secret, with the IBAN left for the caller to mask.</summary>
@@ -268,7 +363,8 @@ public class BankLinkService(
         var needsFirstSync = accounts.Any(account => account.SyncEnabled)
             && !await connections.HasAnySyncRunAsync(connection.Id, cancellationToken);
 
-        if (needsFirstSync && !dispatcher.TryEnqueue(new SyncRequest(connection.Id, SyncTrigger.PostLink, new FetchContext(psu))))
+        if (needsFirstSync
+            && dispatcher.TryEnqueue(new SyncRequest(connection.Id, SyncTrigger.PostLink, new FetchContext(psu))) == EnqueueResult.Full)
         {
             throw new BankLinkException(BankLinkFailure.Busy, "The sync queue is full. Repeat the call shortly.");
         }
@@ -318,9 +414,12 @@ public class BankLinkService(
             return SyncNowResult.WouldUseLastCall;
         }
 
-        if (!dispatcher.TryEnqueue(new SyncRequest(connection.Id, SyncTrigger.Manual, new FetchContext(psu))))
+        switch (dispatcher.TryEnqueue(new SyncRequest(connection.Id, SyncTrigger.Manual, new FetchContext(psu))))
         {
-            throw new BankLinkException(BankLinkFailure.Busy, "The sync queue is full. Repeat the call shortly.");
+            case EnqueueResult.Full:
+                throw new BankLinkException(BankLinkFailure.Busy, "The sync queue is full. Repeat the call shortly.");
+            case EnqueueResult.AlreadyQueued:
+                return SyncNowResult.AlreadyQueued;
         }
 
         logger.LogInformation("A sync of connection {ConnectionKey} was queued on request.", connection.ConnectionKey);
@@ -423,8 +522,7 @@ public class BankLinkService(
     private async Task<CallbackOutcome> CompleteRenewalAsync(
         Guid supersededConnectionId,
         ProviderSession session,
-        PsuContext? psu,
-        CancellationToken cancellationToken)
+        PsuContext? psu)
     {
         RenewalResult renewal;
 
@@ -438,20 +536,29 @@ public class BankLinkService(
                 session,
                 secretProtector.Protect(session.SessionId),
                 timeProvider.GetUtcNow(),
-                cancellationToken);
+                CancellationToken.None);
         }
         catch (InvalidOperationException)
         {
+            await EndUnrecordedSessionAsync(session);
             return Reject("connection can no longer be renewed");
         }
-
-        if (!dispatcher.TryEnqueue(new SyncRequest(renewal.Connection.Id, SyncTrigger.PostLink, new FetchContext(psu))))
+        catch (Exception)
         {
-            logger.LogWarning("The sync after a renewal could not be queued because the queue is full.");
+            await EndUnrecordedSessionAsync(session);
+            throw;
         }
 
+        var syncQueued = !renewal.Connection.Accounts.Any(account => account.SyncEnabled)
+            || QueueFirstSync(renewal.Connection.Id, renewal.Connection.ConnectionKey, psu);
+
         logger.LogInformation("Bank link callback finished with outcome {Outcome}.", CallbackResult.Completed);
-        return new CallbackOutcome(CallbackResult.Completed, renewal.MappedAccounts + renewal.NewAccounts);
+        return new CallbackOutcome(
+            CallbackResult.Completed,
+            renewal.MappedAccounts + renewal.NewAccounts,
+            syncQueued,
+            renewal.NewAccounts,
+            Renewed: true);
     }
 
     private async Task<bool> IsStillRenewableAsync(Guid? connectionId, CancellationToken cancellationToken)

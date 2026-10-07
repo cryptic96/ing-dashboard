@@ -29,6 +29,13 @@ public record BalanceCheck(bool? Reconciled, decimal? Expected, decimal? Drift);
 public static class BalanceReconciler
 {
     /// <summary>
+    /// How many days before a mismatch the previous mismatch may be and still count as the same persisting drift. Snapshots are
+    /// daily, so the limit tolerates a day or two without a successful sync while keeping two mismatches weeks apart from being
+    /// read as persistence. The account status view applies the same limit.
+    /// </summary>
+    public const int MaxDaysBetweenFlaggedMismatches = 3;
+
+    /// <summary>
     /// Returns the balance to reconcile: the first preferred kind, in the list's order, that carries a reference date. When
     /// undated balances are allowed and no dated preferred kind is present, the first preferred kind without a reference date
     /// is returned instead, to be placed on the timeline by the time the ledger fetched it.
@@ -90,15 +97,26 @@ public static class BalanceReconciler
     }
 
     /// <summary>
-    /// Checks a balance that carries no reference date against what the ledger expected at the previous fetch plus the booked
-    /// transactions the ledger first saw as booked between the two fetches. The window is supplied by the caller. The starting
-    /// point is the previous snapshot's own expectation when it was checked, and its bank amount when it was only a baseline.
-    /// Carrying the ledger's expectation forward is what lets a card payment still in progress show up once and then resolve
-    /// when it books, while a transaction the ledger never received keeps showing as drift. The result is unknown when there is
-    /// no previous balance, when the kinds or currencies differ, or when the previous balance was dated or has no recorded fetch
-    /// time, because then the two do not describe the same timeline.
+    /// Checks a balance that carries no reference date, comparing booked amounts with booked amounts. The bank's expected
+    /// balance includes the pending items it exposes, while the ledger counts a row only once it books, so the pending items
+    /// live at each fetch are taken out on both sides: the bank's booked balance is its amount minus the signed sum of the
+    /// pending rows live when the ledger fetched it, and the ledger's expectation is the previous booked figure plus the booked
+    /// transactions the ledger first saw as booked between the two fetches. The window is supplied by the caller. The previous
+    /// booked figure is the previous snapshot's own expectation when it was checked, and its bank amount minus the pending rows
+    /// live at its fetch when it was only a baseline. A pending item the bank exposes therefore never causes drift however long
+    /// it stays pending, counts exactly once when it books, and leaves no trace when it is dropped. Carrying the ledger's
+    /// expectation forward is what lets a reservation the bank deducts without exposing it as a pending item show up once and
+    /// then resolve when it books, while a transaction the ledger never received keeps showing as drift. The recorded expected
+    /// amount is the booked-only expectation and the drift is the bank's booked balance minus it. The result is unknown when
+    /// there is no previous balance, when the kinds or currencies differ, or when the previous balance was dated or has no
+    /// recorded fetch time, because then the two do not describe the same timeline. Every comparison is exact.
     /// </summary>
-    public static BalanceCheck CheckUndated(BalanceSnapshotState? previous, ProviderBalance current, decimal bookedSumSincePrevious)
+    public static BalanceCheck CheckUndated(
+        BalanceSnapshotState? previous,
+        ProviderBalance current,
+        decimal bookedSumSincePrevious,
+        decimal pendingSumAtPrevious = 0m,
+        decimal pendingSumAtCurrent = 0m)
     {
         if (previous is null
             || previous.Kind != current.Kind
@@ -110,9 +128,10 @@ public static class BalanceReconciler
             return new BalanceCheck(null, null, null);
         }
 
-        var expected = (previous.ExpectedAmount ?? previous.Amount) + bookedSumSincePrevious;
-        var drift = current.Amount - expected;
+        var start = previous.ExpectedAmount ?? previous.Amount - pendingSumAtPrevious;
+        var expected = start + bookedSumSincePrevious;
+        var drift = current.Amount - pendingSumAtCurrent - expected;
 
-        return new BalanceCheck(current.Amount == expected, expected, drift);
+        return new BalanceCheck(drift == 0m, expected, drift);
     }
 }

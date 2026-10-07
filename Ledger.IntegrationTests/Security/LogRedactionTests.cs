@@ -35,7 +35,7 @@ public class LogRedactionTests(DatabaseFixture fixture)
 
         await using var factory = new LedgerWebApplicationFactory(fixture.ConnectionStringFor("ledger_runtime"));
         using var client = factory.CreateApiClient();
-        await WaitUntilReadyAsync(factory);
+        await Wait.UntilReadyAsync(factory);
 
         var responseBodies = new List<string>();
 
@@ -84,7 +84,7 @@ public class LogRedactionTests(DatabaseFixture fixture)
         await using var factory = new LedgerWebApplicationFactory(badConnectionString);
         using var opsClient = factory.CreateOpsClient();
 
-        using var response = await WaitForStatusAsync(opsClient, HttpStatusCode.ServiceUnavailable);
+        using var response = await Wait.ForHealthStatusAsync(opsClient, HttpStatusCode.ServiceUnavailable);
         var body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
 
         response.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
@@ -96,19 +96,32 @@ public class LogRedactionTests(DatabaseFixture fixture)
 
     [Fact]
     [Trait("Category", "LogRedaction")]
-    public void Sentinel_certificate_password_never_reaches_the_startup_exception_chain()
+    public void Sentinel_certificate_password_never_reaches_the_startup_exception_chain_or_the_logs()
     {
         var sentinel = $"LedgerSentinelCertPass{Guid.NewGuid():N}";
+        var logs = new CapturingLoggerProvider();
 
         var act = () => new LedgerWebApplicationFactory(
             fixture.ConnectionStringFor("ledger_runtime"),
             certificatePath: "/nonexistent/ledger-sentinel-cert.pfx",
-            certificatePassword: sentinel);
+            certificatePassword: sentinel,
+            loggerProvider: logs);
 
         var exception = act.Should().Throw<Exception>().Which;
-        var messages = AllMessages(exception).ToList();
+        var chain = Flatten(exception).ToList();
 
-        messages.Should().NotContain(message => message.Contains(sentinel));
+        chain.Should().Contain(
+            candidate => candidate.Message.Contains("DataProtection:CertificatePath", StringComparison.Ordinal),
+            "the startup must fail because of the certificate, not for an unrelated reason");
+
+        var surfaces = chain
+            .SelectMany(candidate => new[] { candidate.Message, candidate.ToString() }
+                .Concat(candidate.Data.Values.Cast<object?>().Select(value => value?.ToString() ?? string.Empty)))
+            .Concat(logs.Messages)
+            .ToList();
+
+        surfaces.Should().NotBeEmpty();
+        surfaces.Should().NotContain(surface => surface.Contains(sentinel, StringComparison.Ordinal));
     }
 
     [Fact]
@@ -123,7 +136,7 @@ public class LogRedactionTests(DatabaseFixture fixture)
             configureTestServices: services =>
                 services.AddSingleton<IStartupFilter>(new ThrowingEndpointStartupFilter(sentinel)));
         using var client = factory.CreateApiClient();
-        await WaitUntilReadyAsync(factory);
+        await Wait.UntilReadyAsync(factory);
 
         using var request = new HttpRequestMessage(HttpMethod.Get, "/api/v1/__test-throw");
         request.Headers.Add("X-Api-Key", token);
@@ -144,7 +157,7 @@ public class LogRedactionTests(DatabaseFixture fixture)
     {
         await using var factory = new LedgerWebApplicationFactory(fixture.ConnectionStringFor("ledger_runtime"));
         using var client = factory.CreateApiClient();
-        await WaitUntilReadyAsync(factory);
+        await Wait.UntilReadyAsync(factory);
 
         using var request = new HttpRequestMessage(HttpMethod.Get, "/api/v1/status");
         request.Headers.Add("X-Api-Key", "");
@@ -162,7 +175,7 @@ public class LogRedactionTests(DatabaseFixture fixture)
     {
         await using var factory = new LedgerWebApplicationFactory(fixture.ConnectionStringFor("ledger_runtime"));
         using var opsClient = factory.CreateOpsClient();
-        using var readyResponse = await WaitForStatusAsync(opsClient, HttpStatusCode.OK);
+        using var readyResponse = await Wait.ForHealthStatusAsync(opsClient, HttpStatusCode.OK);
         readyResponse.StatusCode.Should().Be(HttpStatusCode.OK);
 
         var options = factory.Services.GetRequiredService<DbContextOptions<LedgerDbContext>>();
@@ -237,15 +250,18 @@ public class LogRedactionTests(DatabaseFixture fixture)
         try
         {
             var keyPath = Path.Combine(directory, "key.pem");
+            List<string> keyMaterial;
             using (var rsa = RSA.Create(2048))
             {
                 await File.WriteAllTextAsync(
                     keyPath,
                     rsa.ExportEncryptedPkcs8PrivateKeyPem(keyPassword, new PbeParameters(PbeEncryptionAlgorithm.Aes256Cbc, HashAlgorithmName.SHA256, 1000)),
                     TestContext.Current.CancellationToken);
+
+                keyMaterial = DecryptedKeyMaterial(rsa);
             }
 
-            var firstKeyBodyLine = File.ReadAllLines(keyPath)[1];
+            keyMaterial.Add(File.ReadAllLines(keyPath)[1]);
 
             var scenario = SyntheticBankScenario.Create();
             var account = scenario.AddAccount(AccountKind.Current);
@@ -297,9 +313,13 @@ public class LogRedactionTests(DatabaseFixture fixture)
 
             var sentinels = authorizationValues
                 .SelectMany(value => new[] { value, value.Replace("Bearer ", string.Empty, StringComparison.Ordinal) })
-                .Concat([keyPassword, firstKeyBodyLine, scenario.SessionId, scenario.AuthorizationCode, wrongCode])
+                .Concat(authorizationValues.Select(SignatureSegment))
+                .Concat(keyMaterial)
+                .Concat([keyPassword, scenario.SessionId, scenario.AuthorizationCode, wrongCode])
                 .Distinct()
                 .ToList();
+
+            sentinels.Count.Should().BeGreaterThan(20, "the decrypted key material and the signature of every token must be among the sentinels");
 
             foreach (var sentinel in sentinels)
             {
@@ -314,6 +334,34 @@ public class LogRedactionTests(DatabaseFixture fixture)
         }
     }
 
+    /// <summary>
+    /// The decrypted private key in every form a careless log line could print: the whole DER as base64, every body line of the
+    /// unencrypted PEM after the constant header line, and the private numbers as base64 and hex. Held in memory only.
+    /// </summary>
+    private static List<string> DecryptedKeyMaterial(RSA rsa)
+    {
+        var material = new List<string> { Convert.ToBase64String(rsa.ExportPkcs8PrivateKey()) };
+
+        material.AddRange(rsa.ExportPkcs8PrivateKeyPem()
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Where(line => !line.StartsWith("-----", StringComparison.Ordinal))
+            .Skip(1));
+
+        var parameters = rsa.ExportParameters(includePrivateParameters: true);
+        foreach (var number in new[] { parameters.D, parameters.P, parameters.Q })
+        {
+            material.Add(Convert.ToBase64String(number!));
+            material.Add(Convert.ToHexString(number!));
+        }
+
+        return material;
+    }
+
+    private static string SignatureSegment(string authorizationValue)
+    {
+        return authorizationValue.Split('.')[^1];
+    }
+
     private async Task<BankLinkTestHost> StartAdapterHostAsync(FakeEnableBankingHandler fake, string keyPath, string keyPassword)
     {
         var configuration = new Dictionary<string, string?>
@@ -325,32 +373,32 @@ public class LogRedactionTests(DatabaseFixture fixture)
             ["Ingestion:BackgroundCallsPerDay"] = "1000"
         };
 
-        const string providerVariable = "Ingestion__Provider";
-        Environment.SetEnvironmentVariable(providerVariable, "EnableBanking");
-
-        LedgerWebApplicationFactory factory;
-
-        try
-        {
-            factory = new LedgerWebApplicationFactory(
-                fixture.ConnectionStringFor("ledger_runtime"),
-                configureTestServices: services =>
-                    services.AddHttpClient<EnableBankingClient>().ConfigurePrimaryHttpMessageHandler(() => fake),
-                additionalConfiguration: configuration);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable(providerVariable, null);
-        }
+        var factory = new LedgerWebApplicationFactory(
+            fixture.ConnectionStringFor("ledger_runtime"),
+            configureTestServices: services =>
+                services.AddHttpClient<EnableBankingClient>().ConfigurePrimaryHttpMessageHandler(() => fake),
+            additionalConfiguration: configuration,
+            startupEnvironment: new Dictionary<string, string?> { ["Ingestion__Provider"] = "EnableBanking" });
 
         return await BankLinkTestHost.StartWithFactoryAsync(fixture, factory);
     }
 
-    private static IEnumerable<string> AllMessages(Exception? exception)
+    private static IEnumerable<Exception> Flatten(Exception? exception)
     {
         while (exception is not null)
         {
-            yield return exception.Message;
+            yield return exception;
+
+            if (exception is AggregateException aggregate)
+            {
+                foreach (var inner in aggregate.InnerExceptions.SelectMany(Flatten))
+                {
+                    yield return inner;
+                }
+
+                yield break;
+            }
+
             exception = exception.InnerException;
         }
     }
@@ -368,63 +416,6 @@ public class LogRedactionTests(DatabaseFixture fixture)
         var optionsBuilder = new DbContextOptionsBuilder<LedgerDbContext>();
         optionsBuilder.UseNpgsql(fixture.ConnectionStringFor("ledger_runtime"));
         return new LedgerDbContext(optionsBuilder.Options);
-    }
-
-    private static async Task WaitUntilReadyAsync(LedgerWebApplicationFactory factory)
-    {
-        using var opsClient = factory.CreateOpsClient();
-        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(30);
-
-        while (DateTimeOffset.UtcNow < deadline)
-        {
-            try
-            {
-                using var response = await opsClient.GetAsync("/health", TestContext.Current.CancellationToken);
-                if (response.StatusCode == HttpStatusCode.OK)
-                {
-                    return;
-                }
-            }
-            catch (HttpRequestException)
-            {
-            }
-
-            await Task.Delay(TimeSpan.FromMilliseconds(250), TestContext.Current.CancellationToken);
-        }
-
-        throw new TimeoutException("The ops endpoint never became healthy within the timeout.");
-    }
-
-    private static async Task<HttpResponseMessage> WaitForStatusAsync(
-        HttpClient client,
-        HttpStatusCode expectedStatus,
-        TimeSpan? timeout = null)
-    {
-        var deadline = DateTimeOffset.UtcNow + (timeout ?? TimeSpan.FromSeconds(30));
-        HttpResponseMessage? last = null;
-
-        while (DateTimeOffset.UtcNow < deadline)
-        {
-            try
-            {
-                last?.Dispose();
-                last = await client.GetAsync("/health", TestContext.Current.CancellationToken);
-
-                if (last.StatusCode == expectedStatus)
-                {
-                    return last;
-                }
-            }
-            catch (HttpRequestException)
-            {
-                last = null;
-            }
-
-            await Task.Delay(TimeSpan.FromMilliseconds(250), TestContext.Current.CancellationToken);
-        }
-
-        return last ?? throw new TimeoutException(
-            $"The ops endpoint never reached status {expectedStatus} within the timeout.");
     }
 
     /// <summary>Test-only middleware adding an authenticated endpoint that always throws, proving unhandled exceptions never leak to callers.</summary>

@@ -2,8 +2,6 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
 using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Hosting.Server;
-using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
@@ -16,22 +14,36 @@ namespace Ledger.IntegrationTests.Infrastructure;
 /// <summary>Boots the ledger host on real Kestrel sockets, wired to a throwaway database, so port filtering is genuinely exercised.</summary>
 public class LedgerWebApplicationFactory : WebApplicationFactory<Program>
 {
+    private const string ProviderVariable = "Ingestion__Provider";
+    private const string CertificatePathVariable = "DataProtection__CertificatePath";
+    private const string CertificatePasswordVariable = "DataProtection__CertificatePassword";
+
     private readonly string _ledgerConnectionString;
     private readonly string? _contentRootOverride;
     private readonly Action<IServiceCollection>? _configureTestServices;
     private readonly IReadOnlyDictionary<string, string?>? _additionalConfiguration;
-    private readonly CapturingLoggerProvider _loggerProvider = new();
+    private readonly CapturingLoggerProvider _loggerProvider;
     private IHost? _realHost;
 
-    /// <summary>Creates the factory. Picks two free loopback ports immediately so callers can build clients before starting the host.</summary>
+    /// <summary>
+    /// Creates the factory. Picks two free loopback ports immediately so callers can build clients before starting the host.
+    /// The certificate and the startup environment are process environment values only while the host is built and started,
+    /// because the service registration reads them before the factory's configuration overrides apply; the previous values are
+    /// put back afterwards, whether or not startup succeeds.
+    /// </summary>
+    /// <param name="startupEnvironment">Extra environment values for the duration of startup; a null value removes the variable.</param>
+    /// <param name="loggerProvider">A capture provider the caller keeps, so the logs of a host that fails to start can still be read.</param>
     public LedgerWebApplicationFactory(
         string ledgerConnectionString,
         string? contentRootOverride = null,
         string? certificatePath = null,
         string? certificatePassword = null,
         Action<IServiceCollection>? configureTestServices = null,
-        IReadOnlyDictionary<string, string?>? additionalConfiguration = null)
+        IReadOnlyDictionary<string, string?>? additionalConfiguration = null,
+        IReadOnlyDictionary<string, string?>? startupEnvironment = null,
+        CapturingLoggerProvider? loggerProvider = null)
     {
+        _loggerProvider = loggerProvider ?? new CapturingLoggerProvider();
         _ledgerConnectionString = ledgerConnectionString;
         _contentRootOverride = contentRootOverride;
         _configureTestServices = configureTestServices;
@@ -39,9 +51,22 @@ public class LedgerWebApplicationFactory : WebApplicationFactory<Program>
         ApiPort = GetFreeLoopbackPort();
         OpsPort = GetFreeLoopbackPort();
 
-        ApplyCertificateEnvironmentVariables(certificatePath, certificatePassword);
+        var environment = new Dictionary<string, string?>
+        {
+            [ProviderVariable] = null,
+            [CertificatePathVariable] = certificatePath,
+            [CertificatePasswordVariable] = certificatePassword
+        };
 
-        EnsureHostStarted();
+        foreach (var (name, value) in startupEnvironment ?? new Dictionary<string, string?>())
+        {
+            environment[name] = value;
+        }
+
+        using (new EnvironmentOverride(environment))
+        {
+            EnsureHostStarted();
+        }
     }
 
     /// <summary>The real loopback port the API endpoint listens on for this instance.</summary>
@@ -50,7 +75,12 @@ public class LedgerWebApplicationFactory : WebApplicationFactory<Program>
     /// <summary>The real loopback port the ops endpoint listens on for this instance.</summary>
     public int OpsPort { get; }
 
-    /// <summary>Every log message written by the host so far, across every logging category.</summary>
+    /// <summary>
+    /// Every log message written by the host so far, across every logging category. The capture sees Debug and Trace messages
+    /// too, so a secret logged at a low level cannot hide behind the configured level. The one exception is a category the
+    /// committed configuration pins to a level on purpose; it keeps that level here, and the committed configuration tests
+    /// verify the pin itself.
+    /// </summary>
     public IReadOnlyList<string> CapturedLogMessages => _loggerProvider.Messages;
 
     /// <summary>An HttpClient bound to the real API port.</summary>
@@ -85,7 +115,19 @@ public class LedgerWebApplicationFactory : WebApplicationFactory<Program>
             }
         });
 
-        builder.ConfigureLogging(logging => logging.AddProvider(_loggerProvider));
+        builder.ConfigureLogging((context, logging) =>
+        {
+            logging.AddProvider(_loggerProvider);
+            logging.AddFilter<CapturingLoggerProvider>(null, LogLevel.Trace);
+
+            foreach (var pinned in context.Configuration.GetSection("Logging:LogLevel").GetChildren())
+            {
+                if (pinned.Key != "Default" && Enum.TryParse<LogLevel>(pinned.Value, out var level))
+                {
+                    logging.AddFilter<CapturingLoggerProvider>(pinned.Key, level);
+                }
+            }
+        });
 
         if (_configureTestServices is not null)
         {
@@ -93,10 +135,31 @@ public class LedgerWebApplicationFactory : WebApplicationFactory<Program>
         }
     }
 
-    /// <inheritdoc />
+    /// <summary>
+    /// The services of the one running host. The base class would hand out the services of its in-memory host, which never
+    /// starts; resolving from the running host keeps every test on the same singletons the real endpoints use.
+    /// </summary>
+    public override IServiceProvider Services => _realHost?.Services ?? base.Services;
+
+    /// <summary>
+    /// Builds the Kestrel host that serves every request and runs every background service. The base class insists on an
+    /// in-memory test server host and builds the application once per host builder call, so a second, dormant host exists too;
+    /// it keeps only the web server itself, so no application background service runs twice and the dormant host opens no
+    /// database connection.
+    /// </summary>
     protected override IHost CreateHost(IHostBuilder builder)
     {
-        var testHost = builder.Build();
+        var dormant = true;
+        builder.ConfigureServices((_, services) =>
+        {
+            if (dormant)
+            {
+                RemoveBackgroundServices(services);
+            }
+        });
+
+        var dormantHost = builder.Build();
+        dormant = false;
 
         builder.ConfigureWebHost(webHostBuilder => webHostBuilder.UseKestrel());
 
@@ -104,19 +167,9 @@ public class LedgerWebApplicationFactory : WebApplicationFactory<Program>
         realHost.Start();
         _realHost = realHost;
 
-        var addresses = realHost.Services.GetRequiredService<IServer>()
-            .Features.Get<IServerAddressesFeature>();
+        dormantHost.Start();
 
-        testHost.Start();
-        var testHostAddresses = testHost.Services.GetRequiredService<IServer>()
-            .Features.Get<IServerAddressesFeature>()!.Addresses;
-        testHostAddresses.Clear();
-        foreach (var address in addresses!.Addresses)
-        {
-            testHostAddresses.Add(address);
-        }
-
-        return testHost;
+        return dormantHost;
     }
 
     /// <inheritdoc />
@@ -143,17 +196,23 @@ public class LedgerWebApplicationFactory : WebApplicationFactory<Program>
         await base.DisposeAsync();
     }
 
+    private static void RemoveBackgroundServices(IServiceCollection services)
+    {
+        var background = services
+            .Where(descriptor => descriptor.ServiceType == typeof(IHostedService)
+                && descriptor.ImplementationType?.Name != "GenericWebHostService")
+            .ToList();
+
+        foreach (var descriptor in background)
+        {
+            services.Remove(descriptor);
+        }
+    }
+
     /// <summary>Accesses Server, which is the only thing that makes WebApplicationFactory build and start the host; our own port-bound HttpClients never trigger it on their own.</summary>
     private void EnsureHostStarted()
     {
         _ = Server;
-    }
-
-    /// <summary>Sets or clears the process-level certificate environment variables Program.cs reads eagerly, before WebApplicationFactory's configuration overrides merge in.</summary>
-    private static void ApplyCertificateEnvironmentVariables(string? certificatePath, string? certificatePassword)
-    {
-        Environment.SetEnvironmentVariable("DataProtection__CertificatePath", certificatePath);
-        Environment.SetEnvironmentVariable("DataProtection__CertificatePassword", certificatePassword);
     }
 
     private static int GetFreeLoopbackPort()
