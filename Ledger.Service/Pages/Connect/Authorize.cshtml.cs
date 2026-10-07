@@ -100,6 +100,8 @@ public class AuthorizeModel(
             return await ApproveAsync(request, user, canonicalResource);
         }
 
+        SignInPageHeaders.AllowRedirectOrigins(HttpContext, await applications.GetRedirectUrisAsync(application));
+
         ClientName = await applications.GetDisplayNameAsync(application) ?? request.ClientId ?? string.Empty;
         RedirectHost = redirect.Authority;
         LoginName = user.UserName ?? string.Empty;

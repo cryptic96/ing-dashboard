@@ -33,6 +33,7 @@ public static class RepositoryServiceCollectionExtensions
         services.AddScoped<IBalanceStore, BalanceStore>();
         services.AddScoped<IIngestionStatusStore, IngestionStatusStore>();
         services.AddScoped<ILedgerQueryStore, LedgerQueryStore>();
+        services.AddScoped<ITotpReplayStore, TotpReplayStore>();
 
         return services;
     }

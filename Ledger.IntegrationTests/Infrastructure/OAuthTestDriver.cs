@@ -8,8 +8,48 @@ using System.Text.RegularExpressions;
 
 namespace Ledger.IntegrationTests.Infrastructure;
 
-/// <summary>A login created for a test, with the password it signs in with.</summary>
-public sealed record TestLogin(Guid Id, string UserName, string Password);
+/// <summary>
+/// A login created for a test, with the password and the authenticator key it signs in with. Each call to <see cref="NextCode"/>
+/// returns a code from a time step that was not handed out before, because the host refuses a code it has already accepted.
+/// </summary>
+public sealed class TestLogin(Guid id, string userName, string password, string authenticatorKey)
+{
+    private static readonly int[] StepOffsets = [0, 1, 2, -1, -2];
+    private readonly HashSet<long> _usedSteps = [];
+
+    /// <summary>The identifier of the login.</summary>
+    public Guid Id { get; } = id;
+
+    /// <summary>The user name of the login.</summary>
+    public string UserName { get; } = userName;
+
+    /// <summary>The password of the login.</summary>
+    public string Password { get; } = password;
+
+    /// <summary>The Base32 key an authenticator app holds for the login.</summary>
+    public string AuthenticatorKey { get; } = authenticatorKey;
+
+    /// <summary>A code the host accepts now and has not been given by this object before.</summary>
+    public string NextCode()
+    {
+        lock (_usedSteps)
+        {
+            var now = DateTimeOffset.UtcNow;
+
+            foreach (var offset in StepOffsets)
+            {
+                var moment = now.AddSeconds(offset * 30);
+
+                if (_usedSteps.Add(moment.ToUnixTimeSeconds() / 30))
+                {
+                    return TotpCode.Compute(AuthenticatorKey, moment);
+                }
+            }
+        }
+
+        throw new InvalidOperationException("Every time step that the host accepts has been used for this login.");
+    }
+}
 
 /// <summary>The discovery documents a client reads before it signs in, and the challenge that started the chain.</summary>
 public sealed record DiscoveryDocuments(
@@ -82,23 +122,7 @@ public sealed partial class OAuthTestDriver(HttpClient browser)
         string? resource = null,
         string scope = "ledger.read offline_access")
     {
-        var verifier = Base64Url(RandomNumberGenerator.GetBytes(48));
-        var challenge = Base64Url(SHA256.HashData(Encoding.ASCII.GetBytes(verifier)));
-        var state = Base64Url(RandomNumberGenerator.GetBytes(16));
-        var resourceValue = resource ?? discovery.ResourceMetadata.GetProperty("resource").GetString()!;
-
-        var authorizeUrl = discovery.AuthorizationEndpoint
-            + "?" + FormEncode(
-            [
-                ("response_type", "code"),
-                ("client_id", clientId),
-                ("redirect_uri", redirectUri),
-                ("code_challenge", challenge),
-                ("code_challenge_method", "S256"),
-                ("state", state),
-                ("resource", resourceValue),
-                ("scope", scope)
-            ]);
+        var (authorizeUrl, verifier, state) = BuildAuthorizeAddress(discovery, clientId, redirectUri, resource, scope);
 
         using var first = await browser.GetAsync(authorizeUrl, TestContext.Current.CancellationToken);
 
@@ -111,17 +135,13 @@ public sealed partial class OAuthTestDriver(HttpClient browser)
         var loginAddress = first.Headers.Location!.ToString();
         loginAddress.Should().Contain("/account/login");
 
-        using var loginPage = await browser.GetAsync(loginAddress, TestContext.Current.CancellationToken);
-        loginPage.StatusCode.Should().Be(HttpStatusCode.OK);
-        var loginForm = HiddenFields(await loginPage.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
-        loginForm["UserName"] = login.UserName;
-        loginForm["Password"] = login.Password;
+        using var passwordPosted = await PostPasswordAsync(loginAddress, login.UserName, login.Password);
+        passwordPosted.StatusCode.Should().Be(HttpStatusCode.Redirect, "a correct password continues to the one-time code page");
+        var codeAddress = passwordPosted.Headers.Location!.ToString();
+        codeAddress.Should().Contain("/account/totp");
 
-        using var signedIn = await browser.PostAsync(
-            loginAddress,
-            new FormUrlEncodedContent(loginForm),
-            TestContext.Current.CancellationToken);
-        signedIn.StatusCode.Should().Be(HttpStatusCode.Redirect, "a correct sign-in continues to the authorize request");
+        using var signedIn = await PostCodeAsync(codeAddress, login.NextCode());
+        signedIn.StatusCode.Should().Be(HttpStatusCode.Redirect, "a correct code continues to the authorize request");
 
         using var consent = await browser.GetAsync(signedIn.Headers.Location!.ToString(), TestContext.Current.CancellationToken);
         consent.StatusCode.Should().Be(HttpStatusCode.OK);
@@ -136,6 +156,58 @@ public sealed partial class OAuthTestDriver(HttpClient browser)
             TestContext.Current.CancellationToken);
 
         return Outcome(decided, verifier, redirectUri, state, consentHtml);
+    }
+
+    /// <summary>The address of the authorization request a client starts with, and the PKCE verifier and state that go with it.</summary>
+    public static (string Address, string Verifier, string State) BuildAuthorizeAddress(
+        DiscoveryDocuments discovery,
+        string clientId,
+        string redirectUri,
+        string? resource = null,
+        string scope = "ledger.read offline_access")
+    {
+        var verifier = Base64Url(RandomNumberGenerator.GetBytes(48));
+        var challenge = Base64Url(SHA256.HashData(Encoding.ASCII.GetBytes(verifier)));
+        var state = Base64Url(RandomNumberGenerator.GetBytes(16));
+        var resourceValue = resource ?? discovery.ResourceMetadata.GetProperty("resource").GetString()!;
+
+        var address = discovery.AuthorizationEndpoint
+            + "?" + FormEncode(
+            [
+                ("response_type", "code"),
+                ("client_id", clientId),
+                ("redirect_uri", redirectUri),
+                ("code_challenge", challenge),
+                ("code_challenge_method", "S256"),
+                ("state", state),
+                ("resource", resourceValue),
+                ("scope", scope)
+            ]);
+
+        return (address, verifier, state);
+    }
+
+    /// <summary>Opens the sign-in page at the address and posts the user name and password with the page's own form token.</summary>
+    public async Task<HttpResponseMessage> PostPasswordAsync(string loginAddress, string userName, string password)
+    {
+        using var page = await browser.GetAsync(loginAddress, TestContext.Current.CancellationToken);
+        page.StatusCode.Should().Be(HttpStatusCode.OK);
+        var form = HiddenFields(await page.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+        form["UserName"] = userName;
+        form["Password"] = password;
+
+        return await browser.PostAsync(loginAddress, new FormUrlEncodedContent(form), TestContext.Current.CancellationToken);
+    }
+
+    /// <summary>Opens the one-time code page at the address and posts the code with the page's own form token.</summary>
+    public async Task<HttpResponseMessage> PostCodeAsync(string codeAddress, string code)
+    {
+        using var page = await browser.GetAsync(codeAddress, TestContext.Current.CancellationToken);
+        page.StatusCode.Should().Be(HttpStatusCode.OK);
+        var form = HiddenFields(await page.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+        form["Code"] = code;
+
+        return await browser.PostAsync(codeAddress, new FormUrlEncodedContent(form), TestContext.Current.CancellationToken);
     }
 
     /// <summary>Exchanges the authorization code at the token endpoint, with the PKCE verifier and the resource.</summary>
