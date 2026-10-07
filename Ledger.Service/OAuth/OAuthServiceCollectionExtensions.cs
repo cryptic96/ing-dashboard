@@ -111,6 +111,8 @@ public static class OAuthServiceCollectionExtensions
                     .AddEphemeralEncryptionKey()
                     .UseDataProtection();
 
+                server.Configure(serverOptions => serverOptions.CodeChallengeMethods.Remove(OpenIddictConstants.CodeChallengeMethods.Plain));
+
                 server.AddEventHandler(ReusedRefreshTokenHandler.Descriptor);
 
                 server.UseAspNetCore()

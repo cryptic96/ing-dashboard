@@ -38,10 +38,33 @@ public class OAuthFlowTests(DatabaseFixture fixture)
         var metadata = discovery.AuthorizationServerMetadata;
         metadata.GetProperty("issuer").GetString().Should().Be(servers[0].GetString(), "the issuer must match the resource metadata character for character");
         metadata.GetProperty("code_challenge_methods_supported").EnumerateArray().Select(method => method.GetString())
-            .Should().Contain("S256");
+            .Should().Equal("S256");
         metadata.GetProperty("scopes_supported").EnumerateArray().Select(scope => scope.GetString())
             .Should().Contain(["ledger.read", "offline_access"]);
         metadata.TryGetProperty("registration_endpoint", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    [Trait("Category", "OAuth")]
+    public async Task An_authorize_request_with_the_plain_code_challenge_method_is_refused()
+    {
+        await using var host = await McpTestHost.StartAsync(fixture.ConnectionStringFor("ledger_runtime"));
+        using var browser = host.CreateBrowser();
+        var discovery = await new OAuthTestDriver(browser).DiscoverAsync();
+        var (address, verifier, _) = OAuthTestDriver.BuildAuthorizeAddress(
+            discovery,
+            ClientRegistrations.CodeClientId,
+            OAuthTestDriver.LoopbackRedirectUri);
+        var plain = System.Text.RegularExpressions.Regex.Replace(address, "code_challenge=[^&]+", "code_challenge=" + verifier)
+            .Replace("code_challenge_method=S256", "code_challenge_method=plain", StringComparison.Ordinal);
+
+        using var response = await browser.GetAsync(plain, TestContext.Current.CancellationToken);
+
+        var location = response.Headers.Location?.ToString() ?? string.Empty;
+        var body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        (location + body).Should().Contain("invalid_request");
+        location.Should().NotContain("/account/login", "a refused request never reaches the sign-in page");
+        location.Should().NotContain("code=");
     }
 
     [Fact]
