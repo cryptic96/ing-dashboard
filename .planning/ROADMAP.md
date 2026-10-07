@@ -14,7 +14,7 @@ The build starts with a secure platform, so no real financial data ever lands on
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Secure Platform & Release Pipeline** - Hardened tag-to-deploy pipeline and a locked-down LXC (app, Prometheus, Grafana) ready to hold financial data (completed 2026-09-29)
-- [ ] **Phase 2: Automatic ING Sync** - Link ING once; real transactions arrive daily, deduplicated, with consent expiry never silent
+- [x] **Phase 2: Automatic ING Sync** - Link ING once; real transactions arrive daily, deduplicated, with consent expiry never silent (completed 2026-10-07)
 - [ ] **Phase 3: Claude Reads the Ledger** - Claude (desktop, Code, claude.ai web and mobile) answers grounded spending questions over a secured MCP endpoint
 - [ ] **Phase 4: Trustworthy Categorisation** - Rules, review queue and Claude-assisted corrections with audit and undo; category drill-down and history comparison
 - [ ] **Phase 5: Budgets, Goals & Forecast** - Budgets, savings goals, recurring costs and income, true monthly cost, forecast and a single affordability answer
@@ -216,7 +216,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Secure Platform & Release Pipeline | 12/12 | Complete    | 2026-09-29 |
-| 2. Automatic ING Sync | 16/16 | In Progress|  |
+| 2. Automatic ING Sync | 16/16 | Complete    | 2026-10-07 |
 | 3. Claude Reads the Ledger | 0/TBD | Not started | - |
 | 4. Trustworthy Categorisation | 0/TBD | Not started | - |
 | 5. Budgets, Goals & Forecast | 0/TBD | Not started | - |

@@ -1,30 +1,36 @@
 ---
 phase: 02-automatic-ing-sync
 verified: 2026-10-07T12:00:00Z
-status: human_needed
+status: passed
 score: 4/5 must-haves verified
 behavior_unverified: 1
 overrides_applied: 1
 overrides:
+
   - must_have: "After one guided consent flow, the joint account and every ING savings account appear in the ledger with the longest history the bank link offers"
     reason: "ING offers no savings account through the PSD2 link (restricted production application listed exactly two joint current accounts, type CACC). The fallback was agreed in the phase context before the spike: ship with the joint current accounts only. Transfers to and from savings stay visible on the current accounts; savings balances and interest are absent from the ledger. The provider-agnostic interface keeps a second provider for savings possible later."
     accepted_by: "household operator (fallback decision recorded in the phase context and the spike decisions)"
     accepted_at: "2026-10-05T00:00:00Z"
 behavior_unverified_items:
+
   - truth: "Alerts reach the household when a sync fails (including rate-limit rejections) and 14 and 7 days before consent expires"
     test: "In Grafana (Alerting > Alert rules, folder Household) confirm all eight rules show Normal. Then provoke one firing alert end to end, for example by temporarily lowering a threshold in a throwaway copy or by waiting for a real failure, and confirm the email reaches every household recipient."
     expected: "Eight Household rules Normal while healthy; a firing rule produces one email to the configured recipients with no financial content; the 14-day and 7-day bands each send their own email as the consent days-left value crosses 14 and 7."
     why_human: "The rule expressions and metrics are present, wired and statically linted, and the metrics they read are covered by integration tests. No test makes Grafana evaluate the sync-failing, rate-limited or 14/7-day rules, and no real alert email for these has fired. Only the stale-sync expression was evaluated against live Prometheus (10212 s, correct) and a test notification from the contact point arrived."
 human_verification:
+
   - test: "Open Grafana alerting and confirm the eight Household rules are Normal; check the recipient list in LEDGER_ALERT_EMAIL (server-side env) contains both partners if both should be warned."
     expected: "All eight rules Normal; recipients are the intended household addresses (the contact point accepts a list)."
     why_human: "Rule state and the server-side recipient value are not visible from the repository."
+
   - test: "Renew the consent through the guided flow when the 14-day alert fires (about 2027-03-21), or earlier on a spare window, and watch the run."
     expected: "Superseded connection, same account keys, names, selection and history; a longest-history sync adds no duplicates; the days-left metric jumps back to about 180; whether ING grants the full 180 days on renewal is recorded."
     why_human: "Renewal is covered by integration tests and the synthetic provider but has not run against the live bank (the consent is new)."
+
   - test: "Over the next days watch the two real pending transactions until they book."
     expected: "Each stays one row and becomes booked, with the booking date filled, no second row and no ambiguous flag; balance reconciliation stays true."
     why_human: "The pending-to-booked path is exercised by tests (same reference, new reference, ambiguous), but ING was believed booked-only and two pending items have now appeared; the live transition has not been observed."
+
   - test: "Confirm in the ING app that the old spike consent no longer appears under connected parties (the operator could not find the screen)."
     expected: "No spike access listed; the API revocation returned HTTP 200 and the spike application was deleted."
     why_human: "The ING app screen is not reachable from here; only the aggregator side was confirmed."

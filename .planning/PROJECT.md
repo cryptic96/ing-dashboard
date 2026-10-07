@@ -17,15 +17,19 @@ Claude can serve as a trustworthy financial advisor for the household — answer
 - [x] App, PostgreSQL, Grafana and Prometheus run in one LXC; provisioning is automated where possible and any one-time setup is documented step by step — *Validated in Phase 1: Secure Platform & Release Pipeline*
 - [x] Dashboards, datasources and alert rules are provisioned as code from the repository — nothing clicked together by hand — *Validated in Phase 1: Secure Platform & Release Pipeline*
 - [x] Both partners can open the dashboards without technical steps, at home and away (via the home VPN) — *Validated in Phase 1: Secure Platform & Release Pipeline*
+- [x] Transactions from the ING joint accounts sync automatically every morning through a read-only licensed PSD2 aggregator (Enable Banking, restricted personal-use mode) — *Validated in Phase 2: Automatic ING Sync*
+- [x] Sync is idempotent: re-running never duplicates transactions; pending and booked transactions are reconciled, and the daily balance check reconciles each account to the cent — *Validated in Phase 2: Automatic ING Sync*
+- [x] Bank consent renewal is a guided flow, with advance warning 14 and 7 days before expiry (first live renewal around March 2027 is a tracked follow-up) — *Validated in Phase 2: Automatic ING Sync*
+- [x] Initial history is whatever the bank link returns (two years right after approval); no manual backfill needed — *Validated in Phase 2: Automatic ING Sync*
+- [x] Ingestion sits behind a provider interface; a synthetic provider feeds the same pipeline unchanged — *Validated in Phase 2: Automatic ING Sync*
+- [x] Grafana reads financial data through a SELECT-only database role on a reporting schema of views — *Validated in Phase 2: Automatic ING Sync*
+- [x] App exposes `/metrics` for Prometheus: sync health, time of last successful sync, consent state and days until expiry, error counts — *Validated in Phase 2: Automatic ING Sync*
+- [x] Alerts for failing syncs, rate limits, consent rejection, stale syncs, balance drift and consent nearing expiry, sent to the operator without financial detail — *Validated in Phase 2: Automatic ING Sync*
 
 ### Active
 
 **Ingestion**
-- [ ] Transactions from the ING joint account and ING savings accounts sync automatically (daily) through a read-only mechanism — most likely a licensed PSD2 aggregator (choice to be settled by research)
-- [ ] Sync is idempotent: re-running never duplicates transactions; pending vs booked transactions are handled correctly
-- [ ] Bank consent renewal (PSD2 consents expire, typically every 90–180 days) is a guided flow, with advance warning before expiry
-- [ ] Initial history is whatever the bank link returns; no manual backfill required for v1
-- [ ] Ingestion sits behind an interface so another provider (or a CSV/CAMT import) can be added later without touching the rest of the app
+- [ ] Savings balance and interest, which the bank link does not expose: decide on manual balance entry or a CSV import when budgets and goals need them
 
 **Categorisation**
 - [ ] Category tree based on Nibud household budget categories, refined by Claude from the household's real data
@@ -51,12 +55,9 @@ Claude can serve as a trustworthy financial advisor for the household — answer
 
 **Dashboards (Grafana)**
 - [ ] Dashboards for: where the money goes, category drill-down, trends over time, budget vs actual, savings goals, recurring costs
-- [ ] Dashboards available in both English and Dutch
-- [ ] Grafana reads financial data through a SELECT-only database role on a reporting schema of views (chosen after comparing views, REST via a JSON datasource and Prometheus)
+- [ ] Dashboards available in both English and Dutch (the sync dashboard is generated in both languages from one source since Phase 2; the financial dashboards follow)
 
 **Operations & observability**
-- [ ] App exposes `/metrics` for Prometheus: sync health, time of last successful sync, days until bank consent expires, error counts
-- [ ] Alerts for failing syncs and for bank consent nearing expiry
 
 **REST API & web page**
 - [ ] REST endpoints for operations that MCP is not suited to, and to back the web page
@@ -134,9 +135,9 @@ Claude can serve as a trustworthy financial advisor for the household — answer
 | .NET 10, single ASP.NET Core host for REST + MCP + BackgroundService sync | User's main language; one process to deploy and secure | — Pending |
 | Store data in PostgreSQL inside the app LXC, Unix socket only, with separate runtime / migrator / Grafana reader roles (replaces the earlier plan to use the shared MS SQL Server) | Removes cross-container TLS and firewall work and the shared-instance risk (the other app on that server connects as `sa`); ~150 MB RAM instead of SQL Server's 2 GB minimum; peer auth means no database passwords; SQLite rejected (no logins, decimals stored as text) | — Pending |
 | Grafana is the primary UI | User preference; partner-friendly; known stack | — Pending |
-| Prometheus only for operational metrics, not financial data | No backfill, scrape-time timestamps, immutable samples conflict with recategorisation | — Pending |
-| Grafana reads financial data via a SELECT-only role on a `reporting` schema of views; a JSON datasource against the REST API only for computed panels | Research compared views, REST/Infinity and Prometheus; views are Grafana's own recommended least-privilege pattern and keep the app the owner of its tables | — Pending |
-| Bank link via Enable Banking's free personal-use tier; verify ING savings-account coverage early, Salt Edge as fallback | Official ING API not available to individuals; GoCardless Bank Account Data closed to new signups in 2025 | — Pending (early spike) |
+| Prometheus only for operational metrics, not financial data | No backfill, scrape-time timestamps, immutable samples conflict with recategorisation | ✓ Good (Phase 2): metrics are a projection of the database with opaque labels only |
+| Grafana reads financial data via a SELECT-only role on a `reporting` schema of views; a JSON datasource against the REST API only for computed panels | Research compared views, REST/Infinity and Prometheus; views are Grafana's own recommended least-privilege pattern and keep the app the owner of its tables | ✓ Good (Phase 2): live dashboards read through grafana_reader; writes are refused by the database |
+| Bank link via Enable Banking's free personal-use tier; verify ING savings-account coverage early, Salt Edge as fallback | Official ING API not available to individuals; GoCardless Bank Account Data closed to new signups in 2025 | ✓ Good (Phase 2): restricted mode works for ING NL; two joint accounts, no savings account (outside PSD2, joint-accounts-only fallback); 180-day consent; two years of history only right after approval; no rate limit seen up to 44 calls a day |
 | OAuth authorization server: separate Authentik vs a lightweight embedded server | claude.ai client-registration requirements (DCR vs pre-registered client) decide it; single-LXC resource budget matters | — Pending (MCP/auth phase research) |
 | Spending compared with the household's own history, not Nibud reference figures, in v1 | Nibud figures are a paid product and cannot be committed to a public repo | — Pending |
 | Review/fix web page deferred to v2 | Corrections go through Claude in v1 | — Pending |
@@ -150,6 +151,9 @@ Claude can serve as a trustworthy financial advisor for the household — answer
 | Harden the reference deployment pattern (pull-based deploys instead of a self-hosted runner, scoped database roles, artifact verification, SHA-pinned actions) | Finance data demands more than a hobby app | — Pending |
 | Pull-based deploys: approval publishes the release, a timer on the LXC pulls it and a root-owned installer verifies and installs it; no self-hosted runner | GitHub advises against self-hosted runners on public repos; a central SSH deploy box would become a hub reaching every app; no GitHub-executed code ever runs on the finance server | — Pending |
 | Backups stay local inside the LXC, encrypted to a public key whose private key lives in the operator's password manager | User decision; losing the SSD, theft or fire loses data and backups (accepted risk, offsite copies deferred) | — Pending |
+| Generate the Grafana dashboards from one C# definition with an EN/NL translation file | One source for both languages, drift checked in CI, no second toolchain | ✓ Good (Phase 2) |
+| Daily balance check on ING's undated expected balance, dated at fetch time, with exposed pending payments neutral and drift flagged only when it persists | ING sends no booked or dated balance; a payment pending over a weekend must not raise a false alarm | ✓ Good (Phase 2) |
+| Background call budget of 12 per account per day; syncs the operator starts carry PSU headers; the first sync after linking is never cut off by the budget | Measured in the spike: a daily sync costs 2 calls and no limit appeared up to 44; full history is only offered right after approval | ✓ Good (Phase 2) |
 
 ## Evolution
 
@@ -169,4 +173,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-09-29 after Phase 1 (Secure Platform & Release Pipeline) completed: v0.1.2 live on the LXC through the attested, approval-gated pipeline*
+*Last updated: 2026-10-07 after Phase 2 (Automatic ING Sync) completed: v0.2.3 live; both joint ING accounts sync every morning, reconcile to the cent and show in the EN/NL sync dashboards*

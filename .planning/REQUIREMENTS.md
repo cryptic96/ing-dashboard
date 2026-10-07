@@ -9,13 +9,13 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Ingestion
 
-- [ ] **INGEST-01**: Household links the ING joint account and ING savings accounts once through the bank aggregator's consent flow, after which the app syncs them daily with no manual steps
-- [ ] **INGEST-02**: Re-running a sync never creates duplicate transactions, and a pending transaction that later books ends up as one transaction, not two
-- [ ] **INGEST-03**: Each transaction keeps booking date, value date, signed amount as an exact decimal, currency, counterparty name and IBAN, description/remittance text and pending/booked status; the raw provider payload is retained for replay and diagnosis
-- [ ] **INGEST-04**: Bank consent status (linked, expiring, expired) is tracked explicitly; the household is warned at least 14 days before expiry and can renew through a guided flow without losing history
-- [ ] **INGEST-05**: The first sync requests the longest history the bank link offers, and that history is the starting point (no manual backfill)
-- [ ] **INGEST-06**: Ingestion goes through a provider interface, so another aggregator or a file import can be added without changing categorisation, planning, MCP or dashboards
-- [ ] **INGEST-07**: Sync respects the aggregator's rate limits, and every failed sync is visible rather than silent
+- [x] **INGEST-01**: Household links the ING joint account and ING savings accounts once through the bank aggregator's consent flow, after which the app syncs them daily with no manual steps
+- [x] **INGEST-02**: Re-running a sync never creates duplicate transactions, and a pending transaction that later books ends up as one transaction, not two
+- [x] **INGEST-03**: Each transaction keeps booking date, value date, signed amount as an exact decimal, currency, counterparty name and IBAN, description/remittance text and pending/booked status; the raw provider payload is retained for replay and diagnosis
+- [x] **INGEST-04**: Bank consent status (linked, expiring, expired) is tracked explicitly; the household is warned at least 14 days before expiry and can renew through a guided flow without losing history
+- [x] **INGEST-05**: The first sync requests the longest history the bank link offers, and that history is the starting point (no manual backfill)
+- [x] **INGEST-06**: Ingestion goes through a provider interface, so another aggregator or a file import can be added without changing categorisation, planning, MCP or dashboards
+- [x] **INGEST-07**: Sync respects the aggregator's rate limits, and every failed sync is visible rather than silent
 
 ### Categorisation
 
@@ -62,16 +62,16 @@ Requirements for initial release. Each maps to roadmap phases.
 - [ ] **DASH-02**: Category drill-down and trends over time are available per category and per period
 - [ ] **DASH-03**: Dashboards cover budget vs actual, savings goals, recurring costs with price increases, and true monthly cost of annual expenses
 - [ ] **DASH-04**: The latest scheduled review is shown as a dashboard panel
-- [ ] **DASH-05**: Every dashboard exists in English and Dutch, generated from a single source so the two languages cannot drift apart
+- [x] **DASH-05**: Every dashboard exists in English and Dutch, generated from a single source so the two languages cannot drift apart
 - [x] **DASH-06**: Dashboards, datasources and alert rules are provisioned as code from the repository
-- [ ] **DASH-07**: Grafana reads financial data through a read-only, least-privilege path (a SELECT-only database role on a reporting schema of views) and cannot write
+- [x] **DASH-07**: Grafana reads financial data through a read-only, least-privilege path (a SELECT-only database role on a reporting schema of views) and cannot write
 - [x] **DASH-08**: Each partner has their own Grafana viewer login; anonymous access, public dashboards and snapshot sharing are disabled
 - [x] **DASH-09**: Grafana is reachable from the home network and the VPN only
 
 ### Operations
 
-- [ ] **OPS-01**: The app exposes `/metrics` for Prometheus: time of last successful sync, sync errors, days until bank consent expires, review-queue size
-- [ ] **OPS-02**: Alerts fire when syncs fail and when bank consent is 14 and 7 days from expiry
+- [x] **OPS-01**: The app exposes `/metrics` for Prometheus: time of last successful sync, sync errors, days until bank consent expires, review-queue size
+- [x] **OPS-02**: Alerts fire when syncs fail and when bank consent is 14 and 7 days from expiry
 - [x] **OPS-03**: App, PostgreSQL, Grafana and Prometheus run in one LXC as systemd services; setup is automated where possible and any one-time steps are documented step by step
 - [x] **OPS-04**: Finance database backups are encrypted, and a restore procedure is documented and tested
 - [x] **OPS-05**: Data Protection keys are persisted, so encrypted bank credentials survive restarts and redeploys (verified by an actual restart)
@@ -80,7 +80,7 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Security & deployment
 
-- [ ] **SEC-01**: Bank access is read-only; no code path exists that can initiate a payment or move money
+- [x] **SEC-01**: Bank access is read-only; no code path exists that can initiate a payment or move money
 - [x] **SEC-02**: The app uses separate database roles — runtime (data access to its own tables only, no schema changes), migrator (schema changes) and Grafana reader (SELECT on reporting views only); the database superuser is never used by the app
 - [x] **SEC-03**: Secrets live only in a server-side env file readable by the app alone; bank consent tokens and the aggregator key are encrypted at rest
 - [ ] **SEC-04**: Only `/mcp` and the OAuth endpoints it needs are internet-facing via Traefik, restricted to Anthropic's published IP ranges; access tokens are audience-validated on every request and never passed through to other services
@@ -140,13 +140,13 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| INGEST-01 | Phase 2 | Pending |
-| INGEST-02 | Phase 2 | Pending |
-| INGEST-03 | Phase 2 | Pending |
-| INGEST-04 | Phase 2 | Pending |
-| INGEST-05 | Phase 2 | Pending |
-| INGEST-06 | Phase 2 | Pending |
-| INGEST-07 | Phase 2 | Pending |
+| INGEST-01 | Phase 2 | Complete |
+| INGEST-02 | Phase 2 | Complete |
+| INGEST-03 | Phase 2 | Complete |
+| INGEST-04 | Phase 2 | Complete |
+| INGEST-05 | Phase 2 | Complete |
+| INGEST-06 | Phase 2 | Complete |
+| INGEST-07 | Phase 2 | Complete |
 | CAT-01 | Phase 4 | Pending |
 | CAT-02 | Phase 4 | Pending |
 | CAT-03 | Phase 4 | Pending |
@@ -181,19 +181,19 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DASH-02 | Phase 4 | Pending |
 | DASH-03 | Phase 5 | Pending |
 | DASH-04 | Phase 6 | Pending |
-| DASH-05 | Phase 2 | Pending |
+| DASH-05 | Phase 2 | Complete |
 | DASH-06 | Phase 1 | Complete |
-| DASH-07 | Phase 2 | Pending |
+| DASH-07 | Phase 2 | Complete |
 | DASH-08 | Phase 1 | Complete |
 | DASH-09 | Phase 1 | Complete |
-| OPS-01 | Phase 2 | Pending |
-| OPS-02 | Phase 2 | Pending |
+| OPS-01 | Phase 2 | Complete |
+| OPS-02 | Phase 2 | Complete |
 | OPS-03 | Phase 1 | Complete |
 | OPS-04 | Phase 1 | Complete |
 | OPS-05 | Phase 1 | Complete |
 | OPS-06 | Phase 3 | Pending |
 | OPS-07 | Phase 1 | Complete |
-| SEC-01 | Phase 2 | Pending |
+| SEC-01 | Phase 2 | Complete |
 | SEC-02 | Phase 1 | Complete |
 | SEC-03 | Phase 1 | Complete |
 | SEC-04 | Phase 3 | Pending |
