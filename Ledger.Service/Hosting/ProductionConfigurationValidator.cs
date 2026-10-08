@@ -66,7 +66,7 @@ public static class ProductionConfigurationValidator
 
     /// <summary>
     /// The sign-in, OAuth and MCP surface is switched on by the public base address, so its other keys are judged only when that
-    /// address is present. The address must be a real https origin, the sign-in networks must be a deliberate allow-list that
+    /// address is present. The address must be a real https origin, the reverse proxy must be a trusted address, the sign-in networks must be a deliberate allow-list that
     /// never covers Anthropic's connectors, and the token lifetimes must stay in a sane range.
     /// </summary>
     private static void AddOAuthProblems(IConfiguration configuration, List<string> offendingKeys)
@@ -88,6 +88,7 @@ public static class ProductionConfigurationValidator
             offendingKeys.Add(SignInNetworksKey);
         }
 
+        AddReverseProxyProblems(configuration, offendingKeys);
         AddLifetimeProblem(configuration, AccessTokenLifetimeKey, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(60), offendingKeys);
         AddLifetimeProblem(configuration, RefreshTokenLifetimeKey, TimeSpan.FromDays(1), TimeSpan.FromDays(180), offendingKeys);
         AddLifetimeProblem(configuration, RefreshTokenReuseLeewayKey, TimeSpan.Zero, TimeSpan.FromSeconds(120), offendingKeys);
@@ -235,12 +236,18 @@ public static class ProductionConfigurationValidator
     }
 
     /// <summary>
-    /// The bank is sent the operator's address, which is only the real one when the reverse proxy's own address is trusted to
-    /// forward it. At least one parseable proxy address is therefore required, and an entry that cannot be parsed is rejected
-    /// rather than silently ignored.
+    /// The address a request comes from is only the real one when the reverse proxy's own address is trusted to forward it. The
+    /// bank is told the operator's address, and the sign-in network check and the per-address rate limits judge the caller's, so
+    /// both the bank link and the OAuth surface need it. At least one parseable proxy address is therefore required, and an entry
+    /// that cannot be parsed is rejected rather than silently ignored. The key is named once however many features need it.
     /// </summary>
     private static void AddReverseProxyProblems(IConfiguration configuration, List<string> offendingKeys)
     {
+        if (offendingKeys.Contains(KnownProxiesKey))
+        {
+            return;
+        }
+
         var proxies = configuration.GetSection(KnownProxiesKey).Get<string[]>() ?? [];
 
         if (proxies.Length == 0 || proxies.Any(proxy => !IPAddress.TryParse(proxy, out _)))

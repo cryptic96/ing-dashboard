@@ -335,6 +335,48 @@ public class ProductionConfigurationValidatorTests : IDisposable
 
     [Theory]
     [Trait("Category", "Configuration")]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("traefik.example.com")]
+    public void ThrowIfInvalid_requires_a_known_proxy_when_the_oauth_surface_is_on_without_a_bank_provider(string? knownProxy)
+    {
+        var configuration = OAuthConfiguration(new Dictionary<string, string?> { ["ReverseProxy:KnownProxies:0"] = knownProxy });
+
+        var act = () => ProductionConfigurationValidator.ThrowIfInvalid(configuration);
+
+        var exception = act.Should().Throw<InvalidOperationException>().Which;
+        exception.Message.Should().Contain("ReverseProxy:KnownProxies");
+        exception.Message.Should().NotContain("OAuth:");
+        exception.Message.Should().NotContain("traefik.example.com");
+    }
+
+    [Fact]
+    [Trait("Category", "Configuration")]
+    public void ThrowIfInvalid_names_the_known_proxies_key_once_when_the_bank_link_and_the_oauth_surface_both_need_it()
+    {
+        var configuration = BuildConfiguration(
+            _existingCertificatePath,
+            SentinelPassword,
+            ValidConnectionString,
+            "EnableBanking",
+            ValidRedirectUrl,
+            applicationId: ValidApplicationId,
+            keyPath: _existingCertificatePath,
+            keyPassword: SentinelPassword,
+            extra: new Dictionary<string, string?>
+            {
+                ["OAuth:PublicBaseUrl"] = "https://mcp.household.test",
+                ["OAuth:SignInNetworks:0"] = "192.0.2.0/24"
+            });
+
+        var act = () => ProductionConfigurationValidator.ThrowIfInvalid(configuration);
+
+        var message = act.Should().Throw<InvalidOperationException>().Which.Message;
+        message.Split("ReverseProxy:KnownProxies").Length.Should().Be(2);
+    }
+
+    [Theory]
+    [Trait("Category", "Configuration")]
     [InlineData("http://mcp.household.test")]
     [InlineData("https://mcp.household.test/path")]
     [InlineData("https://mcp.household.test/mcp")]
@@ -453,6 +495,7 @@ public class ProductionConfigurationValidatorTests : IDisposable
         var values = new Dictionary<string, string?>
         {
             ["OAuth:PublicBaseUrl"] = "https://mcp.household.test",
+            ["ReverseProxy:KnownProxies:0"] = ValidKnownProxy,
             ["OAuth:SignInNetworks:0"] = "192.0.2.0/24",
             ["OAuth:SignInNetworks:1"] = "198.51.100.0/24"
         };
