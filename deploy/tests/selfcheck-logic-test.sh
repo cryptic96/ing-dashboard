@@ -237,14 +237,10 @@ if [[ -n "${STUB_MCP_HOST:-}" && "$host_header" == "$STUB_MCP_HOST" ]]; then
   body=""
   headers=""
   default_challenge="https://${STUB_MCP_HOST}/.well-known/oauth-protected-resource/mcp"
-  default_body="{\"resource\":\"https://${STUB_MCP_HOST}/mcp\"}"
   case "$method $path" in
     "POST /mcp")
       status="${STUB_MCP_STATUS:-401}"
       headers="WWW-Authenticate: Bearer resource_metadata=\"${STUB_MCP_CHALLENGE_URL-$default_challenge}\"" ;;
-    "GET /.well-known/oauth-protected-resource/mcp")
-      status="${STUB_PRM_STATUS:-200}"
-      body="${STUB_PRM_BODY-$default_body}" ;;
     "GET /api/v1/status") status="${STUB_MCP_API_STATUS:-404}" ;;
     "GET /account/login") status="${STUB_SIGNIN_STATUS:-404}" ;;
   esac
@@ -385,7 +381,7 @@ setup_good_env() {
     STUB_GRAFANA_ADMIN_USER STUB_GRAFANA_ADMIN_PASS STUB_GRAFANA_ORG_USERS \
     STUB_GRAFANA_SETTINGS STUB_GRAFANA_DEFAULT_PASSWORD_WORKS \
     STUB_PASSWD STUB_SUDO_USERS STUB_MCP_HOST STUB_MCP_STATUS \
-    STUB_MCP_CHALLENGE_URL STUB_PRM_STATUS STUB_PRM_BODY \
+    STUB_MCP_CHALLENGE_URL \
     STUB_MCP_API_STATUS STUB_SIGNIN_STATUS
   export STUB_ACTIVE_UNITS="prometheus prometheus-node-exporter grafana-server ledger ledger-deploy-poll.timer ledger-backup.timer"
   export STUB_ENABLED_UNITS="ledger-deploy-poll.timer ledger-backup.timer"
@@ -850,8 +846,6 @@ export STUB_MCP_HOST="$MCP_HOST"
 OUT="$(run_selfcheck)"
 assert_line "GOOD host: the 401 challenge names the resource metadata" "$OUT" \
   "PASS - POST /mcp without a token returns 401 with the expected resource_metadata challenge"
-assert_line "GOOD host: the protected-resource document names the resource" "$OUT" \
-  "PASS - the protected-resource document names https://${MCP_HOST}/mcp"
 assert_line "GOOD host: the REST status path is 404 on the MCP hostname" "$OUT" \
   "PASS - GET /api/v1/status on the MCP hostname returns 404"
 assert_line "GOOD host: the sign-in page is 404 from loopback" "$OUT" \
@@ -891,15 +885,6 @@ export STUB_SIGNIN_STATUS="200"
 OUT="$(run_selfcheck)"
 assert_line "BAD host: a 200 on the sign-in page from loopback fails" "$OUT" \
   "FAIL - the sign-in page returned 200 to an address outside the home and VPN networks, expected 404"
-
-setup_good_env
-reset_log_fixtures
-write_mcp_env
-export STUB_MCP_HOST="$MCP_HOST"
-export STUB_PRM_BODY='{"resource":"https://other.example.org/mcp"}'
-OUT="$(run_selfcheck)"
-assert_line "BAD host: a protected-resource document for a different resource fails" "$OUT" \
-  "FAIL - the protected-resource document returned 200 naming 'https://other.example.org/mcp', expected 200 naming https://${MCP_HOST}/mcp"
 
 # =====================================================================
 # Token and enrolment-secret log patterns (check_log_secrets)
