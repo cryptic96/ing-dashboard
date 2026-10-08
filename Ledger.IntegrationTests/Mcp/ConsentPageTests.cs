@@ -2,7 +2,9 @@ using System.Net;
 using System.Text.RegularExpressions;
 using FluentAssertions;
 using Ledger.IntegrationTests.Infrastructure;
+using Ledger.Repository.Entities;
 using Ledger.Service.OAuth;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Ledger.IntegrationTests.Mcp;
@@ -53,9 +55,9 @@ public class ConsentPageTests(DatabaseFixture fixture)
         using var browser = host.CreateBrowser();
         var driver = new OAuthTestDriver(browser);
         var discovery = await driver.DiscoverAsync();
-        var consent = await OpenConsentPageAsync(driver, browser, discovery, login);
+        var consent = await driver.OpenConsentPageAsync(discovery, ClientId, login, OAuthTestDriver.LoopbackRedirectUri);
 
-        var fields = OAuthTestDriver.HiddenFields(consent.Html)
+        var fields = consent.Fields
             .Select(field => new KeyValuePair<string, string>(field.Key, field.Value))
             .Concat([new("Decision", "approve"), new("decision", "deny")]);
 
@@ -78,40 +80,68 @@ public class ConsentPageTests(DatabaseFixture fixture)
         using var browser = host.CreateBrowser();
         var driver = new OAuthTestDriver(browser);
         var discovery = await driver.DiscoverAsync();
-        var consent = await OpenConsentPageAsync(driver, browser, discovery, login, "unrelated=1&__RequestVerificationToken=x");
+        var consent = await driver.OpenConsentPageAsync(
+            discovery,
+            ClientId,
+            login,
+            OAuthTestDriver.LoopbackRedirectUri,
+            "unrelated=1&__RequestVerificationToken=x");
 
-        var names = OAuthTestDriver.HiddenFields(consent.Html).Keys;
+        var names = consent.Fields.Keys;
 
         names.Should().Contain(["client_id", "redirect_uri", "response_type", "code_challenge", "code_challenge_method", "state", "resource", "scope"]);
         names.Should().NotContain("unrelated");
         names.Count(name => name.Equals("__RequestVerificationToken", StringComparison.OrdinalIgnoreCase)).Should().Be(1, "only the page's own token is present");
     }
 
-    private static async Task<(string Html, string Address)> OpenConsentPageAsync(
-        OAuthTestDriver driver,
-        HttpClient browser,
-        DiscoveryDocuments discovery,
-        TestLogin login,
-        string? extraQuery = null)
+    [Fact]
+    [Trait("Category", "OAuth")]
+    public async Task A_session_whose_login_became_locked_out_cannot_approve_a_grant()
     {
-        var (address, _, _) = OAuthTestDriver.BuildAuthorizeAddress(discovery, ClientId, OAuthTestDriver.LoopbackRedirectUri);
+        await using var host = await McpTestHost.StartAsync(fixture.ConnectionStringFor("ledger_runtime"));
+        var login = await host.CreateLoginAsync();
+        using var browser = host.CreateBrowser();
+        var driver = new OAuthTestDriver(browser);
+        var discovery = await driver.DiscoverAsync();
+        var consent = await driver.OpenConsentPageAsync(discovery, ClientId, login, OAuthTestDriver.LoopbackRedirectUri);
 
-        if (extraQuery is not null)
+        using (var scope = host.Factory.Services.CreateScope())
         {
-            address += "&" + extraQuery;
+            var users = scope.ServiceProvider.GetRequiredService<UserManager<LedgerUserEntity>>();
+            var user = await users.FindByNameAsync(login.UserName);
+            (await users.SetLockoutEndDateAsync(user!, DateTimeOffset.UtcNow.AddMinutes(10))).Succeeded.Should().BeTrue();
         }
 
-        using var first = await browser.GetAsync(address, TestContext.Current.CancellationToken);
-        first.StatusCode.Should().Be(HttpStatusCode.Redirect);
+        using var decided = await driver.PostDecisionAsync(discovery, consent, "approve");
 
-        using var password = await driver.PostPasswordAsync(first.Headers.Location!.ToString(), login.UserName, login.Password);
-        using var signedIn = await driver.PostCodeAsync(password.Headers.Location!.ToString(), login.NextCode());
-        signedIn.StatusCode.Should().Be(HttpStatusCode.Redirect);
+        decided.StatusCode.Should().Be(HttpStatusCode.Redirect);
+        decided.Headers.Location!.ToString().Should().Contain("/account/login").And.NotContain("code=");
+        (await ActiveGrantsAsync(host, login)).Should().Be(0);
+    }
 
-        using var consent = await browser.GetAsync(signedIn.Headers.Location!.ToString(), TestContext.Current.CancellationToken);
-        consent.StatusCode.Should().Be(HttpStatusCode.OK);
+    [Fact]
+    [Trait("Category", "OAuth")]
+    public async Task A_session_whose_login_lost_its_second_factor_cannot_approve_a_grant()
+    {
+        await using var host = await McpTestHost.StartAsync(fixture.ConnectionStringFor("ledger_runtime"));
+        var login = await host.CreateLoginAsync();
+        using var browser = host.CreateBrowser();
+        var driver = new OAuthTestDriver(browser);
+        var discovery = await driver.DiscoverAsync();
+        var consent = await driver.OpenConsentPageAsync(discovery, ClientId, login, OAuthTestDriver.LoopbackRedirectUri);
 
-        return (await consent.Content.ReadAsStringAsync(TestContext.Current.CancellationToken), address);
+        using (var scope = host.Factory.Services.CreateScope())
+        {
+            var users = scope.ServiceProvider.GetRequiredService<UserManager<LedgerUserEntity>>();
+            var user = await users.FindByNameAsync(login.UserName);
+            (await users.SetTwoFactorEnabledAsync(user!, false)).Succeeded.Should().BeTrue();
+        }
+
+        using var decided = await driver.PostDecisionAsync(discovery, consent, "approve");
+
+        decided.StatusCode.Should().Be(HttpStatusCode.Redirect);
+        decided.Headers.Location!.ToString().Should().Contain("/account/login").And.NotContain("code=");
+        (await ActiveGrantsAsync(host, login)).Should().Be(0);
     }
 
     private static async Task<int> ActiveGrantsAsync(McpTestHost host, TestLogin login)

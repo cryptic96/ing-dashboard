@@ -3,7 +3,10 @@ using FluentAssertions;
 using Ledger.IntegrationTests.Infrastructure;
 using Ledger.Service.Cli;
 using Ledger.Service.OAuth;
+using Ledger.Repository.Entities;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Ledger.IntegrationTests.Mcp;
 
@@ -297,6 +300,61 @@ public class OperatorCommandTests(DatabaseFixture fixture)
 
     [Fact]
     [Trait("Category", "OperatorCommands")]
+    public async Task A_session_signed_in_before_set_password_cannot_approve_a_grant_afterwards()
+    {
+        var connectionString = await LedgerQuerySeed.CreateIsolatedDatabaseAsync(fixture);
+        await using var host = await StartHostAsync(connectionString);
+        var (login, _) = await CreateLoginAsync(connectionString, confirm: true);
+        using var browser = host.CreateBrowser();
+        var driver = new OAuthTestDriver(browser);
+        var discovery = await driver.DiscoverAsync();
+        var consent = await driver.OpenConsentPageAsync(discovery, ClientId, login, OAuthTestDriver.LoopbackRedirectUri);
+
+        (await RunLoginAsync(connectionString, NewPassword(), "set-password", login.UserName)).ExitCode.Should().Be(0);
+
+        await AssertDecisionIsSentToSignInAsync(host, driver, discovery, consent, login);
+    }
+
+    [Fact]
+    [Trait("Category", "OperatorCommands")]
+    public async Task A_session_signed_in_before_reset_totp_cannot_approve_a_grant_afterwards()
+    {
+        var connectionString = await LedgerQuerySeed.CreateIsolatedDatabaseAsync(fixture);
+        await using var host = await StartHostAsync(connectionString);
+        var (login, _) = await CreateLoginAsync(connectionString, confirm: true);
+        using var browser = host.CreateBrowser();
+        var driver = new OAuthTestDriver(browser);
+        var discovery = await driver.DiscoverAsync();
+        var consent = await driver.OpenConsentPageAsync(discovery, ClientId, login, OAuthTestDriver.LoopbackRedirectUri);
+
+        (await RunLoginAsync(connectionString, string.Empty, "reset-totp", login.UserName)).ExitCode.Should().Be(0);
+
+        await AssertDecisionIsSentToSignInAsync(host, driver, discovery, consent, login);
+    }
+
+    [Fact]
+    [Trait("Category", "OperatorCommands")]
+    public async Task A_session_signed_in_before_the_login_was_removed_cannot_approve_a_grant_afterwards()
+    {
+        var connectionString = await LedgerQuerySeed.CreateIsolatedDatabaseAsync(fixture);
+        await using var host = await StartHostAsync(connectionString);
+        var (login, _) = await CreateLoginAsync(connectionString, confirm: true);
+        using var browser = host.CreateBrowser();
+        var driver = new OAuthTestDriver(browser);
+        var discovery = await driver.DiscoverAsync();
+        var consent = await driver.OpenConsentPageAsync(discovery, ClientId, login, OAuthTestDriver.LoopbackRedirectUri);
+
+        (await RunLoginAsync(connectionString, string.Empty, "remove", login.UserName)).ExitCode.Should().Be(0);
+
+        using var decided = await driver.PostDecisionAsync(discovery, consent, "approve");
+
+        decided.StatusCode.Should().Be(HttpStatusCode.Redirect);
+        decided.Headers.Location!.ToString().Should().Contain("/account/login").And.NotContain("code=");
+        (await RunGrantsAsync(connectionString, "list")).Stdout.Should().NotContain(ClientId);
+    }
+
+    [Fact]
+    [Trait("Category", "OperatorCommands")]
     public async Task A_secret_written_by_the_command_is_stored_encrypted_and_a_login_it_enrolled_signs_in_through_the_web_host()
     {
         var connectionString = await LedgerQuerySeed.CreateIsolatedDatabaseAsync(fixture);
@@ -347,6 +405,26 @@ public class OperatorCommandTests(DatabaseFixture fixture)
         var listed = await RunLoginAsync(connectionString, string.Empty, "list");
         listed.Stdout.Should().NotContain(login.UserName).And.Contain(bystander.UserName);
         (await RunLoginAsync(connectionString, string.Empty, "remove", login.UserName)).ExitCode.Should().Be(1);
+    }
+
+    private async Task AssertDecisionIsSentToSignInAsync(
+        McpTestHost host,
+        OAuthTestDriver driver,
+        DiscoveryDocuments discovery,
+        ConsentPage consent,
+        TestLogin login)
+    {
+        using var decided = await driver.PostDecisionAsync(discovery, consent, "approve");
+
+        decided.StatusCode.Should().Be(HttpStatusCode.Redirect);
+        decided.Headers.Location!.ToString().Should().Contain("/account/login").And.NotContain("code=");
+
+        using var scope = host.Factory.Services.CreateScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserManager<LedgerUserEntity>>();
+        var user = await users.FindByNameAsync(login.UserName);
+        var grants = scope.ServiceProvider.GetRequiredService<GrantRevocationService>();
+
+        (await grants.CountActiveGrantsAsync(user!.Id)).Should().Be(0);
     }
 
     private static Task<McpTestHost> StartHostAsync(string connectionString) =>

@@ -111,6 +111,9 @@ public sealed record DiscoveryDocuments(
 /// <summary>What the authorization step handed back: the code and the PKCE verifier that goes with it, or the error the redirect carried.</summary>
 public sealed record AuthorizationOutcome(string? Code, string? Error, string CodeVerifier, string RedirectUri, string Location, string ConsentHtml);
 
+/// <summary>The consent page as a signed-in browser sees it: its markup and the hidden fields it posts back.</summary>
+public sealed record ConsentPage(string Html, IReadOnlyDictionary<string, string> Fields);
+
 /// <summary>The answer of the token endpoint.</summary>
 public sealed record TokenResult(HttpStatusCode Status, string? AccessToken, string? RefreshToken, string? Error, JsonElement Body)
 {
@@ -205,6 +208,46 @@ public sealed partial class OAuthTestDriver(HttpClient browser)
             TestContext.Current.CancellationToken);
 
         return Outcome(decided, verifier, redirectUri, state, consentHtml);
+    }
+
+    /// <summary>Starts an authorization request, signs in with the password and a fresh code, and returns the consent page that follows.</summary>
+    public async Task<ConsentPage> OpenConsentPageAsync(
+        DiscoveryDocuments discovery,
+        string clientId,
+        TestLogin login,
+        string redirectUri,
+        string? extraQuery = null)
+    {
+        var (address, _, _) = BuildAuthorizeAddress(discovery, clientId, redirectUri);
+
+        if (extraQuery is not null)
+        {
+            address += "&" + extraQuery;
+        }
+
+        using var first = await browser.GetAsync(address, TestContext.Current.CancellationToken);
+        first.StatusCode.Should().Be(HttpStatusCode.Redirect);
+
+        using var password = await PostPasswordAsync(first.Headers.Location!.ToString(), login.UserName, login.Password);
+        using var signedIn = await PostCodeAsync(password.Headers.Location!.ToString(), login.NextCode());
+        signedIn.StatusCode.Should().Be(HttpStatusCode.Redirect);
+
+        using var consent = await browser.GetAsync(signedIn.Headers.Location!.ToString(), TestContext.Current.CancellationToken);
+        consent.StatusCode.Should().Be(HttpStatusCode.OK);
+        var html = await consent.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+
+        return new ConsentPage(html, HiddenFields(html));
+    }
+
+    /// <summary>Posts the decision of a consent page, with its hidden fields, to the authorization endpoint.</summary>
+    public async Task<HttpResponseMessage> PostDecisionAsync(DiscoveryDocuments discovery, ConsentPage page, string decision)
+    {
+        var fields = new Dictionary<string, string>(page.Fields, StringComparer.Ordinal) { ["decision"] = decision };
+
+        return await browser.PostAsync(
+            discovery.AuthorizationEndpoint,
+            new FormUrlEncodedContent(fields),
+            TestContext.Current.CancellationToken);
     }
 
     /// <summary>The address of the authorization request a client starts with, and the PKCE verifier and state that go with it.</summary>

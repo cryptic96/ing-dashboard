@@ -18,7 +18,8 @@ namespace Ledger.Service.Pages.Connect;
 
 /// <summary>
 /// The authorization endpoint. It refuses a request for any resource other than the MCP endpoint, sends a person who is not signed
-/// in to the sign-in page, asks for explicit consent naming the client and where the browser returns to, and on approval records
+/// in to the sign-in page (a sign-in that predates a password or authenticator change, a lockout or the removal of the login counts as
+/// not signed in), asks for explicit consent naming the client and where the browser returns to, and on approval records
 /// the grant and lets OpenIddict issue the code.
 /// </summary>
 [AllowAnonymous]
@@ -26,6 +27,7 @@ public class AuthorizeModel(
     IOpenIddictApplicationManager applications,
     IOpenIddictAuthorizationManager authorizations,
     UserManager<LedgerUserEntity> users,
+    SignInManager<LedgerUserEntity> signInManager,
     IOptions<LedgerOAuthOptions> oauthOptions,
     ILogger<AuthorizeModel> logger) : PageModel
 {
@@ -87,10 +89,12 @@ public class AuthorizeModel(
         }
 
         var cookie = await HttpContext.AuthenticateAsync(IdentityConstants.ApplicationScheme);
-        var user = cookie.Succeeded ? await users.GetUserAsync(cookie.Principal!) : null;
+        var user = cookie.Succeeded ? await signInManager.ValidateSecurityStampAsync(cookie.Principal!) : null;
 
-        if (user is null)
+        if (user is null || await users.IsLockedOutAsync(user) || !await users.GetTwoFactorEnabledAsync(user))
         {
+            await HttpContext.SignOutAsync(IdentityConstants.ApplicationScheme);
+
             return Challenge(
                 new AuthenticationProperties { RedirectUri = AuthorizeAddress() },
                 IdentityConstants.ApplicationScheme);
