@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using System.Net;
+using System.Net.Security;
 using System.Net.Sockets;
+using System.Security.Cryptography.X509Certificates;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
@@ -23,6 +25,7 @@ public class LedgerWebApplicationFactory : WebApplicationFactory<Program>
     private readonly Action<IServiceCollection>? _configureTestServices;
     private readonly IReadOnlyDictionary<string, string?>? _additionalConfiguration;
     private readonly CapturingLoggerProvider _loggerProvider;
+    private readonly TestBackendCertificate? _backendCertificate;
     private IHost? _realHost;
 
     /// <summary>
@@ -33,6 +36,7 @@ public class LedgerWebApplicationFactory : WebApplicationFactory<Program>
     /// </summary>
     /// <param name="startupEnvironment">Extra environment values for the duration of startup; a null value removes the variable.</param>
     /// <param name="loggerProvider">A capture provider the caller keeps, so the logs of a host that fails to start can still be read.</param>
+    /// <param name="backendCertificate">When given, the API endpoint serves https from this certificate and key, the way the deployed host does for the reverse proxy; otherwise it serves plain http.</param>
     public LedgerWebApplicationFactory(
         string ledgerConnectionString,
         string? contentRootOverride = null,
@@ -41,9 +45,11 @@ public class LedgerWebApplicationFactory : WebApplicationFactory<Program>
         Action<IServiceCollection>? configureTestServices = null,
         IReadOnlyDictionary<string, string?>? additionalConfiguration = null,
         IReadOnlyDictionary<string, string?>? startupEnvironment = null,
-        CapturingLoggerProvider? loggerProvider = null)
+        CapturingLoggerProvider? loggerProvider = null,
+        TestBackendCertificate? backendCertificate = null)
     {
         _loggerProvider = loggerProvider ?? new CapturingLoggerProvider();
+        _backendCertificate = backendCertificate;
         _ledgerConnectionString = ledgerConnectionString;
         _contentRootOverride = contentRootOverride;
         _configureTestServices = configureTestServices;
@@ -86,6 +92,23 @@ public class LedgerWebApplicationFactory : WebApplicationFactory<Program>
     /// <summary>An HttpClient bound to the real API port.</summary>
     public HttpClient CreateApiClient() => new() { BaseAddress = new Uri($"http://127.0.0.1:{ApiPort}") };
 
+    /// <summary>
+    /// An HttpClient bound to the real API port over https that trusts exactly the given certificate, the way the reverse proxy
+    /// pins the host certificate; every other certificate is rejected.
+    /// </summary>
+    public HttpClient CreatePinnedHttpsApiClient(X509Certificate2 pinned)
+    {
+        var handler = new SocketsHttpHandler
+        {
+            SslOptions = new SslClientAuthenticationOptions
+            {
+                RemoteCertificateValidationCallback = (_, presented, _, _) => presented is not null && presented.Equals(pinned)
+            }
+        };
+
+        return new HttpClient(handler) { BaseAddress = new Uri($"https://127.0.0.1:{ApiPort}") };
+    }
+
     /// <summary>An HttpClient bound to the real ops port.</summary>
     public HttpClient CreateOpsClient() => new() { BaseAddress = new Uri($"http://127.0.0.1:{OpsPort}") };
 
@@ -104,10 +127,19 @@ public class LedgerWebApplicationFactory : WebApplicationFactory<Program>
             configurationBuilder.AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["ConnectionStrings:Ledger"] = _ledgerConnectionString,
-                ["Kestrel:Endpoints:Api:Url"] = $"http://127.0.0.1:{ApiPort}",
+                ["Kestrel:Endpoints:Api:Url"] = $"{(_backendCertificate is null ? "http" : "https")}://127.0.0.1:{ApiPort}",
                 ["Kestrel:Endpoints:Ops:Url"] = $"http://127.0.0.1:{OpsPort}",
                 ["Ingestion:SchedulerEnabled"] = "false"
             });
+
+            if (_backendCertificate is not null)
+            {
+                configurationBuilder.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Kestrel:Endpoints:Api:Certificate:Path"] = _backendCertificate.CertificatePath,
+                    ["Kestrel:Endpoints:Api:Certificate:KeyPath"] = _backendCertificate.KeyPath
+                });
+            }
 
             if (_additionalConfiguration is not null)
             {

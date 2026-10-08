@@ -2,7 +2,7 @@
 # Proves ledger-selfcheck reports the right PASS/FAIL/SKIP line for each
 # targeted check when run against a stubbed host: a GOOD host first, then
 # specific BAD hosts. Every host tool the script can reach (systemctl, ss,
-# nft, runuser, psql, curl, jq, gh, pgrep, readlink) is stubbed so nothing
+# nft, runuser, psql, curl, openssl, jq, gh, pgrep, readlink) is stubbed so nothing
 # real is ever touched. Only the targeted lines are asserted; the script
 # also checks real files (e.g. /etc/ledger) that never exist on a developer
 # machine, so their FAIL lines are expected noise and are ignored here.
@@ -199,6 +199,43 @@ exit 1
 EOF_STUB
 chmod +x "${OWN_BIN}/sudo"
 
+# --- stub: openssl -----------------------------------------------------------
+# Only the shapes the script uses are stubbed: the fingerprint and expiry of
+# the certificate file on disk, and the handshake with port 5080 followed by
+# the fingerprint of whatever certificate it presented (read from stdin).
+# Anything else (the fixtures generate a real key) runs the real openssl.
+cat > "${OWN_BIN}/openssl" <<'EOF_STUB'
+#!/usr/bin/env bash
+case "$1" in
+  s_client)
+    exit "${STUB_SCLIENT_EXIT:-0}" ;;
+  x509)
+    has_file=0
+    mode="fingerprint"
+    for a in "$@"; do
+      case "$a" in
+        -in) has_file=1 ;;
+        -checkend) mode="checkend" ;;
+      esac
+    done
+    if [[ "$mode" == "checkend" ]]; then
+      exit "${STUB_CHECKEND_EXIT:-0}"
+    fi
+    if [[ "$has_file" -eq 1 ]]; then
+      printf 'sha256 Fingerprint=%s\n' "${STUB_BACKEND_FP:-AA:BB:CC}"
+      exit 0
+    fi
+    cat > /dev/null
+    if [[ -n "${STUB_PRESENTED_FP-AA:BB:CC}" ]]; then
+      printf 'sha256 Fingerprint=%s\n' "${STUB_PRESENTED_FP-AA:BB:CC}"
+      exit 0
+    fi
+    exit 1 ;;
+  *) exec /usr/bin/openssl "$@" ;;
+esac
+EOF_STUB
+chmod +x "${OWN_BIN}/openssl"
+
 # --- stub: curl --------------------------------------------------------------
 # Handles two shapes the script uses: plain GET (optionally with
 # --write-out '%{http_code}' and --output /dev/null) and the
@@ -213,6 +250,9 @@ method="GET"
 host_header=""
 dump_file=""
 out_file=""
+cacert=""
+resolve=""
+insecure=0
 args=("$@")
 for ((i = 0; i < ${#args[@]}; i++)); do
   a="${args[$i]}"
@@ -223,24 +263,50 @@ for ((i = 0; i < ${#args[@]}; i++)); do
     --request) method="$next" ;;
     --dump-header) dump_file="$next" ;;
     --output) out_file="$next" ;;
+    --cacert) cacert="$next" ;;
+    --resolve) resolve="$next" ;;
+    --insecure|-k) insecure=1 ;;
     --header)
       case "$next" in
         Host:*) host_header="${next#Host: }" ;;
       esac ;;
-    http://*) url="$a" ;;
+    http://*|https://*) url="$a" ;;
   esac
 done
 
+# Every request to the application's port is recorded with how it was made, so
+# the tests can prove each one pinned the host certificate and none skipped
+# certificate checking. A TLS failure (the pinned certificate does not match)
+# is reproduced as curl does it: status 000 and a non-zero exit.
+case "$url" in
+  *:5080*)
+    printf '%s cacert=%s resolve=%s insecure=%s\n' "${url%%://*}" "$cacert" "$resolve" "$insecure" >> "${STUB_CURL_5080_LOG:-/dev/null}"
+    if [[ "$url" == https://* && "${STUB_TLS_BROKEN:-0}" == "1" ]]; then
+      [[ "$has_write_out" -eq 1 ]] && printf '000'
+      exit 60
+    fi ;;
+esac
+
+case "$url" in
+  http://127.0.0.1:5080/*)
+    [[ "$has_write_out" -eq 1 ]] && printf '%s' "${STUB_PLAIN_HTTP_STATUS:-000}"
+    exit 0 ;;
+esac
+
 if [[ -n "${STUB_MCP_HOST:-}" && "$host_header" == "$STUB_MCP_HOST" ]]; then
-  path="${url#http://127.0.0.1:5080}"
+  path="${url#https://ledger-backend:5080}"
   status="404"
   body=""
   headers=""
   default_challenge="https://${STUB_MCP_HOST}/.well-known/oauth-protected-resource/mcp"
+  default_body="{\"resource\":\"https://${STUB_MCP_HOST}/mcp\"}"
   case "$method $path" in
     "POST /mcp")
       status="${STUB_MCP_STATUS:-401}"
       headers="WWW-Authenticate: Bearer resource_metadata=\"${STUB_MCP_CHALLENGE_URL-$default_challenge}\"" ;;
+    "GET /.well-known/oauth-protected-resource/mcp")
+      status="${STUB_PRM_STATUS:-200}"
+      body="${STUB_PRM_BODY-$default_body}" ;;
     "GET /api/v1/status") status="${STUB_MCP_API_STATUS:-404}" ;;
     "GET /account/login") status="${STUB_SIGNIN_STATUS:-404}" ;;
   esac
@@ -364,6 +430,19 @@ export LEDGER_SELFCHECK_JOURNAL_CMD="cat ${JOURNAL_FILE}"
 export LEDGER_SELFCHECK_ENV_FILE="$ENV_FIXTURE"
 export LEDGER_SELFCHECK_ZONEINFO="${ZONE_ROOT}/Europe/Amsterdam"
 
+# The certificate and key the host would have generated. Their content never
+# matters (openssl is stubbed); the files only have to exist.
+BACKEND_CERT_FIXTURE="${WORKDIR}/backend-tls.crt"
+BACKEND_KEY_FIXTURE="${WORKDIR}/backend-tls.key"
+: > "$BACKEND_CERT_FIXTURE"
+: > "$BACKEND_KEY_FIXTURE"
+export LEDGER_SELFCHECK_BACKEND_CERT="$BACKEND_CERT_FIXTURE"
+export LEDGER_SELFCHECK_BACKEND_KEY="$BACKEND_KEY_FIXTURE"
+
+# Every request the stubbed curl sees for the application's port is appended
+# here; the selfcheck runs in a subshell, so a file is the only way to read it.
+export STUB_CURL_5080_LOG="${WORKDIR}/curl-5080.log"
+
 reset_log_fixtures() {
   rm -rf "$LOG_ROOT"
   mkdir -p "$LOG_ROOT"
@@ -381,8 +460,11 @@ setup_good_env() {
     STUB_GRAFANA_ADMIN_USER STUB_GRAFANA_ADMIN_PASS STUB_GRAFANA_ORG_USERS \
     STUB_GRAFANA_SETTINGS STUB_GRAFANA_DEFAULT_PASSWORD_WORKS \
     STUB_PASSWD STUB_SUDO_USERS STUB_MCP_HOST STUB_MCP_STATUS \
-    STUB_MCP_CHALLENGE_URL \
-    STUB_MCP_API_STATUS STUB_SIGNIN_STATUS
+    STUB_MCP_CHALLENGE_URL STUB_PRM_STATUS STUB_PRM_BODY \
+    STUB_MCP_API_STATUS STUB_SIGNIN_STATUS \
+    STUB_TLS_BROKEN STUB_PLAIN_HTTP_STATUS STUB_BACKEND_FP STUB_PRESENTED_FP \
+    STUB_CHECKEND_EXIT STUB_SCLIENT_EXIT
+  : > "$STUB_CURL_5080_LOG"
   export STUB_ACTIVE_UNITS="prometheus prometheus-node-exporter grafana-server ledger ledger-deploy-poll.timer ledger-backup.timer"
   export STUB_ENABLED_UNITS="ledger-deploy-poll.timer ledger-backup.timer"
   export STUB_PG_SERVICE_NAME="postgresql@16-main.service"
@@ -846,6 +928,8 @@ export STUB_MCP_HOST="$MCP_HOST"
 OUT="$(run_selfcheck)"
 assert_line "GOOD host: the 401 challenge names the resource metadata" "$OUT" \
   "PASS - POST /mcp without a token returns 401 with the expected resource_metadata challenge"
+assert_line "GOOD host: the protected-resource document names the resource" "$OUT" \
+  "PASS - the protected-resource document names https://${MCP_HOST}/mcp"
 assert_line "GOOD host: the REST status path is 404 on the MCP hostname" "$OUT" \
   "PASS - GET /api/v1/status on the MCP hostname returns 404"
 assert_line "GOOD host: the sign-in page is 404 from loopback" "$OUT" \
@@ -885,6 +969,94 @@ export STUB_SIGNIN_STATUS="200"
 OUT="$(run_selfcheck)"
 assert_line "BAD host: a 200 on the sign-in page from loopback fails" "$OUT" \
   "FAIL - the sign-in page returned 200 to an address outside the home and VPN networks, expected 404"
+
+setup_good_env
+reset_log_fixtures
+write_mcp_env
+export STUB_MCP_HOST="$MCP_HOST"
+export STUB_PRM_BODY='{"resource":"https://other.example.org/mcp"}'
+OUT="$(run_selfcheck)"
+assert_line "BAD host: a protected-resource document for a different resource fails" "$OUT" \
+  "FAIL - the protected-resource document returned 200 naming 'https://other.example.org/mcp', expected 200 naming https://${MCP_HOST}/mcp"
+
+# =====================================================================
+# The application's port speaks only TLS from the pinned certificate
+# (check_backend_tls, backend_curl)
+# =====================================================================
+setup_good_env
+reset_log_fixtures
+write_mcp_env
+export STUB_MCP_HOST="$MCP_HOST"
+OUT="$(run_selfcheck)"
+assert_line "GOOD host: the handshake presents exactly the certificate on disk" "$OUT" \
+  "PASS - port 5080 completes a TLS handshake presenting exactly the certificate in ${BACKEND_CERT_FIXTURE}"
+assert_line "GOOD host: plain HTTP to the port gets no application response" "$OUT" \
+  "PASS - a plain-HTTP request to port 5080 gets no application response"
+assert_line "GOOD host: the certificate is not close to expiring" "$OUT" \
+  "PASS - the backend certificate is valid for at least 30 more days"
+assert_line "GOOD host: the status probe works over the pinned connection" "$OUT" \
+  "PASS - GET /api/v1/status without a key returns 401"
+
+HTTPS_REQUESTS="$(grep -c '^https ' "$STUB_CURL_5080_LOG" || true)"
+PINNED_REQUESTS="$(grep -c "^https cacert=${BACKEND_CERT_FIXTURE} resolve=ledger-backend:5080:127.0.0.1 insecure=0\$" "$STUB_CURL_5080_LOG" || true)"
+PLAIN_REQUESTS="$(grep -c '^http ' "$STUB_CURL_5080_LOG" || true)"
+INSECURE_REQUESTS="$(grep -c 'insecure=1' "$STUB_CURL_5080_LOG" || true)"
+check "every TLS request to port 5080 pins the host certificate and the internal name" "$HTTPS_REQUESTS" "$PINNED_REQUESTS"
+check "the probes made TLS requests to port 5080 (the four MCP probes and the status probe)" "5" "$HTTPS_REQUESTS"
+check "the only plain-HTTP request to port 5080 is the one proving it is refused" "1" "$PLAIN_REQUESTS"
+check "no request to port 5080 switched certificate checking off" "0" "$INSECURE_REQUESTS"
+
+setup_good_env
+reset_log_fixtures
+write_mcp_env
+export STUB_MCP_HOST="$MCP_HOST"
+export STUB_PRESENTED_FP="DD:EE:FF"
+OUT="$(run_selfcheck)"
+assert_line "BAD host: a different certificate on the port fails" "$OUT" \
+  "FAIL - port 5080 did not present the certificate in ${BACKEND_CERT_FIXTURE} (the reverse proxy would refuse it)"
+
+setup_good_env
+reset_log_fixtures
+write_mcp_env
+export STUB_MCP_HOST="$MCP_HOST"
+export STUB_PRESENTED_FP=""
+export STUB_SCLIENT_EXIT="1"
+OUT="$(run_selfcheck)"
+assert_line "BAD host: no TLS handshake on the port fails" "$OUT" \
+  "FAIL - port 5080 did not present the certificate in ${BACKEND_CERT_FIXTURE} (the reverse proxy would refuse it)"
+
+setup_good_env
+reset_log_fixtures
+write_mcp_env
+export STUB_MCP_HOST="$MCP_HOST"
+export STUB_PLAIN_HTTP_STATUS="401"
+OUT="$(run_selfcheck)"
+assert_line "BAD host: an application answer to plain HTTP fails" "$OUT" \
+  "FAIL - a plain-HTTP request to port 5080 got status 401, expected no response"
+
+setup_good_env
+reset_log_fixtures
+write_mcp_env
+export STUB_MCP_HOST="$MCP_HOST"
+export STUB_TLS_BROKEN="1"
+OUT="$(run_selfcheck)"
+assert_line "BAD host: a pinned-certificate verification failure fails the status probe" "$OUT" \
+  "FAIL - GET /api/v1/status without a key returned 000, expected 401"
+assert_line "BAD host: a pinned-certificate verification failure fails the MCP probes" "$OUT" \
+  "FAIL - POST /mcp without a token returned 000, expected 401"
+
+setup_good_env
+reset_log_fixtures
+export STUB_CHECKEND_EXIT="1"
+OUT="$(run_selfcheck --pre-deploy)"
+assert_line "BAD host: a certificate close to expiry fails" "$OUT" \
+  "FAIL - the backend certificate has expired or expires within 30 days; rotate it as described in the host guide"
+
+setup_good_env
+reset_log_fixtures
+OUT="$(run_selfcheck --pre-deploy)"
+assert_line "under --pre-deploy the handshake checks are skipped" "$OUT" \
+  "SKIP - backend TLS handshake checks: no release installed yet"
 
 # =====================================================================
 # Token and enrolment-secret log patterns (check_log_secrets)

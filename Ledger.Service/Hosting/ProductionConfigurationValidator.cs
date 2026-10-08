@@ -14,6 +14,9 @@ public static class ProductionConfigurationValidator
     private const string CertificatePathKey = "DataProtection:CertificatePath";
     private const string CertificatePasswordKey = "DataProtection:CertificatePassword";
     private const string ConnectionStringKey = "ConnectionStrings:Ledger";
+    private const string ApiUrlKey = "Kestrel:Endpoints:Api:Url";
+    private const string ApiCertificatePathKey = "Kestrel:Endpoints:Api:Certificate:Path";
+    private const string ApiCertificateKeyPathKey = "Kestrel:Endpoints:Api:Certificate:KeyPath";
     private const string ProviderKey = "Ingestion:Provider";
     private const string RedirectUrlKey = "BankLink:RedirectUrl";
     private const string ApplicationIdKey = "EnableBanking:ApplicationId";
@@ -53,6 +56,7 @@ public static class ProductionConfigurationValidator
             offendingKeys.Add(ConnectionStringKey);
         }
 
+        AddApiEndpointProblems(configuration, offendingKeys);
         AddBankLinkProblems(configuration, offendingKeys);
         AddScheduleProblems(configuration, offendingKeys);
         AddOAuthProblems(configuration, offendingKeys);
@@ -61,6 +65,60 @@ public static class ProductionConfigurationValidator
         {
             throw new InvalidOperationException(
                 $"Unsafe or missing required configuration key(s): {string.Join(", ", offendingKeys)}.");
+        }
+    }
+
+    /// <summary>
+    /// The endpoint the reverse proxy connects to carries passwords, one-time codes, tokens, session cookies and every answer the
+    /// ledger gives, so in Production it must be https, with the certificate and its private key both configured as readable
+    /// files. A plain-http endpoint, or one whose certificate cannot be read, stops the host before it serves anything.
+    /// </summary>
+    private static void AddApiEndpointProblems(IConfiguration configuration, List<string> offendingKeys)
+    {
+        if (!IsHttpsOnly(configuration[ApiUrlKey]))
+        {
+            offendingKeys.Add(ApiUrlKey);
+        }
+
+        if (!IsReadableFile(configuration[ApiCertificatePathKey]))
+        {
+            offendingKeys.Add(ApiCertificatePathKey);
+        }
+
+        if (!IsReadableFile(configuration[ApiCertificateKeyPathKey]))
+        {
+            offendingKeys.Add(ApiCertificateKeyPathKey);
+        }
+    }
+
+    private static bool IsHttpsOnly(string? urls)
+    {
+        if (string.IsNullOrWhiteSpace(urls))
+        {
+            return false;
+        }
+
+        var addresses = urls.Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+
+        return addresses.Length > 0 && addresses.All(url => url.StartsWith("https://", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsReadableFile(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var stream = File.OpenRead(path);
+
+            return true;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+        {
+            return false;
         }
     }
 

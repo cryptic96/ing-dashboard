@@ -62,11 +62,13 @@ public sealed class McpTestHost : IAsyncDisposable
     /// <param name="configuration">Extra configuration, for example token lifetimes. The loopback address is the trusted proxy unless this replaces it, because the emulated proxy connects from there.</param>
     /// <param name="configureServices">Replacements for services.</param>
     /// <param name="enableOAuth">Whether to set the public base address; false starts the host as an unconfigured one would.</param>
+    /// <param name="backendCertificate">When given, the API endpoint serves https from this certificate, as the deployed host does.</param>
     public static async Task<McpTestHost> StartAsync(
         string connectionString,
         IReadOnlyDictionary<string, string?>? configuration = null,
         Action<IServiceCollection>? configureServices = null,
-        bool enableOAuth = true)
+        bool enableOAuth = true,
+        TestBackendCertificate? backendCertificate = null)
     {
         var settings = new Dictionary<string, string?> { ["ReverseProxy:KnownProxies:0"] = "127.0.0.1" };
 
@@ -90,7 +92,8 @@ public sealed class McpTestHost : IAsyncDisposable
             connectionString,
             configureTestServices: configureServices,
             additionalConfiguration: settings,
-            startupEnvironment: startup);
+            startupEnvironment: startup,
+            backendCertificate: backendCertificate);
 
         try
         {

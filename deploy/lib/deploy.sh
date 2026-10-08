@@ -408,11 +408,17 @@ ledger_install_provisioning() {
   fi
 }
 
-# Orchestrates the full activation of an already-verified release: unpack,
-# migrate (with a pre-migration backup) when needed, atomically activate,
-# install provisioning, restart, health-check, and automatically roll back
-# unless a migration ran. Always reports the outcome by textfile metrics and
-# email, and prunes old releases on success.
+# Orchestrates the full activation of an already-verified release: make sure
+# the certificate the application presents to the reverse proxy exists,
+# unpack, migrate (with a pre-migration backup) when needed, atomically
+# activate, install provisioning, restart, health-check, and automatically
+# roll back unless a migration ran. Always reports the outcome by textfile
+# metrics and email, and prunes old releases on success.
+#
+# The certificate comes first on purpose: the application refuses to start
+# without it, and a release that migrated the database cannot be rolled back
+# automatically, so a missing certificate must stop the install before
+# anything is changed.
 ledger_install_verified_release() {
   local tag="$1"
   local version="$2"
@@ -427,6 +433,8 @@ ledger_install_verified_release() {
 
   local started_at
   started_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+
+  ledger_ensure_backend_tls
 
   local staging_dir="${releases_dir}/.staging-${version}"
   rm -rf "$staging_dir"

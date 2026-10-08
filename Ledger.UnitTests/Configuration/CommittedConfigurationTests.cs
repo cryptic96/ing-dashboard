@@ -4,6 +4,7 @@ using FluentAssertions;
 using Ledger.Domain.Banking;
 using Ledger.Domain.Ingestion;
 using Ledger.Service.Ingestion;
+using Microsoft.Extensions.Configuration;
 
 namespace Ledger.UnitTests.Configuration;
 
@@ -30,6 +31,22 @@ public partial class CommittedConfigurationTests
             CommittedSecretScanner.ScanJson(File.ReadAllText(path), checkKeyNames: true)
                 .Should().BeEmpty($"file {Path.GetFileName(path)} must not carry a secret");
         }
+    }
+
+    [Fact]
+    [Trait("Category", "Configuration")]
+    public void Production_serves_the_proxy_facing_endpoint_over_https_from_the_host_certificate_and_keeps_the_ops_endpoint_on_loopback_http()
+    {
+        var serviceDirectory = FindLedgerServiceDirectory();
+        var configuration = new ConfigurationBuilder()
+            .AddJsonFile(Path.Combine(serviceDirectory, "appsettings.json"), optional: false)
+            .AddJsonFile(Path.Combine(serviceDirectory, "appsettings.Production.json"), optional: false)
+            .Build();
+
+        configuration["Kestrel:Endpoints:Api:Url"].Should().Be("https://0.0.0.0:5080");
+        configuration["Kestrel:Endpoints:Api:Certificate:Path"].Should().Be("/etc/ledger/backend-tls.crt");
+        configuration["Kestrel:Endpoints:Api:Certificate:KeyPath"].Should().Be("/etc/ledger/backend-tls.key");
+        configuration["Kestrel:Endpoints:Ops:Url"].Should().Be("http://127.0.0.1:5081");
     }
 
     [Fact]

@@ -42,3 +42,51 @@ public static class TestCertificates
         return path;
     }
 }
+
+/// <summary>
+/// A throwaway certificate and private key written as the PEM pair the proxy-facing endpoint is configured with: an EC P-256
+/// certificate for the internal backend name, as the host generates it. The files are deleted on disposal.
+/// </summary>
+public sealed class TestBackendCertificate : IDisposable
+{
+    private readonly string _directory;
+
+    /// <summary>Creates a new certificate and key pair in a new temp directory.</summary>
+    public TestBackendCertificate()
+    {
+        _directory = Path.Combine(Path.GetTempPath(), $"ledger-test-backend-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(_directory);
+
+        using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var request = new CertificateRequest("CN=ledger-backend", key, HashAlgorithmName.SHA256);
+        var names = new SubjectAlternativeNameBuilder();
+        names.AddDnsName("ledger-backend");
+        request.CertificateExtensions.Add(names.Build());
+        request.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.DigitalSignature, critical: true));
+        request.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension([new Oid("1.3.6.1.5.5.7.3.1")], critical: false));
+
+        using var certificate = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(30));
+
+        CertificatePath = Path.Combine(_directory, "backend-tls.crt");
+        KeyPath = Path.Combine(_directory, "backend-tls.key");
+        File.WriteAllText(CertificatePath, certificate.ExportCertificatePem());
+        File.WriteAllText(KeyPath, key.ExportPkcs8PrivateKeyPem());
+        Certificate = X509CertificateLoader.LoadCertificateFromFile(CertificatePath);
+    }
+
+    /// <summary>The path of the public certificate in PEM form.</summary>
+    public string CertificatePath { get; }
+
+    /// <summary>The path of the private key in PEM form.</summary>
+    public string KeyPath { get; }
+
+    /// <summary>The public certificate a client pins.</summary>
+    public X509Certificate2 Certificate { get; }
+
+    /// <inheritdoc />
+    public void Dispose()
+    {
+        Certificate.Dispose();
+        Directory.Delete(_directory, recursive: true);
+    }
+}
