@@ -45,12 +45,14 @@ public class OperatorCommandTests(DatabaseFixture fixture)
         var login = new TestLogin(Guid.Empty, name, password, secret);
         await AssertPasswordIsRefusedAsync(host, login);
 
-        var wrong = await RunLoginAsync(connectionString, string.Empty, "confirm-totp", name, TotpCode.Wrong(secret, DateTimeOffset.UtcNow));
+        var wrong = await RunLoginAsync(connectionString, TotpCode.Wrong(secret, DateTimeOffset.UtcNow), "confirm-totp", name);
         wrong.ExitCode.Should().Be(1);
         await AssertPasswordIsRefusedAsync(host, login);
 
-        var confirmed = await RunLoginAsync(connectionString, string.Empty, "confirm-totp", name, TotpCode.Compute(secret, DateTimeOffset.UtcNow));
+        var confirmedAt = DateTimeOffset.UtcNow;
+        var confirmed = await RunLoginAsync(connectionString, TotpCode.Compute(secret, confirmedAt), "confirm-totp", name);
         confirmed.ExitCode.Should().Be(0);
+        login.NoteCodeUsedAt(confirmedAt);
 
         await using var connection = await host.ConnectAsync(login, ClientId);
         (await host.ToolsListStatusAsync(connection.AccessToken)).Should().Be(HttpStatusCode.OK);
@@ -93,7 +95,7 @@ public class OperatorCommandTests(DatabaseFixture fixture)
         duplicate.ExitCode.Should().Be(1);
         duplicate.Stdout.Should().BeEmpty();
 
-        var confirmed = await RunLoginAsync(connectionString, string.Empty, "confirm-totp", name, TotpCode.Compute(secret, DateTimeOffset.UtcNow));
+        var confirmed = await RunLoginAsync(connectionString, TotpCode.Compute(secret, DateTimeOffset.UtcNow), "confirm-totp", name);
         confirmed.ExitCode.Should().Be(0, "the original authenticator key must be untouched by the refused duplicate");
     }
 
@@ -106,7 +108,7 @@ public class OperatorCommandTests(DatabaseFixture fixture)
         (await RunLoginAsync(connectionString, string.Empty)).ExitCode.Should().Be(2);
         (await RunLoginAsync(connectionString, string.Empty, "create")).ExitCode.Should().Be(2);
         (await RunLoginAsync(connectionString, string.Empty, "explode", "someone")).ExitCode.Should().Be(2);
-        (await RunLoginAsync(connectionString, string.Empty, "confirm-totp", "someone")).ExitCode.Should().Be(2);
+        (await RunLoginAsync(connectionString, string.Empty, "confirm-totp", "someone", "123456")).ExitCode.Should().Be(2, "a code is never an argument");
         (await RunGrantsAsync(connectionString)).ExitCode.Should().Be(2);
         (await RunGrantsAsync(connectionString, "explode")).ExitCode.Should().Be(2);
         (await RunGrantsAsync(connectionString, "revoke")).ExitCode.Should().Be(2);
@@ -289,13 +291,46 @@ public class OperatorCommandTests(DatabaseFixture fixture)
         var rekeyed = new TestLogin(Guid.Empty, login.UserName, password, newSecret);
         await AssertPasswordIsRefusedAsync(host, rekeyed);
 
-        (await RunLoginAsync(connectionString, string.Empty, "confirm-totp", login.UserName, TotpCode.Compute(login.AuthenticatorKey, DateTimeOffset.UtcNow)))
+        (await RunLoginAsync(connectionString, TotpCode.Compute(login.AuthenticatorKey, DateTimeOffset.UtcNow), "confirm-totp", login.UserName))
             .ExitCode.Should().Be(1, "the old authenticator no longer matches");
-        (await RunLoginAsync(connectionString, string.Empty, "confirm-totp", login.UserName, TotpCode.Compute(newSecret, DateTimeOffset.UtcNow)))
+        var confirmedAt = DateTimeOffset.UtcNow;
+        (await RunLoginAsync(connectionString, TotpCode.Compute(newSecret, confirmedAt), "confirm-totp", login.UserName))
             .ExitCode.Should().Be(0);
+        rekeyed.NoteCodeUsedAt(confirmedAt);
 
         await using var again = await host.ConnectAsync(rekeyed, ClientId);
         (await host.ToolsListStatusAsync(again.AccessToken)).Should().Be(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    [Trait("Category", "OperatorCommands")]
+    public async Task A_code_that_confirmed_an_authenticator_cannot_be_used_again_on_the_command_or_the_web()
+    {
+        var connectionString = await LedgerQuerySeed.CreateIsolatedDatabaseAsync(fixture);
+        await using var host = await StartHostAsync(connectionString);
+        var name = NewName();
+        var password = NewPassword();
+        var created = await RunLoginAsync(connectionString, password, "create", name);
+        var secret = Lines(created.Stdout)[1];
+        var code = TotpCode.Compute(secret, DateTimeOffset.UtcNow);
+
+        (await RunLoginAsync(connectionString, code, "confirm-totp", name)).ExitCode.Should().Be(0);
+
+        var again = await RunLoginAsync(connectionString, code, "confirm-totp", name);
+        again.ExitCode.Should().Be(1);
+        again.Stderr.Should().NotContain(code);
+
+        using var browser = host.CreateBrowser();
+        var driver = new OAuthTestDriver(browser);
+        var discovery = await driver.DiscoverAsync();
+        var (address, _, _) = OAuthTestDriver.BuildAuthorizeAddress(discovery, ClientId, OAuthTestDriver.LoopbackRedirectUri);
+        using var first = await browser.GetAsync(address, TestContext.Current.CancellationToken);
+        using var passwordPosted = await driver.PostPasswordAsync(first.Headers.Location!.ToString(), name, password);
+        passwordPosted.StatusCode.Should().Be(HttpStatusCode.Redirect);
+
+        using var attempt = await driver.PostCodeAsync(passwordPosted.Headers.Location!.ToString(), code);
+
+        attempt.StatusCode.Should().Be(HttpStatusCode.OK, "the confirmation used the code up");
     }
 
     [Fact]
@@ -376,8 +411,8 @@ public class OperatorCommandTests(DatabaseFixture fixture)
         await using var host = await StartHostAsync(connectionString);
         var enrolled = await host.CreateLoginAsync(enrolSecondFactor: true);
 
-        var confirmed = await RunLoginAsync(connectionString, string.Empty, "confirm-totp", enrolled.UserName, TotpCode.Compute(enrolled.AuthenticatorKey, DateTimeOffset.UtcNow));
-        var wrong = await RunLoginAsync(connectionString, string.Empty, "confirm-totp", enrolled.UserName, TotpCode.Wrong(enrolled.AuthenticatorKey, DateTimeOffset.UtcNow));
+        var confirmed = await RunLoginAsync(connectionString, TotpCode.Compute(enrolled.AuthenticatorKey, DateTimeOffset.UtcNow), "confirm-totp", enrolled.UserName);
+        var wrong = await RunLoginAsync(connectionString, TotpCode.Wrong(enrolled.AuthenticatorKey, DateTimeOffset.UtcNow), "confirm-totp", enrolled.UserName);
 
         confirmed.ExitCode.Should().Be(0);
         wrong.ExitCode.Should().Be(1);
@@ -453,13 +488,17 @@ public class OperatorCommandTests(DatabaseFixture fixture)
         created.ExitCode.Should().Be(0);
         var secret = Lines(created.Stdout)[1];
 
+        var login = new TestLogin(Guid.Empty, name, password, secret);
+
         if (confirm)
         {
-            var confirmed = await RunLoginAsync(connectionString, string.Empty, "confirm-totp", name, TotpCode.Compute(secret, DateTimeOffset.UtcNow));
+            var confirmedAt = DateTimeOffset.UtcNow;
+            var confirmed = await RunLoginAsync(connectionString, TotpCode.Compute(secret, confirmedAt), "confirm-totp", name);
             confirmed.ExitCode.Should().Be(0);
+            login.NoteCodeUsedAt(confirmedAt);
         }
 
-        return (new TestLogin(Guid.Empty, name, password, secret), password);
+        return (login, password);
     }
 
     private Task<CommandResult> RunLoginAsync(string connectionString, string stdin, params string[] args) =>

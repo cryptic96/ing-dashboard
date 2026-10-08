@@ -15,4 +15,12 @@ public interface ITotpReplayStore
     /// <param name="timeStep">The 30-second time step the code belongs to.</param>
     /// <param name="cancellationToken">Cancels the operation.</param>
     Task<bool> TryClaimAsync(Guid loginId, long timeStep, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Forgets the steps the login used, which is right when its authenticator key was replaced: codes of the old key say nothing
+    /// about the new one, so the first code of the new key must be accepted whatever step it belongs to.
+    /// </summary>
+    /// <param name="loginId">The login whose authenticator key was replaced.</param>
+    /// <param name="cancellationToken">Cancels the operation.</param>
+    Task ClearAsync(Guid loginId, CancellationToken cancellationToken);
 }

@@ -20,4 +20,12 @@ public class TotpReplayStore(LedgerDbContext dbContext) : ITotpReplayStore
 
         return changed == 1;
     }
+
+    /// <inheritdoc />
+    public async Task ClearAsync(Guid loginId, CancellationToken cancellationToken)
+    {
+        await dbContext.Users
+            .Where(login => login.Id == loginId)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(login => login.LastTotpStep, (long?)null), cancellationToken);
+    }
 }

@@ -9,21 +9,22 @@ using Microsoft.Extensions.DependencyInjection;
 namespace Ledger.Service.Cli;
 
 /// <summary>
-/// Implements `login create|confirm-totp|reset-totp|set-password|list|remove`, run before the web host starts. Passwords are read
-/// from the first line of standard input and are never taken from the command line, echoed or logged. Adding a second login is
-/// just another create.
+/// Implements `login create|confirm-totp|reset-totp|set-password|list|remove`, run before the web host starts. Passwords and the
+/// one-time code of confirm-totp are read from the first line of standard input and are never taken from the command line,
+/// echoed or logged. A code that confirms an authenticator is claimed like a code used to sign in, so it cannot be used again.
+/// Adding a second login is just another create.
 /// </summary>
 public static partial class LoginCommand
 {
     private const string UsageMessage =
-        "Usage: login create NAME | confirm-totp NAME CODE | reset-totp NAME | set-password NAME | list | remove NAME";
+        "Usage: login create NAME | confirm-totp NAME | reset-totp NAME | set-password NAME | list | remove NAME";
 
     private const string AuthenticatorIssuer = "Household Ledger";
 
     /// <summary>Runs the login subcommand. Returns 0 on success, 1 for a not-found or invalid operation, 2 for a usage error.</summary>
     public static async Task<int> RunAsync(string[] args, IConfiguration configuration)
     {
-        if (args is not (["create", _] or ["confirm-totp", _, _] or ["reset-totp", _] or ["set-password", _] or ["list"] or ["remove", _]))
+        if (args is not (["create", _] or ["confirm-totp", _] or ["reset-totp", _] or ["set-password", _] or ["list"] or ["remove", _]))
         {
             await Console.Error.WriteLineAsync(UsageMessage);
             return 2;
@@ -39,12 +40,13 @@ public static partial class LoginCommand
         using var scope = host.Services.CreateScope();
         var users = scope.ServiceProvider.GetRequiredService<UserManager<LedgerUserEntity>>();
         var grants = scope.ServiceProvider.GetRequiredService<GrantRevocationService>();
+        var replayStore = scope.ServiceProvider.GetRequiredService<ITotpReplayStore>();
 
         return args switch
         {
             ["create", var name] => await CreateAsync(users, name),
-            ["confirm-totp", var name, var code] => await ConfirmAsync(users, name, code),
-            ["reset-totp", var name] => await ResetAuthenticatorAsync(users, grants, name),
+            ["confirm-totp", var name] => await ConfirmAsync(users, replayStore, name),
+            ["reset-totp", var name] => await ResetAuthenticatorAsync(users, grants, replayStore, name),
             ["set-password", var name] => await SetPasswordAsync(users, grants, name),
             ["remove", var name] => await RemoveAsync(users, grants, name),
             _ => await ListAsync(users, grants)
@@ -77,13 +79,20 @@ public static partial class LoginCommand
 
         await PrintAuthenticatorAsync(users, user);
         await Console.Error.WriteLineAsync(
-            $"Login '{name}' created. The secret above is shown once. Add it to an authenticator app, then run: login confirm-totp {name} CODE");
+            $"Login '{name}' created. The secret above is shown once. Add it to an authenticator app, then run: login confirm-totp {name} and enter the current code");
 
         return 0;
     }
 
-    private static async Task<int> ConfirmAsync(UserManager<LedgerUserEntity> users, string name, string code)
+    private static async Task<int> ConfirmAsync(UserManager<LedgerUserEntity> users, ITotpReplayStore replayStore, string name)
     {
+        var code = await ReadCodeAsync();
+
+        if (code is null)
+        {
+            return 1;
+        }
+
         var user = await users.FindByNameAsync(name);
 
         if (user is null)
@@ -91,13 +100,11 @@ public static partial class LoginCommand
             return await NotFoundAsync(name);
         }
 
-        var trimmed = code.Trim();
-        var valid = TotpCodes.IsWellFormed(trimmed)
-            && await users.VerifyTwoFactorTokenAsync(user, TokenOptions.DefaultAuthenticatorProvider, trimmed);
+        var step = TotpCodes.MatchTimeStep(await users.GetAuthenticatorKeyAsync(user), code, DateTimeOffset.UtcNow);
 
-        if (!valid)
+        if (step is null || !await replayStore.TryClaimAsync(user.Id, step.Value, CancellationToken.None))
         {
-            await Console.Error.WriteLineAsync("That code is not valid.");
+            await Console.Error.WriteLineAsync("That code is not valid, or it was already used.");
             return 1;
         }
 
@@ -114,7 +121,11 @@ public static partial class LoginCommand
         return 0;
     }
 
-    private static async Task<int> ResetAuthenticatorAsync(UserManager<LedgerUserEntity> users, GrantRevocationService grants, string name)
+    private static async Task<int> ResetAuthenticatorAsync(
+        UserManager<LedgerUserEntity> users,
+        GrantRevocationService grants,
+        ITotpReplayStore replayStore,
+        string name)
     {
         var user = await users.FindByNameAsync(name);
 
@@ -132,9 +143,10 @@ public static partial class LoginCommand
             return 1;
         }
 
+        await replayStore.ClearAsync(user.Id, CancellationToken.None);
         await PrintAuthenticatorAsync(users, user);
         await Console.Error.WriteLineAsync(
-            $"{GrantsCommand.Describe(revoked)} The secret above is shown once. Add it to an authenticator app, then run: login confirm-totp {name} CODE");
+            $"{GrantsCommand.Describe(revoked)} The secret above is shown once. Add it to an authenticator app, then run: login confirm-totp {name} and enter the current code");
 
         return 0;
     }
@@ -215,7 +227,6 @@ public static partial class LoginCommand
 
     private static async Task PrintAuthenticatorAsync(UserManager<LedgerUserEntity> users, LedgerUserEntity user)
     {
-        user.LastTotpStep = null;
         await users.ResetAuthenticatorKeyAsync(user);
         var key = (await users.GetAuthenticatorKeyAsync(user))!;
 
@@ -238,6 +249,20 @@ public static partial class LoginCommand
         }
 
         return password;
+    }
+
+    private static async Task<string?> ReadCodeAsync()
+    {
+        var line = await Console.In.ReadLineAsync();
+        var code = line?.Trim();
+
+        if (string.IsNullOrEmpty(code))
+        {
+            await Console.Error.WriteLineAsync("The current code is required on standard input.");
+            return null;
+        }
+
+        return code;
     }
 
     private static async Task<int> NotFoundAsync(string name)

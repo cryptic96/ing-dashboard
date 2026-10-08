@@ -124,6 +124,28 @@ public class SignInTests(DatabaseFixture fixture)
 
     [Fact]
     [Trait("Category", "OAuth")]
+    public async Task A_code_accepted_after_a_failed_attempt_is_still_refused_when_presented_again()
+    {
+        await using var host = await StartHostAsync();
+        var login = await host.CreateLoginAsync();
+        var code = login.NextCode();
+        using var firstBrowser = host.CreateBrowser();
+        var firstDriver = new OAuthTestDriver(firstBrowser);
+        var (_, loginAddress) = await StartAuthorizationAsync(firstDriver, firstBrowser);
+        using var password = await firstDriver.PostPasswordAsync(loginAddress, login.UserName, login.Password);
+        var codeAddress = password.Headers.Location!.ToString();
+
+        using var wrong = await firstDriver.PostCodeAsync(codeAddress, TotpCode.Wrong(login.AuthenticatorKey, DateTimeOffset.UtcNow));
+        wrong.StatusCode.Should().Be(HttpStatusCode.OK);
+        using var accepted = await firstDriver.PostCodeAsync(codeAddress, code);
+        accepted.StatusCode.Should().Be(HttpStatusCode.Redirect, "the failed attempt makes the sign-in save the login again, which must not undo the claim");
+
+        using var secondBrowser = host.CreateBrowser();
+        (await SignInAsync(secondBrowser, login, code)).Should().Be(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    [Trait("Category", "OAuth")]
     public async Task A_code_from_an_earlier_time_step_is_refused_once_a_later_step_was_accepted()
     {
         await using var host = await StartHostAsync();
