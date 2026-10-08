@@ -6,8 +6,9 @@ namespace Ledger.Service.Hosting;
 /// Keeps the public MCP host limited to the MCP and OAuth surface, and keeps that surface off every other host, so a wrong rule in
 /// the reverse proxy cannot expose the REST API, the metrics or the dashboards on the public name, nor the OAuth endpoints on the
 /// internal names. The sign-in and consent pages are additionally answered only to the configured home and VPN networks. The
-/// host is read from the Host header the proxy passes through; no forwarded host header is trusted, and the client address is the
-/// one the forwarded-headers middleware derived from the trusted proxy.
+/// host is read from the Host header the proxy passes through, compared without letter case, port or one trailing dot; no
+/// forwarded host header is trusted, and the client address is the one the forwarded-headers middleware derived from the trusted
+/// proxy.
 /// </summary>
 public class PublicHostGuard(RequestDelegate next, LedgerOAuthSurface surface)
 {
@@ -24,14 +25,14 @@ public class PublicHostGuard(RequestDelegate next, LedgerOAuthSurface surface)
     private const string AccountPrefix = "/account";
     private const string AuthorizePath = "/connect/authorize";
 
-    private readonly string _publicHostName = surface.Options.PublicHostName;
+    private readonly string _publicHostName = NormalisedHost(surface.Options.PublicHostName);
     private readonly string[] _signInNetworks = surface.Options.SignInNetworks;
 
     /// <summary>Answers 404 for everything the host must not serve and passes the rest on.</summary>
     public Task InvokeAsync(HttpContext context)
     {
         var path = Normalised(context.Request.Path);
-        var isOnPublicHost = string.Equals(context.Request.Host.Host, _publicHostName, StringComparison.OrdinalIgnoreCase);
+        var isOnPublicHost = string.Equals(NormalisedHost(context.Request.Host.Host), _publicHostName, StringComparison.OrdinalIgnoreCase);
         var isSurfacePath = IsAccountPath(path) || PublicPaths.Contains(path, StringComparer.OrdinalIgnoreCase);
 
         if (isOnPublicHost != isSurfacePath)
@@ -47,6 +48,15 @@ public class PublicHostGuard(RequestDelegate next, LedgerOAuthSurface surface)
         }
 
         return next(context);
+    }
+
+    /// <summary>
+    /// The host name without a port and without the single trailing dot that marks a fully qualified name, so every spelling of
+    /// the public name is read as the public host; letter case is ignored where the names are compared.
+    /// </summary>
+    private static string NormalisedHost(string host)
+    {
+        return host.EndsWith('.') ? host[..^1] : host;
     }
 
     private static string Normalised(PathString path)
