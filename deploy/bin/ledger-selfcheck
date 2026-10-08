@@ -40,6 +40,13 @@ LOG_ROOTS="${LEDGER_SELFCHECK_LOG_ROOTS:-/var/log}"
 ENV_FILE="${LEDGER_SELFCHECK_ENV_FILE:-/etc/ledger/ledger.env}"
 ZONEINFO_FILE="${LEDGER_SELFCHECK_ZONEINFO:-/usr/share/zoneinfo/Europe/Amsterdam}"
 
+# The certificate the application presents on its proxy-facing port, and the
+# fixed name it carries. Every probe of that port trusts this one certificate
+# and nothing else.
+BACKEND_CERT="${LEDGER_SELFCHECK_BACKEND_CERT:-/etc/ledger/backend-tls.crt}"
+BACKEND_KEY="${LEDGER_SELFCHECK_BACKEND_KEY:-/etc/ledger/backend-tls.key}"
+BACKEND_NAME="ledger-backend"
+
 pass() {
   echo "PASS - $*"
 }
@@ -200,6 +207,8 @@ check_files() {
   check_mode_owner /etc/ledger 750 root:ledger
   check_mode_owner /etc/ledger/ledger.env 640 root:ledger
   check_mode_owner /etc/ledger/dataprotection.pfx 640 root:ledger
+  check_mode_owner "$BACKEND_CERT" 644 root:ledger
+  check_mode_owner "$BACKEND_KEY" 640 root:ledger
   check_mode_owner /etc/ledger/deploy.conf 600 root:root
   check_mode_owner /etc/ledger/provision.conf 600 root:root
   check_mode_owner /var/backups/ledger 700 ledger_backup:ledger_backup
@@ -420,20 +429,31 @@ check_sudo_logins() {
   fi
 }
 
-# Sets REQ_STATUS and REQ_HEADERS for a request sent to the app's
-# loopback port with HOST as the Host header. The app trusts forwarded
-# headers only from the configured reverse proxy, so no forwarded header is
-# sent and the caller is judged by its real address, loopback, which is not
-# one of the sign-in networks.
+# Runs curl against the application's proxy-facing port over TLS, trusting
+# exactly the certificate the host generated for it and checking that the
+# presented name is the fixed internal one. Certificate checking is never
+# switched off: if the pinned certificate is missing or does not match,
+# the request fails and so does the check that made it.
+backend_curl() {
+  curl --cacert "$BACKEND_CERT" --resolve "${BACKEND_NAME}:5080:127.0.0.1" "$@"
+}
+
+# Sets REQ_STATUS, REQ_HEADERS and REQ_BODY for a request sent to the app's
+# proxy-facing port over the pinned TLS connection with HOST as the Host
+# header. The app trusts forwarded headers only from the configured reverse
+# proxy, so no forwarded header is sent and the caller is judged by its real
+# address, loopback, which is not one of the sign-in networks.
 local_request() {
-  local method="$1" path="$2" host="$3" header_file
+  local method="$1" path="$2" host="$3" header_file body_file
   header_file="$(mktemp)"
-  REQ_STATUS="$(curl --silent --max-time 5 --request "$method" \
+  body_file="$(mktemp)"
+  REQ_STATUS="$(backend_curl --silent --max-time 5 --request "$method" \
     --header "Host: ${host}" \
-    --dump-header "$header_file" --output /dev/null --write-out '%{http_code}' \
-    "http://127.0.0.1:5080${path}" 2> /dev/null || true)"
+    --dump-header "$header_file" --output "$body_file" --write-out '%{http_code}' \
+    "https://${BACKEND_NAME}:5080${path}" 2> /dev/null || true)"
   REQ_HEADERS="$(cat "$header_file")"
-  rm -f "$header_file"
+  REQ_BODY="$(cat "$body_file")"
+  rm -f "$header_file" "$body_file"
 }
 
 check_mcp_endpoint() {
@@ -450,6 +470,7 @@ check_mcp_endpoint() {
 
   host="${base_url#https://}"
   host="${host%%/*}"
+  local resource_url="https://${host}/mcp"
   local metadata_url="https://${host}/.well-known/oauth-protected-resource/mcp"
 
   local_request POST /mcp "$host"
@@ -460,6 +481,15 @@ check_mcp_endpoint() {
     fail "POST /mcp without a token returned 401 but not the resource_metadata challenge for ${metadata_url}"
   else
     fail "POST /mcp without a token returned ${REQ_STATUS}, expected 401"
+  fi
+
+  local_request GET /.well-known/oauth-protected-resource/mcp "$host"
+  local resource
+  resource="$(jq -r '.resource // empty' <<< "$REQ_BODY" 2> /dev/null || true)"
+  if [[ "$REQ_STATUS" == "200" && "$resource" == "$resource_url" ]]; then
+    pass "the protected-resource document names ${resource_url}"
+  else
+    fail "the protected-resource document returned ${REQ_STATUS} naming '${resource}', expected 200 naming ${resource_url}"
   fi
 
   local_request GET /api/v1/status "$host"
@@ -597,8 +627,8 @@ check_app() {
   fi
 
   local status_code
-  status_code="$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 5 \
-    http://127.0.0.1:5080/api/v1/status 2> /dev/null || true)"
+  status_code="$(backend_curl --silent --output /dev/null --write-out '%{http_code}' --max-time 5 \
+    "https://${BACKEND_NAME}:5080/api/v1/status" 2> /dev/null || true)"
   if [[ "$status_code" == "401" ]]; then
     pass "GET /api/v1/status without a key returns 401"
   else
@@ -611,6 +641,44 @@ check_app() {
     pass "the last deploy run reported success"
   else
     fail "ledger_deploy_last_run_success is not 1"
+  fi
+}
+
+# The application's proxy-facing port must speak only TLS, and the certificate
+# it presents must be exactly the one on disk, which is the one the reverse
+# proxy pins. The certificate must also not be close to expiring: it is valid
+# for ten years, so an expiry warning is a deliberate rotation reminder.
+check_backend_tls() {
+  if [[ -f "$BACKEND_CERT" ]]; then
+    if openssl x509 -in "$BACKEND_CERT" -noout -checkend 2592000 > /dev/null 2>&1; then
+      pass "the backend certificate is valid for at least 30 more days"
+    else
+      fail "the backend certificate has expired or expires within 30 days; rotate it as described in the host guide"
+    fi
+  fi
+
+  if [[ "$PRE_DEPLOY" -eq 1 ]]; then
+    skip "backend TLS handshake checks: no release installed yet"
+    return
+  fi
+
+  local expected presented
+  expected="$(openssl x509 -in "$BACKEND_CERT" -noout -fingerprint -sha256 2> /dev/null | cut -d= -f2)"
+  presented="$(timeout 10 openssl s_client -connect 127.0.0.1:5080 -servername "$BACKEND_NAME" < /dev/null 2> /dev/null \
+    | openssl x509 -noout -fingerprint -sha256 2> /dev/null | cut -d= -f2)"
+  if [[ -n "$expected" && "$presented" == "$expected" ]]; then
+    pass "port 5080 completes a TLS handshake presenting exactly the certificate in ${BACKEND_CERT}"
+  else
+    fail "port 5080 did not present the certificate in ${BACKEND_CERT} (the reverse proxy would refuse it)"
+  fi
+
+  local plain_status
+  plain_status="$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 5 \
+    http://127.0.0.1:5080/api/v1/status 2> /dev/null || true)"
+  if [[ "$plain_status" == "000" ]]; then
+    pass "a plain-HTTP request to port 5080 gets no application response"
+  else
+    fail "a plain-HTTP request to port 5080 got status ${plain_status}, expected no response"
   fi
 }
 
@@ -819,6 +887,8 @@ check_listeners
 check_firewall
 check_sudo_logins
 check_mcp_endpoint
+
+check_backend_tls
 
 if [[ "$PRE_DEPLOY" -eq 0 ]]; then
   check_app

@@ -19,6 +19,8 @@ host_guard_install "$LEDGER_DEPLOY_ROOT"
 
 # shellcheck source=deploy/lib/common.sh
 source "${REPO_ROOT}/deploy/lib/common.sh"
+# shellcheck source=deploy/lib/backend-tls.sh
+source "${REPO_ROOT}/deploy/lib/backend-tls.sh"
 # shellcheck source=deploy/lib/deploy.sh
 source "${REPO_ROOT}/deploy/lib/deploy.sh"
 
@@ -135,6 +137,53 @@ check "refused rollback leaves the current link untouched" "${ROLLBACK_ROOT}/rel
 check "refused rollback never reaches systemctl" "" "$(host_guard_calls)"
 
 unset -f runuser
+
+# --- ledger_install_verified_release: the proxy certificate comes first ------------
+
+# The release this install would activate migrates the database, so an app that
+# cannot start would not be rolled back. The certificate pair must therefore
+# exist, or the install must stop, before anything is unpacked, migrated,
+# stopped or restarted. The artifact below does not exist, so the install ends
+# at the unpack step and never reaches the host.
+INSTALL_ROOT="$(mktemp -d -p "$LEDGER_DEPLOY_ROOT")"
+mkdir -p "${INSTALL_ROOT}/releases" "${INSTALL_ROOT}/state"
+
+( ledger_install_verified_release "v1.0.0" "1.0.0" "${INSTALL_ROOT}/missing.zip" "" \
+  "${INSTALL_ROOT}/releases" "${INSTALL_ROOT}/current" "${INSTALL_ROOT}/state" 5 "http://127.0.0.1:0" 1 >/dev/null 2>&1 ) || true
+
+BACKEND_DIR="${LEDGER_DEPLOY_ROOT}/etc/ledger"
+check "an install with no certificate creates the pair before it unpacks anything" "yes" \
+  "$([ -f "${BACKEND_DIR}/backend-tls.crt" ] && [ -f "${BACKEND_DIR}/backend-tls.key" ] && echo yes || echo no)"
+check "the installer creates the public certificate with mode 644" "644" "$(stat -c '%a' "${BACKEND_DIR}/backend-tls.crt")"
+check "the installer creates the private key with mode 640" "640" "$(stat -c '%a' "${BACKEND_DIR}/backend-tls.key")"
+check "the failed install left no staging or release directory" "" "$(find "${INSTALL_ROOT}/releases" -mindepth 1)"
+check "the failed install never reached systemctl" "" "$(host_guard_calls)"
+
+BEFORE_FP="$(openssl x509 -in "${BACKEND_DIR}/backend-tls.crt" -noout -fingerprint -sha256)"
+( ledger_install_verified_release "v1.0.0" "1.0.0" "${INSTALL_ROOT}/missing.zip" "" \
+  "${INSTALL_ROOT}/releases" "${INSTALL_ROOT}/current" "${INSTALL_ROOT}/state" 5 "http://127.0.0.1:0" 1 >/dev/null 2>&1 ) || true
+check "a second install keeps the existing certificate" "$BEFORE_FP" \
+  "$(openssl x509 -in "${BACKEND_DIR}/backend-tls.crt" -noout -fingerprint -sha256)"
+
+ORDER_LOG="${INSTALL_ROOT}/order.log"
+: > "$ORDER_LOG"
+(
+  ledger_ensure_backend_tls() { echo ensure >> "$ORDER_LOG"; }
+  unzip() { echo unzip >> "$ORDER_LOG"; return 1; }
+  ledger_install_verified_release "v1.0.0" "1.0.0" "${INSTALL_ROOT}/missing.zip" "" \
+    "${INSTALL_ROOT}/releases" "${INSTALL_ROOT}/current" "${INSTALL_ROOT}/state" 5 "http://127.0.0.1:0" 1 >/dev/null 2>&1
+) || true
+check "the certificate step runs before the unpack step" "ensure unzip" "$(tr '\n' ' ' < "$ORDER_LOG" | sed 's/ $//')"
+
+HALF_DIR="${INSTALL_ROOT}/half"
+mkdir -p "$HALF_DIR"
+: > "${HALF_DIR}/backend-tls.key"
+HALF_STATUS=0
+( LEDGER_BACKEND_TLS_DIR="$HALF_DIR" ledger_install_verified_release "v1.0.0" "1.0.0" "${INSTALL_ROOT}/missing.zip" "" \
+  "${INSTALL_ROOT}/releases" "${INSTALL_ROOT}/current" "${INSTALL_ROOT}/state" 5 "http://127.0.0.1:0" 1 >/dev/null 2>&1 ) || HALF_STATUS=$?
+check "an install with half a pair stops" "1" "$HALF_STATUS"
+check "an install with half a pair changes nothing" "" "$(find "${INSTALL_ROOT}/releases" "${INSTALL_ROOT}/state" -mindepth 1)"
+check "an install with half a pair never reached systemctl" "" "$(host_guard_calls)"
 
 # --- Deploy textfile metrics content ---------------------------------------
 

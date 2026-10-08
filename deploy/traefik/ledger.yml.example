@@ -55,6 +55,18 @@
 # server-side application environment file — that value must be this
 # Traefik container's own address.
 #
+# The hop from this proxy to the ledger host's port 5080 (the REST API
+# and the MCP endpoint, which carry passwords, one-time codes, tokens and
+# every answer) is encrypted. The ledger host generates a long-lived
+# self-signed certificate for itself, /etc/ledger/backend-tls.crt, and
+# the ledger-backend servers transport at the bottom of this file trusts
+# exactly that one certificate and nothing else, so anyone who
+# intercepts the hop sees only ciphertext and cannot pretend to be the
+# application. Paste the PUBLIC certificate into the rootCAs entry; the
+# private key never leaves the ledger host. Certificate checking is
+# never switched off. The hop to Grafana on port 3000 is still plain
+# http.
+#
 # Every hostname and address below is a placeholder from the
 # documentation ranges (RFC 5737) or an example.* domain; replace all of
 # them, never commit a real value here.
@@ -146,7 +158,26 @@ http:
 
     ledger-api:
       loadBalancer:
+        serversTransport: ledger-backend
         servers:
           # Replace with the ledger host's real address, port 5080 (REST API
-          # and MCP endpoint).
-          - url: "http://192.0.2.20:5080"
+          # and MCP endpoint). It is https, verified against the certificate
+          # pinned in the ledger-backend servers transport below.
+          - url: "https://192.0.2.20:5080"
+
+  serversTransports:
+    ledger-backend:
+      # The fixed internal name the ledger host's certificate carries. It is
+      # not a real hostname and never changes; the connection goes to the
+      # address above and only checks that the certificate names this.
+      serverName: "ledger-backend"
+      rootCAs:
+        # The public certificate from the ledger host, copied from
+        # /etc/ledger/backend-tls.crt (the pasted lines keep this
+        # indentation). Normally this is the only entry; during a rotation
+        # list the old and the new certificate together, then remove the old
+        # one.
+        - |
+          -----BEGIN CERTIFICATE-----
+          REPLACE-WITH-THE-PUBLIC-CERTIFICATE-FROM-THE-LEDGER-HOST
+          -----END CERTIFICATE-----

@@ -13,6 +13,7 @@ public class ProductionConfigurationValidatorTests : IDisposable
     private const string DefaultKeyPath = "existing-key-file";
     private const string ValidKnownProxy = "192.0.2.10";
     private const string ValidRedirectUrl = "https://ledger-api.example.com/api/v1/bank/callback";
+    private const string ValidApiUrl = "https://0.0.0.0:5080";
     private readonly string _existingCertificatePath = Path.GetTempFileName();
 
     [Fact]
@@ -484,10 +485,100 @@ public class ProductionConfigurationValidatorTests : IDisposable
         act.Should().NotThrow();
     }
 
+    [Fact]
+    [Trait("Category", "Configuration")]
+    public void ThrowIfInvalid_passes_for_an_https_endpoint_with_readable_certificate_and_key()
+    {
+        var configuration = ApiEndpointConfiguration(new Dictionary<string, string?>());
+
+        var act = () => ProductionConfigurationValidator.ThrowIfInvalid(configuration);
+
+        act.Should().NotThrow();
+    }
+
+    [Theory]
+    [Trait("Category", "Configuration")]
+    [InlineData("http://0.0.0.0:5080")]
+    [InlineData("http://127.0.0.1:5080")]
+    [InlineData("https://0.0.0.0:5080;http://0.0.0.0:5082")]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData(";")]
+    [InlineData(null)]
+    public void ThrowIfInvalid_names_the_api_url_key_when_the_proxy_facing_endpoint_is_not_https(string? url)
+    {
+        var configuration = ApiEndpointConfiguration(new Dictionary<string, string?> { ["Kestrel:Endpoints:Api:Url"] = url });
+
+        var act = () => ProductionConfigurationValidator.ThrowIfInvalid(configuration);
+
+        var exception = act.Should().Throw<InvalidOperationException>().Which;
+        exception.Message.Should().Contain("Kestrel:Endpoints:Api:Url");
+        exception.Message.Should().NotContain("Certificate");
+    }
+
+    [Theory]
+    [Trait("Category", "Configuration")]
+    [InlineData("Kestrel:Endpoints:Api:Certificate:Path")]
+    [InlineData("Kestrel:Endpoints:Api:Certificate:KeyPath")]
+    public void ThrowIfInvalid_names_the_certificate_key_when_its_file_is_not_configured(string key)
+    {
+        var configuration = ApiEndpointConfiguration(new Dictionary<string, string?> { [key] = null });
+
+        var act = () => ProductionConfigurationValidator.ThrowIfInvalid(configuration);
+
+        var exception = act.Should().Throw<InvalidOperationException>().Which;
+        exception.Message.Should().Contain(key);
+        exception.Message.Should().NotContain("Kestrel:Endpoints:Api:Url");
+    }
+
+    [Theory]
+    [Trait("Category", "Configuration")]
+    [InlineData("Kestrel:Endpoints:Api:Certificate:Path")]
+    [InlineData("Kestrel:Endpoints:Api:Certificate:KeyPath")]
+    public void ThrowIfInvalid_names_the_certificate_key_when_its_file_is_missing_or_not_a_readable_file(string key)
+    {
+        foreach (var path in new[] { "/nonexistent/backend-tls.pem", Path.GetTempPath() })
+        {
+            var configuration = ApiEndpointConfiguration(new Dictionary<string, string?> { [key] = path });
+
+            var act = () => ProductionConfigurationValidator.ThrowIfInvalid(configuration);
+
+            var exception = act.Should().Throw<InvalidOperationException>().Which;
+            exception.Message.Should().Contain(key);
+            exception.Message.Should().NotContain(path);
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "Configuration")]
+    public void ThrowIfInvalid_names_every_endpoint_key_at_once_and_no_values()
+    {
+        var configuration = ApiEndpointConfiguration(new Dictionary<string, string?>
+        {
+            ["Kestrel:Endpoints:Api:Url"] = "http://0.0.0.0:5080",
+            ["Kestrel:Endpoints:Api:Certificate:Path"] = null,
+            ["Kestrel:Endpoints:Api:Certificate:KeyPath"] = "/nonexistent/backend-tls.key"
+        });
+
+        var act = () => ProductionConfigurationValidator.ThrowIfInvalid(configuration);
+
+        var message = act.Should().Throw<InvalidOperationException>().Which.Message;
+        message.Should().Contain("Kestrel:Endpoints:Api:Url");
+        message.Should().Contain("Kestrel:Endpoints:Api:Certificate:Path");
+        message.Should().Contain("Kestrel:Endpoints:Api:Certificate:KeyPath");
+        message.Should().NotContain("0.0.0.0");
+        message.Should().NotContain("/nonexistent");
+    }
+
     /// <inheritdoc />
     public void Dispose()
     {
         File.Delete(_existingCertificatePath);
+    }
+
+    private IConfiguration ApiEndpointConfiguration(IReadOnlyDictionary<string, string?> overrides)
+    {
+        return BuildConfiguration(_existingCertificatePath, SentinelPassword, ValidConnectionString, extra: overrides);
     }
 
     private IConfiguration OAuthConfiguration(IReadOnlyDictionary<string, string?> overrides)
@@ -526,7 +617,7 @@ public class ProductionConfigurationValidatorTests : IDisposable
             knownProxy: knownProxy);
     }
 
-    private static IConfiguration BuildConfiguration(
+    private IConfiguration BuildConfiguration(
         string? certificatePath,
         string? certificatePassword,
         string connectionString,
@@ -542,6 +633,9 @@ public class ProductionConfigurationValidatorTests : IDisposable
     {
         var values = new Dictionary<string, string?>
         {
+            ["Kestrel:Endpoints:Api:Url"] = ValidApiUrl,
+            ["Kestrel:Endpoints:Api:Certificate:Path"] = _existingCertificatePath,
+            ["Kestrel:Endpoints:Api:Certificate:KeyPath"] = _existingCertificatePath,
             ["DataProtection:CertificatePath"] = certificatePath,
             ["DataProtection:CertificatePassword"] = certificatePassword,
             ["ConnectionStrings:Ledger"] = connectionString,

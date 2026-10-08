@@ -28,6 +28,12 @@ server's own values.
 7. The installer restarts the application, waits for it to report healthy,
    and reports the outcome (see "Where outcomes appear" below).
 
+After a release is verified and before the installer unpacks, migrates or
+restarts anything, it makes sure the certificate the application presents to
+the reverse proxy exists, and creates it if it does not. The application refuses to start without it, and a release that migrated
+the database is not rolled back automatically, so the certificate must never
+be missing at start. An existing certificate is never replaced.
+
 No code that ran inside CI ever runs on the server. The server only ever
 runs its own installer against artifacts it has verified itself.
 

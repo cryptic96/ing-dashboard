@@ -1,16 +1,21 @@
 #!/usr/bin/env bash
 ###
 ### Idempotent module: creates the ledger service accounts, their
-### directories, the Data Protection certificate and the application env
-### file. Never overwrites the certificate or the env file once created,
-### never prints or logs the Data Protection password, and always tells
-### the operator which two files to copy into the password manager.
+### directories, the Data Protection certificate, the certificate the
+### application presents to the reverse proxy and the application env
+### file. Never overwrites a certificate or the env file once created,
+### never prints or logs the Data Protection password or a private key, and
+### always tells the operator which two files to copy into the password
+### manager.
 ###
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEPLOY_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # shellcheck source=deploy/provision.sh
 LEDGER_PROVISION_LIB_ONLY=1 source "${SCRIPT_DIR}/../provision.sh"
+# shellcheck source=deploy/lib/backend-tls.sh
+source "${DEPLOY_DIR}/lib/backend-tls.sh"
 
 ###
 ### Renders the application env file content from the given Traefik IP, Data
@@ -128,6 +133,8 @@ if [[ "${LEDGER_PROVISION_LIB_ONLY:-0}" != "1" ]]; then
     rm -rf "$workdir"
   fi
 
+  ledger_ensure_backend_tls
+
   if [[ ! -f "$DP_ENV_PATH" ]]; then
     if [[ -z "$LEDGER_DP_PASSWORD" ]]; then
       provision_die "cannot create ${DP_ENV_PATH} without the Data Protection password that belongs to the existing ${DP_CERT_PATH}; delete ${DP_CERT_PATH} to regenerate both together"
@@ -147,5 +154,6 @@ if [[ "${LEDGER_PROVISION_LIB_ONLY:-0}" != "1" ]]; then
 
   provision_log "Data Protection certificate: ${DP_CERT_PATH}"
   provision_log "Application env file: ${DP_ENV_PATH}"
+  provision_log "Reverse proxy certificate (public, install it in the reverse proxy): /etc/ledger/backend-tls.crt"
   provision_log "Copy both files into the password manager; neither is printed here."
 fi
