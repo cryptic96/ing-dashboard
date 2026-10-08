@@ -5,6 +5,7 @@ using System.Net.Sockets;
 using System.Security.Cryptography.X509Certificates;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.Server.Kestrel.Transport.Sockets;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -26,10 +27,13 @@ public class LedgerWebApplicationFactory : WebApplicationFactory<Program>
     private readonly IReadOnlyDictionary<string, string?>? _additionalConfiguration;
     private readonly CapturingLoggerProvider _loggerProvider;
     private readonly TestBackendCertificate? _backendCertificate;
+    private readonly Dictionary<int, Socket> _reservedSockets = [];
     private IHost? _realHost;
 
     /// <summary>
-    /// Creates the factory. Picks two free loopback ports immediately so callers can build clients before starting the host.
+    /// Creates the factory. Binds two loopback sockets on port 0 immediately, so the operating system picks the ports and
+    /// callers can build clients before starting the host. The sockets stay bound until Kestrel takes them over when it opens
+    /// its endpoints, so no other host or process can claim either port in between.
     /// The certificate and the startup environment are process environment values only while the host is built and started,
     /// because the service registration reads them before the factory's configuration overrides apply; the previous values are
     /// put back afterwards, whether or not startup succeeds.
@@ -54,8 +58,8 @@ public class LedgerWebApplicationFactory : WebApplicationFactory<Program>
         _contentRootOverride = contentRootOverride;
         _configureTestServices = configureTestServices;
         _additionalConfiguration = additionalConfiguration;
-        ApiPort = GetFreeLoopbackPort();
-        OpsPort = GetFreeLoopbackPort();
+        ApiPort = ReserveLoopbackPort();
+        OpsPort = ReserveLoopbackPort();
 
         var environment = new Dictionary<string, string?>
         {
@@ -69,9 +73,17 @@ public class LedgerWebApplicationFactory : WebApplicationFactory<Program>
             environment[name] = value;
         }
 
-        using (new EnvironmentOverride(environment))
+        try
         {
-            EnsureHostStarted();
+            using (new EnvironmentOverride(environment))
+            {
+                EnsureHostStarted();
+            }
+        }
+        catch
+        {
+            ReleaseReservedSockets();
+            throw;
         }
     }
 
@@ -147,6 +159,11 @@ public class LedgerWebApplicationFactory : WebApplicationFactory<Program>
             }
         });
 
+        builder.ConfigureServices(services =>
+        {
+            services.Configure<SocketTransportOptions>(options => options.CreateBoundListenSocket = TakeReservedSocket);
+        });
+
         builder.ConfigureLogging((context, logging) =>
         {
             logging.AddProvider(_loggerProvider);
@@ -209,6 +226,7 @@ public class LedgerWebApplicationFactory : WebApplicationFactory<Program>
     {
         if (disposing)
         {
+            ReleaseReservedSockets();
             _realHost?.StopAsync().GetAwaiter().GetResult();
             _realHost?.Dispose();
         }
@@ -219,6 +237,8 @@ public class LedgerWebApplicationFactory : WebApplicationFactory<Program>
     /// <inheritdoc />
     public override async ValueTask DisposeAsync()
     {
+        ReleaseReservedSockets();
+
         if (_realHost is not null)
         {
             await _realHost.StopAsync();
@@ -247,13 +267,43 @@ public class LedgerWebApplicationFactory : WebApplicationFactory<Program>
         _ = Server;
     }
 
-    private static int GetFreeLoopbackPort()
+    /// <summary>Binds a loopback socket on port 0, keeps it bound and returns the port the operating system assigned.</summary>
+    private int ReserveLoopbackPort()
     {
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-        listener.Stop();
+        var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        socket.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+        var port = ((IPEndPoint)socket.LocalEndPoint!).Port;
+        _reservedSockets[port] = socket;
         return port;
+    }
+
+    /// <summary>Hands Kestrel the socket reserved for the requested endpoint, or binds a fresh one for any other endpoint.</summary>
+    private Socket TakeReservedSocket(EndPoint endpoint)
+    {
+        lock (_reservedSockets)
+        {
+            if (endpoint is IPEndPoint ip && _reservedSockets.Remove(ip.Port, out var reserved))
+            {
+                return reserved;
+            }
+        }
+
+        var socket = new Socket(endpoint.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
+        socket.Bind(endpoint);
+        return socket;
+    }
+
+    private void ReleaseReservedSockets()
+    {
+        lock (_reservedSockets)
+        {
+            foreach (var socket in _reservedSockets.Values)
+            {
+                socket.Dispose();
+            }
+
+            _reservedSockets.Clear();
+        }
     }
 }
 
