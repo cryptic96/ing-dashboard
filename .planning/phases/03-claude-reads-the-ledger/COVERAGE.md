@@ -1,1 +1,1 @@
-No external API integration: this phase builds the ledger's own MCP server and embedded OAuth authorization server that Claude clients call into; the app calls no third-party API (a test proves no outbound request leaves the app during tool calls), and the only outbound fetch is an operator-run check of Anthropic's published IP-range page.
+No external API integration: the app serves its own MCP and OAuth endpoints and calls no third-party API (a test proves no outbound requests).
