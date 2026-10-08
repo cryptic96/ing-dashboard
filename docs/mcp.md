@@ -172,6 +172,26 @@ claude mcp add --transport http --client-id ledger-claude-code \
   --callback-port 33418 ledger https://mcp.example.com/mcp
 ```
 
+Without the `claude` command, for example in the Claude desktop app's Code
+tab, put the same settings in a `.mcp.json` file in an empty folder of its
+own and start a Code session in that folder (keeping ledger conversations
+apart from other work):
+
+```json
+{
+  "mcpServers": {
+    "ledger": {
+      "type": "http",
+      "url": "https://mcp.example.com/mcp",
+      "oauth": { "clientId": "ledger-claude-code", "callbackPort": 33418 }
+    }
+  }
+}
+```
+
+In `/mcp` the ledger server appears under that folder's own name; servers
+offered by the public connector directory with similar names are unrelated.
+
 Then open `/mcp` inside Claude Code and choose to authenticate. Your browser
 opens the sign-in page (password, authenticator code), then a consent page
 naming Claude Code. After you approve, ask something simple such as "give me
@@ -227,6 +247,13 @@ Only after that, continue with the steps below.
 Both runs must end with no failures.
 
 ## Connect claude.ai
+
+This needs a Claude account whose plan allows custom connectors with your own
+OAuth client. Accounts managed by an organisation can have custom connectors
+switched off by its administrators; then only Claude Code (which connects from
+your own machine, on the home network or VPN) can use the ledger, and the
+public router is best left on the home and VPN list until a hosted client
+needs it.
 
 Do this once, from a desktop browser on the home network or the VPN:
 

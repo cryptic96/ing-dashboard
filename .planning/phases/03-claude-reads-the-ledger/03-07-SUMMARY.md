@@ -74,7 +74,7 @@ See key-decisions above. The operator also asked Claude to merge the PR and push
 
 1. **Operator steps executed differently** — Claude's attempt to run provisioning over SSH was blocked by the auto-mode classifier as a production deploy; from then on every change on the live hosts (provisioning, route file, env keys, restart) was run by the operator from exact commands, and Claude only verified read-only. This also covered steps the plan had assigned to Claude (route file, env keys).
 2. **Claude Code via the desktop Code tab** instead of the CLI: a project `.mcp.json` in a separate local folder with `oauth.clientId` and `oauth.callbackPort`; same client and callback port as planned.
-3. **Public DNS**: a public record for the MCP hostname already exists but resolves to the internal proxy address (matching the other ledger hostnames). Harmless while the endpoint is internal; it must point at the home IPv4 address (DNS-only, no AAAA) in the go-live plan.
+3. **Public DNS** (corrected during the go-live plan): a plain-DNS lookup from the workstation returned the internal proxy address because the home router answers or intercepts port-53 queries; a DNS-over-HTTPS lookup showed the public record already points at the home's public IPv4 address, DNS-only, with no AAAA record.
 4. **Release build re-run** after a flaky test (see Performance); fixed in quick task 261008-evv after the release.
 
 ## Issues Encountered
