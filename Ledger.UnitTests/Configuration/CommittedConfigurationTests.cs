@@ -4,6 +4,7 @@ using FluentAssertions;
 using Ledger.Domain.Banking;
 using Ledger.Domain.Ingestion;
 using Ledger.Service.Ingestion;
+using Microsoft.Extensions.Configuration;
 
 namespace Ledger.UnitTests.Configuration;
 
@@ -30,6 +31,22 @@ public partial class CommittedConfigurationTests
             CommittedSecretScanner.ScanJson(File.ReadAllText(path), checkKeyNames: true)
                 .Should().BeEmpty($"file {Path.GetFileName(path)} must not carry a secret");
         }
+    }
+
+    [Fact]
+    [Trait("Category", "Configuration")]
+    public void Production_serves_the_proxy_facing_endpoint_over_https_from_the_host_certificate_and_keeps_the_ops_endpoint_on_loopback_http()
+    {
+        var serviceDirectory = FindLedgerServiceDirectory();
+        var configuration = new ConfigurationBuilder()
+            .AddJsonFile(Path.Combine(serviceDirectory, "appsettings.json"), optional: false)
+            .AddJsonFile(Path.Combine(serviceDirectory, "appsettings.Production.json"), optional: false)
+            .Build();
+
+        configuration["Kestrel:Endpoints:Api:Url"].Should().Be("https://0.0.0.0:5080");
+        configuration["Kestrel:Endpoints:Api:Certificate:Path"].Should().Be("/etc/ledger/backend-tls.crt");
+        configuration["Kestrel:Endpoints:Api:Certificate:KeyPath"].Should().Be("/etc/ledger/backend-tls.key");
+        configuration["Kestrel:Endpoints:Ops:Url"].Should().Be("http://127.0.0.1:5081");
     }
 
     [Fact]
@@ -141,6 +158,25 @@ public partial class CommittedConfigurationTests
         level.Should().Be("Warning");
     }
 
+    [Theory]
+    [Trait("Category", "Configuration")]
+    [InlineData("OpenIddict")]
+    [InlineData("ModelContextProtocol")]
+    [InlineData("Microsoft.AspNetCore.Identity")]
+    public void Authorization_and_sign_in_libraries_are_logged_at_warning_so_no_credential_can_reach_the_log(string category)
+    {
+        var path = Path.Combine(FindLedgerServiceDirectory(), "appsettings.json");
+        using var document = JsonDocument.Parse(File.ReadAllText(path));
+
+        var level = document.RootElement
+            .GetProperty("Logging")
+            .GetProperty("LogLevel")
+            .GetProperty(category)
+            .GetString();
+
+        level.Should().Be("Warning");
+    }
+
     [Fact]
     [Trait("Category", "Configuration")]
     public void Ingestion_defaults_are_the_values_measured_against_the_real_bank()
@@ -153,6 +189,77 @@ public partial class CommittedConfigurationTests
         options.ReconcileBalanceKinds.Should().Equal(BalanceKind.ClosingBooked, BalanceKind.InterimBooked, BalanceKind.Expected);
         options.ReconcileUndatedBalances.Should().BeTrue();
         options.MatchWindowDays.Should().Be(5);
+    }
+
+    [Fact]
+    [Trait("Category", "Configuration")]
+    public void Ci_and_release_workflows_run_the_whole_suite_with_the_migration_bundle()
+    {
+        var workflows = Path.Combine(FindRepositoryRoot(), ".github", "workflows");
+
+        foreach (var name in new[] { "ci.yml", "release.yml" })
+        {
+            WholeSuiteStepViolations(File.ReadAllText(Path.Combine(workflows, name)), requireCiTrue: true)
+                .Should().BeEmpty($"workflow {name} must run the whole suite with the migration bundle");
+        }
+    }
+
+    [Theory]
+    [Trait("Category", "Configuration")]
+    [InlineData("dotnet test --solution Ledger.slnx --no-restore", "dotnet test --solution Ledger.slnx --no-restore --filter-not-trait \"Category=Integration\"")]
+    [InlineData("dotnet test --solution Ledger.slnx --no-restore", "dotnet test --solution Ledger.slnx --no-restore --filter-trait \"Category=Unit\"")]
+    [InlineData("dotnet test --solution Ledger.slnx --no-restore", "dotnet test --project Ledger.UnitTests --no-restore")]
+    [InlineData("          LEDGER_EFBUNDLE:", "          LEDGER_EFBUNDLE_OFF:")]
+    [InlineData("          CI: true", "          CI: false")]
+    [InlineData("          CI: true", "          NOT_CI: true")]
+    public void The_whole_suite_workflow_check_rejects_a_weakened_test_step(string original, string weakened)
+    {
+        var workflows = Path.Combine(FindRepositoryRoot(), ".github", "workflows");
+        var yaml = File.ReadAllText(Path.Combine(workflows, "ci.yml"));
+
+        yaml.Should().Contain(original);
+
+        WholeSuiteStepViolations(yaml.Replace(original, weakened), requireCiTrue: true).Should().NotBeEmpty();
+    }
+
+    private static List<string> WholeSuiteStepViolations(string workflowYaml, bool requireCiTrue)
+    {
+        var violations = new List<string>();
+        var lines = workflowYaml.Replace("\r\n", "\n").Split('\n');
+        var start = Array.FindIndex(lines, line => line.Trim() == "- name: Run tests");
+        if (start < 0)
+        {
+            return ["no step named Run tests"];
+        }
+
+        var step = new List<string> { lines[start] };
+        for (var i = start + 1; i < lines.Length && !lines[i].TrimStart().StartsWith("- name:", StringComparison.Ordinal); i++)
+        {
+            step.Add(lines[i]);
+        }
+
+        var runLines = step.Where(line => line.TrimStart().StartsWith("run:", StringComparison.Ordinal)).ToList();
+        if (runLines.Count != 1 || runLines[0].Trim() != "run: dotnet test --solution Ledger.slnx --no-restore")
+        {
+            violations.Add("the test step must run exactly: dotnet test --solution Ledger.slnx --no-restore");
+        }
+
+        if (step.Any(line => line.Contains("filter", StringComparison.OrdinalIgnoreCase)))
+        {
+            violations.Add("the test step must not filter tests");
+        }
+
+        if (!step.Any(line => line.Trim().StartsWith("LEDGER_EFBUNDLE:", StringComparison.Ordinal) && line.Trim().Length > "LEDGER_EFBUNDLE:".Length))
+        {
+            violations.Add("the test step must set a non-empty LEDGER_EFBUNDLE");
+        }
+
+        if (requireCiTrue && !step.Any(line => line.Trim() == "CI: true"))
+        {
+            violations.Add("the test step must set CI to true");
+        }
+
+        return violations;
     }
 
     private static string FindRepositoryRoot() => Path.GetDirectoryName(FindLedgerServiceDirectory())!;

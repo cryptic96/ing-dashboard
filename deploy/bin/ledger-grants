@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+###
+### Lists and revokes the grants Claude clients hold.
+###
+### Usage:
+###   ledger-grants list
+###   ledger-grants revoke-all
+###   ledger-grants revoke GRANT_ID
+###
+### revoke-all cuts every Claude connection off at once; the next request with
+### any earlier token is refused. list never prints a token. Run as root; the
+### work happens as the ledger user in a sandbox. Like the service, the command
+### opens the key ring with the certificate named in the env file.
+###
+set -euo pipefail
+
+readonly GRANT_ID_PATTERN='^[0-9a-f-]{36}$'
+
+usage() {
+  echo "Usage: ledger-grants list | revoke-all | revoke GRANT_ID" >&2
+  exit 2
+}
+
+require_root() {
+  if [ "$(id -u)" -ne 0 ]; then
+    echo "ledger-grants must be run as root." >&2
+    exit 1
+  fi
+}
+
+run_grants_command() {
+  exec systemd-run --quiet --pipe --wait --collect \
+    --uid=ledger --gid=ledger \
+    --property=EnvironmentFile=/etc/ledger/ledger.env \
+    --property=Environment=HOME=/var/lib/ledger \
+    --property=Environment=DOTNET_NOLOGO=1 \
+    --property=NoNewPrivileges=yes \
+    --property=ProtectSystem=strict \
+    --property=ProtectHome=yes \
+    --property=PrivateTmp=yes \
+    --property=PrivateDevices=yes \
+    --property=ProtectKernelTunables=yes \
+    --property=ProtectKernelModules=yes \
+    --property=ProtectControlGroups=yes \
+    --property=RestrictNamespaces=yes \
+    --property=LockPersonality=yes \
+    --property=CapabilityBoundingSet= \
+    --property=RestrictAddressFamilies=AF_UNIX \
+    --working-directory=/opt/ledger/current/app \
+    /usr/bin/dotnet /opt/ledger/current/app/Ledger.Service.dll grants "$@"
+}
+
+require_root
+
+if [ "$#" -lt 1 ]; then
+  usage
+fi
+
+case "$1" in
+  list|revoke-all)
+    if [ "$#" -ne 1 ]; then
+      usage
+    fi
+    run_grants_command "$1"
+    ;;
+  revoke)
+    if [ "$#" -ne 2 ]; then
+      usage
+    fi
+    if ! [[ "$2" =~ $GRANT_ID_PATTERN ]]; then
+      echo "Invalid grant id '$2'." >&2
+      exit 1
+    fi
+    run_grants_command revoke "$2"
+    ;;
+  *)
+    usage
+    ;;
+esac

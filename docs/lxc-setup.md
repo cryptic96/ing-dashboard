@@ -13,9 +13,12 @@ filling in.
 The container runs the application, PostgreSQL, Grafana and Prometheus.
 PostgreSQL has no network listener at all — only a local socket. Prometheus
 and the application's own operational endpoint listen on loopback only, with
-no route through the reverse proxy. Only the Grafana dashboard and the REST
-API are reachable, and only from the home network and VPN, through the
-existing reverse proxy. Nothing here is reachable from the public internet.
+no route through the reverse proxy. The Grafana dashboard and the REST API
+are reachable only from the home network and VPN, through the existing
+reverse proxy, which reaches the application over an encrypted connection
+(see step 7). The only part open to the internet is the MCP endpoint Claude
+connects to, on its own hostname and behind a sign-in, described in [the
+Claude connection guide](mcp.md).
 
 ## Prerequisites
 
@@ -130,10 +133,115 @@ On the existing reverse proxy container, copy
 directory, fill in the real LAN/VPN subnets, hostnames and the ledger
 container's address, and rename it to drop the `.example` suffix.
 
+The template also holds the routers for the MCP hostname: a public router
+for exactly the MCP and OAuth paths, open to Anthropic's published range
+plus the home network and VPN, and a sign-in router for the home network and
+VPN only. Install the public router on the home-and-VPN-only middleware
+first and switch it to Anthropic's range only at go-live; the staged
+rollout is in [the Claude connection guide](mcp.md).
+
+### Trust the ledger host's certificate
+
+The hop from the reverse proxy to the application is encrypted. The
+application serves HTTPS on port 5080 with a certificate that provisioning
+generated on the ledger host (`/etc/ledger/backend-tls.crt`, valid for ten
+years, naming only the internal name `ledger-backend`), and the route file
+trusts exactly that one certificate. Anyone who intercepts the hop sees only
+ciphertext, and nothing but the ledger host can pass as the application.
+Certificate checking is never switched off.
+
+1. On the ledger host, print the **public** certificate and its fingerprint.
+   The private key (`/etc/ledger/backend-tls.key`) never leaves the ledger
+   host and must not be copied anywhere:
+
+   ```bash
+   cat /etc/ledger/backend-tls.crt
+   openssl x509 -in /etc/ledger/backend-tls.crt -noout -fingerprint -sha256
+   ```
+
+2. In the route file on the reverse proxy, paste the certificate (the lines
+   from `-----BEGIN CERTIFICATE-----` to `-----END CERTIFICATE-----`) in
+   place of the placeholder under `serversTransports`, keeping the
+   indentation. The proxy reads the certificate from this file itself, so no
+   other file is needed there.
+
+3. Check that the proxy sees the same certificate the ledger host holds. On
+   the reverse proxy host (the only machine the firewall lets reach port
+   5080), print the fingerprint of what the application presents and compare
+   it with the one from step 1:
+
+   ```bash
+   openssl s_client -connect 192.0.2.20:5080 -servername ledger-backend </dev/null 2>/dev/null \
+     | openssl x509 -noout -fingerprint -sha256
+   ```
+
+The hop from the reverse proxy to Grafana on port 3000 is still plain HTTP.
+It carries Grafana sign-ins and dashboard data, and encrypting it the same way
+is tracked as a follow-up.
+
+#### Rotating the certificate
+
+Rotate the certificate if the private key may have been exposed, or well
+before it expires (`ledger-selfcheck` warns thirty days ahead). Update the
+proxy first, so there is never a moment when the application presents a
+certificate the proxy does not trust:
+
+1. On the ledger host, generate the new pair in a scratch directory instead
+   of `/etc/ledger`:
+
+   ```bash
+   install -d -m 700 /root/backend-tls-new
+   LEDGER_BACKEND_TLS_DIR=/root/backend-tls-new bash -c 'source /usr/local/lib/ledger/backend-tls.sh && ledger_ensure_backend_tls'
+   ```
+
+2. In the route file, add the new certificate as a second entry under
+   `rootCAs`, next to the old one. The proxy now accepts either.
+3. On the ledger host, move the old pair out of `/etc/ledger`, move the new
+   pair in, and restart the application:
+
+   ```bash
+   install -d -m 700 /root/backend-tls-old
+   mv /etc/ledger/backend-tls.crt /etc/ledger/backend-tls.key /root/backend-tls-old/
+   mv /root/backend-tls-new/backend-tls.crt /root/backend-tls-new/backend-tls.key /etc/ledger/
+   systemctl restart ledger
+   ```
+
+4. Run `ledger-selfcheck` and compare fingerprints as above. Once the API
+   and the MCP endpoint answer through the proxy, remove the old entry from
+   `rootCAs`, then destroy the old key with
+   `shred -u /root/backend-tls-old/backend-tls.key` and delete the scratch
+   directories.
+
+#### Upgrading a host that has no certificate yet
+
+A host built before the encrypted hop existed has no certificate, and the
+release that adds it refuses to start without one. Because that release also
+migrates the database, a failed start is not rolled back automatically, so
+the certificate must exist before the release is approved:
+
+1. Check out the release tag on the ledger host (see step 2) and re-run
+   `./deploy/provision.sh`. This creates the certificate, if it is missing,
+   and installs the current installer, which also creates it before starting
+   any later release. It does not install a release or restart the
+   application.
+2. Print the certificate and update the route file as above, but do not save
+   it on the reverse proxy yet: the proxy would then speak HTTPS to an
+   application that still answers plain HTTP.
+3. Approve the release. As soon as the installer reports success, save the
+   updated route file on the reverse proxy. The REST API and the MCP endpoint
+   answer with a bad gateway error for the minutes in between, so do this
+   when nobody is using them. Grafana is unaffected.
+
+Rolling back to a release from before the encrypted hop makes the application
+answer plain HTTP again, so the route file has to go back to its previous
+form at the same time.
+
 ## 8. Add local DNS records
 
-In the home router, point the Grafana hostname and the API hostname at the
-reverse proxy's address.
+In the home router, point the Grafana hostname, the API hostname and the
+MCP hostname at the reverse proxy's address. The MCP hostname additionally
+needs a public IPv4 `A` record that is DNS-only, with no `AAAA` record (see
+[the Claude connection guide](mcp.md)).
 
 ## 9. Apply the GitHub repository settings
 
@@ -169,7 +277,21 @@ PostgreSQL's socket-only and per-role isolation, file permissions,
 secrets hygiene (no GitHub credential, no stored backup identity, no
 secret-shaped text in the journal or `/var/log`), the bank key file's
 permissions, the Amsterdam time zone data, the firewall, the app's health and authentication, backup freshness, Grafana's
-lockdown and account roles, and every Prometheus target. `--restart-check`
+lockdown and account roles, and every Prometheus target. It also fails when
+any account other than root and the logins listed in
+`LEDGER_SUDO_ALLOWED_USERS` can use sudo or has user id 0. The application's
+proxy-facing port must speak only TLS: every probe of it trusts exactly the
+certificate in `/etc/ledger/backend-tls.crt` and never skips certificate
+checking, and the selfcheck fails when the port presents any other
+certificate, when a plain-HTTP request to it gets an application response, or
+when the certificate expires within thirty days. Once the MCP address is
+configured, it also proves on the host, over that pinned connection, that
+`/mcp` answers `401` with its discovery challenge, that the
+protected-resource document names the configured address, that the REST
+status path answers `404` on the MCP hostname and that the sign-in page
+answers `404` to an address outside the home network and VPN. Tokens, token and code-verifier parameters and
+authenticator enrolment links are added to the secret shapes it looks for in
+the journal and under `/var/log`. `--restart-check`
 also restarts the application and requires it to stay healthy, proving the
 Data Protection key ring survives a restart.
 
@@ -185,10 +307,29 @@ the password manager.
 
 ## 14. External reachability test
 
-From outside the home network and its VPN (for example, a phone on mobile
-data with the VPN off), confirm the Grafana and API hostnames do not
-answer at all. From inside the home network, confirm a REST call without a
-key returns `401`.
+Run the exposure check from a machine outside the home network and its VPN
+(for example, a laptop tethered to a phone with the VPN off), and again from
+inside:
+
+```bash
+build/check-exposure.sh --from outside \
+  --mcp-host mcp.example.com \
+  --api-host ledger-api.example.com \
+  --grafana-host grafana.example.com
+
+build/check-exposure.sh --from inside \
+  --mcp-host mcp.example.com \
+  --api-host ledger-api.example.com \
+  --grafana-host grafana.example.com
+```
+
+Outside, the dashboard and REST hostnames answer `403`, every MCP, OAuth and
+sign-in path of the MCP hostname answers `403` while the public router is
+still on the home-and-VPN-only list (and after go-live too, for any address
+that is not Anthropic's), and every other path answers `404`. Inside,
+discovery, the `401` challenge on `/mcp`, the sign-in page and a REST call
+without a key (`401`) behave as designed. Each run prints one line per
+request and ends with a count of failures.
 
 ## 15. Database access for the operator
 
@@ -265,6 +406,12 @@ after generating them, exactly like the Data Protection certificate in step
 4: database backups never contain either, on purpose. `ledger-selfcheck`
 checks the key file's mode and owner and looks for the key, its password and
 every other secret shape in the journal and under `/var/log`.
+
+## Connect Claude
+
+Once the host is locked down and the exposure check passes, follow [the
+Claude connection guide](mcp.md) to enrol a login, connect Claude Code and
+claude.ai, and go public with the MCP endpoint.
 
 ## What this guide never does
 

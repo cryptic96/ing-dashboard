@@ -14,7 +14,7 @@ The build starts with a secure platform, so no real financial data ever lands on
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Secure Platform & Release Pipeline** - Hardened tag-to-deploy pipeline and a locked-down LXC (app, Prometheus, Grafana) ready to hold financial data (completed 2026-09-29)
-- [ ] **Phase 2: Automatic ING Sync** - Link ING once; real transactions arrive daily, deduplicated, with consent expiry never silent
+- [x] **Phase 2: Automatic ING Sync** - Link ING once; real transactions arrive daily, deduplicated, with consent expiry never silent (completed 2026-10-07)
 - [ ] **Phase 3: Claude Reads the Ledger** - Claude (desktop, Code, claude.ai web and mobile) answers grounded spending questions over a secured MCP endpoint
 - [ ] **Phase 4: Trustworthy Categorisation** - Rules, review queue and Claude-assisted corrections with audit and undo; category drill-down and history comparison
 - [ ] **Phase 5: Budgets, Goals & Forecast** - Budgets, savings goals, recurring costs and income, true monthly cost, forecast and a single affordability answer
@@ -148,7 +148,35 @@ Plans:
   4. Searching a full year of transactions returns paginated results under a server-side cap and says explicitly when a result was truncated.
   5. From outside the network, only `/mcp` and its OAuth endpoints respond, and only to Anthropic's published IP ranges. OAuth discovery works from outside the network. A token issued for a different audience is rejected, and the caller's token is never forwarded to any other service.
 
-**Plans**: TBD
+**Plans**: 6/8 plans executed
+
+Plans:
+**Wave 1**
+
+- [x] 03-01-PLAN.md — Tracer: embedded OpenIddict with Identity logins, consent and pre-registered Claude clients; Claude Code's discovery chain, PKCE sign-in and /mcp with ledger_overview end to end; rotating refresh tokens that survive a restart
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 03-02-PLAN.md — Second factor (TOTP with replay guard) and hardened sign-in pages; the app enforces the public boundary itself: host and path allow-list, home/VPN-only sign-in, one audience, one scheme per surface, rate and size limits, no outbound calls
+- [x] 03-03-PLAN.md — money_totals: out, in and net from booked transactions in Amsterdam periods, pending and own-account transfers reported beside, per-counterparty breakdown, time and account grouping, full provenance
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 03-04-PLAN.md — search_transactions with a capped keyset cursor and truncation notice, find_counterparties, masked counterparty accounts, the final four-tool surface and instructions
+- [x] 03-05-PLAN.md — Operator controls: ledger-login enrolment, ledger-grants kill switch, MCP and token metrics, access alerts
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 03-06-PLAN.md — Exposure as code: Traefik MCP routers with Anthropic's range, provisioning keys, selfcheck sudo and MCP checks, outside-in exposure check, connection guide
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [ ] 03-07-PLAN.md — Home-network go-live (operator): release v0.3.0, host configured, routes on the home/VPN allowlist, login enrolled, Claude Code reads the real ledger
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [ ] 03-08-PLAN.md — Public go-live (operator): temporary SSH access removed, Anthropic range enabled, exposure proven from outside, claude.ai on web, mobile and Desktop, kill switch observed
+
 **UI hint**: no
 **Open decision**: Separate Authentik service vs a lightweight embedded OAuth server. Do not decide this before phase research. It depends on whether claude.ai custom connectors accept a pre-registered client (or client metadata documents) instead of dynamic client registration, and on what fits the single-LXC resource budget on a low-power host.
 **Research flags**: Check the current claude.ai custom-connector OAuth requirements and whether Anthropic publishes egress IP ranges. The user's browser must reach the authorize/login step, and a phone on mobile data is outside Anthropic's ranges. So confirm that connecting while on the home network or VPN is enough, and that refresh-token lifetimes keep re-authorisation rare.
@@ -158,7 +186,7 @@ Plans:
 **Goal:** Every transaction is correctly categorised: automatically by rules where they are confident, and by Claude and the user for the rest. Every change is audited and reversible, and the household can see where the money goes and how that compares with before.
 **Mode:** mvp
 **Depends on**: Phase 3
-**Requirements**: CAT-01, CAT-02, CAT-03, CAT-04, CAT-05, CAT-06, CAT-07, CAT-08, ADV-06, ADV-07, DASH-02, PLAN-09
+**Requirements**: CAT-01, CAT-02, CAT-03, CAT-04, CAT-05, CAT-06, CAT-07, CAT-08, ADV-06, ADV-07, DASH-02, PLAN-09, OPS-08
 **Success Criteria** (what must be TRUE):
 
   1. Rules stored in the database categorise new transactions automatically into a Nibud-structured category tree that the household can edit; no reference figures are shipped. Every assignment shows its source (rule, Claude or user) and a confidence level. Transfers between the household's own accounts no longer count as spending or income.
@@ -216,8 +244,8 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Secure Platform & Release Pipeline | 12/12 | Complete    | 2026-09-29 |
-| 2. Automatic ING Sync | 16/16 | In Progress|  |
-| 3. Claude Reads the Ledger | 0/TBD | Not started | - |
+| 2. Automatic ING Sync | 16/16 | Complete    | 2026-10-07 |
+| 3. Claude Reads the Ledger | 6/8 | In Progress|  |
 | 4. Trustworthy Categorisation | 0/TBD | Not started | - |
 | 5. Budgets, Goals & Forecast | 0/TBD | Not started | - |
 | 6. Advisor Memory & Scheduled Reviews | 0/TBD | Not started | - |

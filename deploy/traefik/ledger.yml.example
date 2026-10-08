@@ -4,17 +4,68 @@
 # directory (the directory its file provider already watches) and replace
 # every placeholder below with the household's own values.
 #
-# Only the Grafana dashboard hostname and the REST API's /api/ path
-# prefix are routed here, both behind an IP allowlist restricted to the
-# home network and VPN. This file has no route at all for any
-# operational or loopback-only endpoint: none of those are reachable
-# through the reverse proxy, from the LAN, from the VPN, or from
-# anywhere outside this host's own loopback interface.
+# Three hostnames are routed here:
+#
+#   grafana.example.com    the dashboards, home network and VPN only.
+#   ledger-api.example.com the REST API under /api/, home network and VPN
+#                          only.
+#   mcp.example.com        the dedicated MCP hostname. Exactly five paths
+#                          are public: /mcp, the protected-resource
+#                          document, the two authorization-server
+#                          discovery documents and /connect/token. They
+#                          are reachable from Anthropic's published
+#                          outbound range plus the home network and VPN.
+#                          The sign-in paths, /connect/authorize and
+#                          everything under /account/, are reachable from
+#                          the home network and VPN only.
+#
+# Every path on the MCP hostname is matched exactly (or, for the sign-in
+# pages, by one fixed prefix). There is no route for the REST API, the
+# metrics, the health endpoint or any dashboard on the MCP hostname, and
+# none for /mcp or the sign-in paths on the other two hostnames. The
+# application enforces the same lists a second time and answers 404 for
+# anything else. This file has no route at all for any operational or
+# loopback-only endpoint.
+#
+# DNS: the MCP hostname needs a public IPv4 A record that is DNS-only
+# (not proxied by the DNS provider) and no AAAA record, plus a local DNS
+# record pointing home network and VPN clients at this Traefik instance,
+# so there is one issuer and one resource URL for every client.
+#
+# Rollout is staged: first install the public router with the
+# ledger-lan-vpn-only middleware instead of ledger-mcp-allow, prove the
+# whole flow from home or VPN, and only at go-live switch it to
+# ledger-mcp-allow.
+#
+# The allowlists must judge the TCP peer address itself. Never set any
+# option that makes them read an address from a forwarded header, and
+# keep the router in front of Traefik free of source address
+# translation, otherwise every client looks like the same address or a
+# forged header decides who gets in.
+#
+# No middleware that holds back or collects a response may sit in front
+# of /mcp: replies are streamed and would stall.
+#
+# The address allowlist is defence in depth. OAuth is the real control:
+# every /mcp request needs a valid access token regardless of where it
+# comes from.
 #
 # The application trusts forwarded headers (X-Forwarded-For) only from
 # the address configured as ReverseProxy__KnownProxies__0 in the
 # server-side application environment file — that value must be this
 # Traefik container's own address.
+#
+# The hop from this proxy to the ledger host's port 5080 (the REST API
+# and the MCP endpoint, which carry passwords, one-time codes, tokens and
+# every answer) is encrypted. The ledger host generates a long-lived
+# self-signed certificate for itself, /etc/ledger/backend-tls.crt, and
+# the ledger-backend servers transport at the bottom of this file trusts
+# exactly that one certificate and nothing else, so anyone who
+# intercepts the hop sees only ciphertext and cannot pretend to be the
+# application. Paste the PUBLIC certificate into the rootCAs entry; the
+# private key never leaves the ledger host. Certificate checking is
+# never switched off. The hop to Grafana on port 3000 is still plain
+# http.
 #
 # Every hostname and address below is a placeholder from the
 # documentation ranges (RFC 5737) or an example.* domain; replace all of
@@ -25,6 +76,18 @@ http:
     ledger-lan-vpn-only:
       ipAllowList:
         sourceRange:
+          # Replace with the household's real LAN subnet.
+          - "192.0.2.0/24"
+          # Replace with the household's real VPN subnet.
+          - "198.51.100.0/24"
+
+    ledger-mcp-allow:
+      ipAllowList:
+        sourceRange:
+          # Anthropic's published outbound range for connector traffic.
+          # Re-check it against Anthropic's IP address page before each
+          # release (build/tests/anthropic-ranges-network-test.sh).
+          - "160.79.104.0/21"
           # Replace with the household's real LAN subnet.
           - "192.0.2.0/24"
           # Replace with the household's real VPN subnet.
@@ -62,6 +125,30 @@ http:
       tls:
         certResolver: letsencrypt
 
+    ledger-mcp-public:
+      rule: "Host(`mcp.example.com`) && (Path(`/mcp`) || Path(`/.well-known/oauth-protected-resource/mcp`) || Path(`/.well-known/oauth-authorization-server`) || Path(`/.well-known/openid-configuration`) || Path(`/connect/token`))"
+      priority: 100
+      entryPoints:
+        - websecure
+      middlewares:
+        - ledger-mcp-allow
+        - ledger-security-headers
+      service: ledger-api
+      tls:
+        certResolver: letsencrypt
+
+    ledger-mcp-signin:
+      rule: "Host(`mcp.example.com`) && (Path(`/connect/authorize`) || PathPrefix(`/account/`))"
+      priority: 110
+      entryPoints:
+        - websecure
+      middlewares:
+        - ledger-lan-vpn-only
+        - ledger-security-headers
+      service: ledger-api
+      tls:
+        certResolver: letsencrypt
+
   services:
     ledger-grafana:
       loadBalancer:
@@ -71,6 +158,26 @@ http:
 
     ledger-api:
       loadBalancer:
+        serversTransport: ledger-backend
         servers:
-          # Replace with the ledger host's real address, port 5080 (REST API).
-          - url: "http://192.0.2.20:5080"
+          # Replace with the ledger host's real address, port 5080 (REST API
+          # and MCP endpoint). It is https, verified against the certificate
+          # pinned in the ledger-backend servers transport below.
+          - url: "https://192.0.2.20:5080"
+
+  serversTransports:
+    ledger-backend:
+      # The fixed internal name the ledger host's certificate carries. It is
+      # not a real hostname and never changes; the connection goes to the
+      # address above and only checks that the certificate names this.
+      serverName: "ledger-backend"
+      rootCAs:
+        # The public certificate from the ledger host, copied from
+        # /etc/ledger/backend-tls.crt (the pasted lines keep this
+        # indentation). Normally this is the only entry; during a rotation
+        # list the old and the new certificate together, then remove the old
+        # one.
+        - |
+          -----BEGIN CERTIFICATE-----
+          REPLACE-WITH-THE-PUBLIC-CERTIFICATE-FROM-THE-LEDGER-HOST
+          -----END CERTIFICATE-----

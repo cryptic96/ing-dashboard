@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+###
+### Manages the logins that may approve Claude's access to the ledger.
+###
+### Usage:
+###   ledger-login create NAME
+###   ledger-login confirm-totp NAME
+###   ledger-login reset-totp NAME
+###   ledger-login set-password NAME
+###   ledger-login remove NAME
+###   ledger-login list
+###
+### create and set-password read the password from standard input when it is
+### not a terminal, and otherwise ask for it twice without echo. confirm-totp
+### reads the current six-digit code from standard input the same way, and
+### asks for it once without echo on a terminal. Neither the password nor the
+### code is ever an argument. create and reset-totp print the authenticator
+### secret once. Run as root; the work happens as the ledger user in a sandbox.
+### The authenticator secret is stored encrypted with the same key ring as the
+### service, so the command reads the certificate named in the env file; it
+### writes nothing outside the database.
+###
+set -euo pipefail
+
+readonly NAME_PATTERN='^[a-z][a-z0-9-]{1,31}$'
+readonly CODE_PATTERN='^[0-9]{6}$'
+
+usage() {
+  echo "Usage: ledger-login create NAME | confirm-totp NAME | reset-totp NAME | set-password NAME | remove NAME | list" >&2
+  exit 2
+}
+
+require_root() {
+  if [ "$(id -u)" -ne 0 ]; then
+    echo "ledger-login must be run as root." >&2
+    exit 1
+  fi
+}
+
+require_name() {
+  if ! [[ "$1" =~ $NAME_PATTERN ]]; then
+    echo "Invalid login name '$1'." >&2
+    exit 1
+  fi
+}
+
+run_login_command() {
+  systemd-run --quiet --pipe --wait --collect \
+    --uid=ledger --gid=ledger \
+    --property=EnvironmentFile=/etc/ledger/ledger.env \
+    --property=Environment=HOME=/var/lib/ledger \
+    --property=Environment=DOTNET_NOLOGO=1 \
+    --property=NoNewPrivileges=yes \
+    --property=ProtectSystem=strict \
+    --property=ProtectHome=yes \
+    --property=PrivateTmp=yes \
+    --property=PrivateDevices=yes \
+    --property=ProtectKernelTunables=yes \
+    --property=ProtectKernelModules=yes \
+    --property=ProtectControlGroups=yes \
+    --property=RestrictNamespaces=yes \
+    --property=LockPersonality=yes \
+    --property=CapabilityBoundingSet= \
+    --property=RestrictAddressFamilies=AF_UNIX \
+    --working-directory=/opt/ledger/current/app \
+    /usr/bin/dotnet /opt/ledger/current/app/Ledger.Service.dll login "$@"
+}
+
+###
+### Runs a command that needs a password. Without a terminal the caller's
+### standard input is handed through as it is. On a terminal the password is
+### typed twice without echo and passed on standard input by a shell builtin,
+### so it never appears in any process's argument list.
+###
+run_password_command() {
+  local first second
+
+  if [ ! -t 0 ]; then
+    run_login_command "$@"
+    return
+  fi
+
+  read -r -s -p "Password (at least 16 characters): " first
+  echo >&2
+  read -r -s -p "Repeat the password: " second
+  echo >&2
+
+  if [ -z "$first" ]; then
+    echo "A password is required." >&2
+    exit 1
+  fi
+  if [ "$first" != "$second" ]; then
+    echo "The two entries do not match." >&2
+    exit 1
+  fi
+
+  printf '%s\n' "$first" | run_login_command "$@"
+}
+
+###
+### Runs a command that needs the current one-time code. Without a terminal the
+### caller's standard input is handed through as it is. On a terminal the code
+### is typed once without echo, checked for six digits and passed on standard
+### input by a shell builtin, so it never appears in any argument list.
+###
+run_code_command() {
+  local code
+
+  if [ ! -t 0 ]; then
+    run_login_command "$@"
+    return
+  fi
+
+  read -r -s -p "Current code from the authenticator app: " code
+  echo >&2
+
+  if ! [[ "$code" =~ $CODE_PATTERN ]]; then
+    echo "The code is six digits." >&2
+    exit 1
+  fi
+
+  printf '%s\n' "$code" | run_login_command "$@"
+}
+
+require_root
+
+if [ "$#" -lt 1 ]; then
+  usage
+fi
+
+case "$1" in
+  create|set-password)
+    if [ "$#" -ne 2 ]; then
+      usage
+    fi
+    require_name "$2"
+    run_password_command "$1" "$2"
+    ;;
+  reset-totp|remove)
+    if [ "$#" -ne 2 ]; then
+      usage
+    fi
+    require_name "$2"
+    run_login_command "$1" "$2"
+    ;;
+  confirm-totp)
+    if [ "$#" -ne 2 ]; then
+      usage
+    fi
+    require_name "$2"
+    run_code_command confirm-totp "$2"
+    ;;
+  list)
+    if [ "$#" -ne 1 ]; then
+      usage
+    fi
+    run_login_command list
+    ;;
+  *)
+    usage
+    ;;
+esac

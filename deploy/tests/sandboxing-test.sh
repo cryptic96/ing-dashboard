@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Proves the privileged entry points are confined: the installer unit carries
-# its sandboxing directives and write allow-list, ledger-apikey hands
-# systemd-run every sandboxing property, and provisioning installs tzdata.
+# its sandboxing directives and write allow-list, ledger-apikey, ledger-login
+# and ledger-grants hand systemd-run every sandboxing property, and
+# provisioning installs tzdata.
 # Offline: systemd-run, systemctl and id are stubbed, nothing on the host is
 # touched.
 set -uo pipefail
@@ -10,6 +11,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEPLOY_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 POLL_UNIT="${DEPLOY_DIR}/systemd/ledger-deploy-poll.service"
 APIKEY="${DEPLOY_DIR}/bin/ledger-apikey"
+LOGIN="${DEPLOY_DIR}/bin/ledger-login"
+GRANTS="${DEPLOY_DIR}/bin/ledger-grants"
 PACKAGES="${DEPLOY_DIR}/provision.d/10-packages.sh"
 
 FAILURES=0
@@ -72,16 +75,32 @@ check "poll unit does not restrict capabilities (the installer runs as root and 
 check "poll unit does not restrict address families (the installer reaches GitHub)" "0" \
   "$(grep -c '^RestrictAddressFamilies=' "$POLL_UNIT")"
 
-# --- apikey wrapper properties --------------------------------------------------
-for property in \
-  NoNewPrivileges=yes ProtectSystem=strict ProtectHome=yes PrivateTmp=yes \
-  PrivateDevices=yes ProtectKernelTunables=yes ProtectKernelModules=yes \
-  ProtectControlGroups=yes RestrictNamespaces=yes LockPersonality=yes \
-  CapabilityBoundingSet= RestrictAddressFamilies=AF_UNIX \
-  Environment=HOME=/var/lib/ledger Environment=DOTNET_NOLOGO=1; do
-  check "ledger-apikey passes ${property}" "1" \
-    "$(file_has_text "$APIKEY" "--property=${property} ")"
+# --- wrapper properties ----------------------------------------------------------
+for wrapper in "$APIKEY" "$LOGIN" "$GRANTS"; do
+  for property in \
+    NoNewPrivileges=yes ProtectSystem=strict ProtectHome=yes PrivateTmp=yes \
+    PrivateDevices=yes ProtectKernelTunables=yes ProtectKernelModules=yes \
+    ProtectControlGroups=yes RestrictNamespaces=yes LockPersonality=yes \
+    CapabilityBoundingSet= RestrictAddressFamilies=AF_UNIX \
+    Environment=HOME=/var/lib/ledger Environment=DOTNET_NOLOGO=1 \
+    EnvironmentFile=/etc/ledger/ledger.env; do
+    check "$(basename "$wrapper") passes ${property}" "1" \
+      "$(file_has_text "$wrapper" "--property=${property} ")"
+  done
+  check "$(basename "$wrapper") runs as the ledger user and group" "1" \
+    "$(file_has_text "$wrapper" "--uid=ledger --gid=ledger ")"
 done
+
+# --- the sandboxed commands can read the key-ring certificate -----------------------
+ACCOUNTS="${DEPLOY_DIR}/provision.d/20-accounts.sh"
+for wrapper in "$LOGIN" "$GRANTS"; do
+  check "$(basename "$wrapper") does not hide any path from the command" "0" \
+    "$(grep -cE 'InaccessiblePaths|TemporaryFileSystem|PrivateMounts|PrivateUsers' "$wrapper")"
+  check "$(basename "$wrapper") does not make the filesystem unreadable" "0" \
+    "$(grep -cE 'ProtectSystem=(full|no)|ReadOnlyPaths=|BindReadOnlyPaths=' "$wrapper")"
+done
+check "the key-ring certificate is installed readable by the ledger group and no one else" "1" \
+  "$(grep -cE 'install -m 640 -o root -g ledger .*dataprotection\.pfx' "$ACCOUNTS")"
 
 # --- apikey behaviour with stubbed host tools ------------------------------------
 STUB_BIN="${WORKDIR}/bin"

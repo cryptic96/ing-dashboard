@@ -7,6 +7,8 @@ using Ledger.Service.Endpoints;
 using Ledger.Service.Health;
 using Ledger.Service.Hosting;
 using Ledger.Service.Ingestion;
+using Ledger.Service.Mcp;
+using Ledger.Service.OAuth;
 using Ledger.Service.Security;
 using Ledger.Domain.Security;
 using Microsoft.AspNetCore.Authentication;
@@ -29,6 +31,16 @@ if (builder.Environment.IsProduction())
 if (args.Length > 0 && args[0] == "apikey")
 {
     return await ApiKeyCommand.RunAsync(args[1..], builder.Configuration);
+}
+
+if (args.Length > 0 && args[0] == "login")
+{
+    return await LoginCommand.RunAsync(args[1..], builder.Configuration);
+}
+
+if (args.Length > 0 && args[0] == "grants")
+{
+    return await GrantsCommand.RunAsync(args[1..], builder.Configuration);
 }
 
 if (builder.Environment.IsProduction())
@@ -66,6 +78,8 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
 {
     options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
     options.ForwardLimit = 1;
+    options.KnownProxies.Clear();
+    options.KnownIPNetworks.Clear();
 
     var knownProxies = builder.Configuration.GetSection("ReverseProxy:KnownProxies").Get<string[]>() ?? [];
     foreach (var proxy in knownProxies)
@@ -88,13 +102,20 @@ builder.Services.AddAuthorization(options =>
         .Build();
 });
 
+builder.Services.AddLedgerRequestLimits();
+builder.Services.AddLedgerOAuth(builder.Configuration);
+builder.Services.AddLedgerMcp(builder.Configuration);
+
 var app = builder.Build();
 
 var opsPort = OpsEndpoint.FromConfiguration(app.Configuration);
 
 LedgerMetrics.RecordBuildInfo(Assembly.GetExecutingAssembly());
+McpMetrics.InitialiseCounters();
 
 app.UseForwardedHeaders();
+app.UsePublicHostGuard();
+app.UseLedgerRequestLimits();
 
 if (app.Environment.IsDevelopment())
 {
@@ -118,6 +139,8 @@ app.UseAuthorization();
 
 app.MapStatusEndpoints();
 app.MapBankEndpoints();
+app.MapLedgerOAuth();
+app.MapLedgerMcp();
 
 await app.RunAsync();
 

@@ -220,6 +220,33 @@ else
   pass "accounts_render_ledger_env: contains no database password"
 fi
 
+rendered_mcp="$(accounts_render_ledger_env "192.0.2.10" "s3cr3t-password" "mcp.example.com" "192.0.2.0/24,198.51.100.0/24")"
+expected_mcp=$'ASPNETCORE_ENVIRONMENT=Production\nReverseProxy__KnownProxies__0=192.0.2.10\nDataProtection__CertificatePath=/etc/ledger/dataprotection.pfx\nDataProtection__CertificatePassword=s3cr3t-password\nOAuth__PublicBaseUrl=https://mcp.example.com\nOAuth__SignInNetworks__0=192.0.2.0/24\nOAuth__SignInNetworks__1=198.51.100.0/24'
+assert_eq "accounts_render_ledger_env: renders the OAuth keys from the MCP domain and the home and VPN ranges" "$expected_mcp" "$rendered_mcp"
+
+rendered_spaced="$(accounts_render_ledger_env "192.0.2.10" "s3cr3t-password" "mcp.example.com" " 192.0.2.0/24 , 198.51.100.0/24 ")"
+assert_eq "accounts_render_ledger_env: trims blanks around the ranges" "$expected_mcp" "$rendered_spaced"
+
+if grep -q '^OAuth__' <<<"$rendered"; then
+  failtest "accounts_render_ledger_env: renders no OAuth key without an MCP domain"
+else
+  pass "accounts_render_ledger_env: renders no OAuth key without an MCP domain"
+fi
+
+if accounts_valid_mcp_domain "mcp.example.com"; then
+  pass "accounts_valid_mcp_domain: accepts a plain hostname"
+else
+  failtest "accounts_valid_mcp_domain: accepts a plain hostname"
+fi
+
+for bad_domain in "mcp" "mcp.example.com/path" "mcp.example.com extra" "-mcp.example.com" "https://mcp.example.com"; do
+  if accounts_valid_mcp_domain "$bad_domain"; then
+    failtest "accounts_valid_mcp_domain: rejects [${bad_domain}] (expected failure, got success)"
+  else
+    pass "accounts_valid_mcp_domain: rejects [${bad_domain}]"
+  fi
+done
+
 ###
 ### --- version pins reach an existing host ---------------------------------
 ###

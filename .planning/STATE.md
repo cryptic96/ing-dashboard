@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_phase: 02
-current_phase_name: automatic-ing-sync
+current_phase: 03
+current_phase_name: claude-reads-the-ledger
 status: executing
-stopped_at: Phase 2 context gathered
-last_updated: "2026-09-30T18:04:23.923Z"
-last_activity: 2026-09-30
-last_activity_desc: Phase 02 execution started
+stopped_at: Phase 3 context gathered
+last_updated: "2026-10-07T21:29:12.007Z"
+last_activity: 2026-10-07
+last_activity_desc: Phase 2 complete, transitioned to Phase 3
 progress:
-  total_phases: 2
-  completed_phases: 1
-  total_plans: 27
-  completed_plans: 12
+  total_phases: 3
+  completed_phases: 2
+  total_plans: 36
+  completed_plans: 34
 ---
 
 # Project State
@@ -23,14 +23,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-09-26)
 
 **Core value:** Claude can serve as a trustworthy financial advisor for the household, because it has complete, correctly categorised transaction data, budgets, goals and a shared advisor memory to reason over.
-**Current focus:** Phase 02 — automatic-ing-sync
+**Current focus:** Phase 03 — claude-reads-the-ledger
 
 ## Current Position
 
-Phase: 02 (automatic-ing-sync) — EXECUTING
-Plan: 1 of 15
-Status: Executing Phase 02
-Last activity: 2026-09-30 — Phase 02 execution started
+Phase: 03 (claude-reads-the-ledger) — EXECUTING
+Plan: 7 of 8
+Status: Ready to execute
+Last activity: 2026-10-07 — Phase 03 execution started
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -38,7 +38,7 @@ Progress: [░░░░░░░░░░] 0%
 
 **Velocity:**
 
-- Total plans completed: 12
+- Total plans completed: 28
 - Average duration: -
 - Total execution time: 0.0 hours
 
@@ -47,6 +47,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 01 | 12 | - | - |
+| 2 | 16 | - | - |
 
 **Recent Trend:**
 
@@ -73,7 +74,7 @@ Recent decisions affecting current work:
 ### Pending Todos
 
 - [minor] Harden privileged units and scan logs for secrets — `.planning/todos/pending/2026-09-29-harden-privileged-units-and-scan-logs-for-secrets.md`
-- [major] Remove temporary Claude SSH access before real bank data (before the automatic sync goes live) — `.planning/todos/pending/2026-09-28-remove-temporary-claude-ssh-access-before-real-bank-data.md`
+- [major] Remove temporary Claude SSH access to the ledger host before /mcp goes public (kept through bank sync by operator decision; key is passphrase-protected) — `.planning/todos/pending/2026-09-28-remove-temporary-claude-ssh-access-before-real-bank-data.md`
 - [minor] Migrate tests to Microsoft.Testing.Platform for xunit v4 (after go-live) — `.planning/todos/pending/2026-09-28-migrate-tests-to-microsoft-testing-platform-for-xunit-v4.md`
 
 ### Blockers/Concerns
@@ -82,6 +83,13 @@ Recent decisions affecting current work:
 - Phase 3: The OAuth server choice is open (separate Authentik vs embedded lightweight server). Settle it in phase research; it depends on claude.ai client-registration requirements and the single-LXC resource budget.
 - Phase 3: If the Anthropic IP allowlist also covers the browser-facing authorize/login step, connecting claude.ai only works from the home network or VPN. Confirm that is acceptable and that refresh-token lifetimes keep re-authorisation rare.
 - Phase 6: The research summary favoured the app calling the Messages API for reviews. The household decided on Claude-side scheduling (PROJECT.md), and that decision stands. Phase research should only pick the Claude-side scheduler.
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 261007-vrj | Encrypt TOTP authenticator secrets at rest with the Data Protection key ring; operator commands share the real key ring | 2026-10-07 | 3eb9648 | [261007-vrj-encrypt-totp-authenticator-secrets-at-re](./quick/261007-vrj-encrypt-totp-authenticator-secrets-at-re/) |
+| 261008-0av | Encrypt the proxy-to-application hop: HTTPS on 5080 with a host-generated certificate pinned by Traefik | 2026-10-08 | 6b9bf5e | [261008-0av-encrypt-the-proxy-to-app-hop-with-a-pinn](./quick/261008-0av-encrypt-the-proxy-to-app-hop-with-a-pinn/) |
 
 ## Deferred Items
 
@@ -93,6 +101,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-09-29T20:54:15.955Z
-Stopped at: Phase 2 context gathered
-Resume file: .planning/phases/02-automatic-ing-sync/02-CONTEXT.md
+Last session: 2026-10-07T13:17:52.776Z
+Stopped at: Phase 3 context gathered
+Resume file: .planning/phases/03-claude-reads-the-ledger/03-CONTEXT.md

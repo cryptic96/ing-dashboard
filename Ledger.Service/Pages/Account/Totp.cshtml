@@ -1,0 +1,25 @@
+@page "/account/totp"
+@model Ledger.Service.Pages.Account.TotpModel
+@{
+    Layout = "_SignInLayout";
+    ViewData["Title"] = "One-time code";
+}
+<h1>One-time code</h1>
+@if (Model.SignedIn)
+{
+    <p>You are signed in. You can close this window.</p>
+}
+else
+{
+    @if (Model.Failed)
+    {
+        <p class="error" role="alert">Sign-in failed.</p>
+    }
+    <p>Enter the six-digit code from your authenticator app.</p>
+    <form method="post">
+        <input type="hidden" name="ReturnUrl" value="@Model.ReturnUrl">
+        <label for="Code">Code</label>
+        <input id="Code" name="Code" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" autocapitalize="none" spellcheck="false" required>
+        <button type="submit">Sign in</button>
+    </form>
+}

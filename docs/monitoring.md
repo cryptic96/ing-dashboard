@@ -101,6 +101,49 @@ current state. They never contain a query result, a connection string or
 any financial detail, and the household alerts in particular never contain
 an amount, a balance, a counterparty, an account number or an account name.
 
+## Claude access
+
+Claude reaches the ledger through the one public MCP address, behind the
+sign-in and consent pages. The application counts what happens at that door
+on the same loopback-only metrics endpoint. Every series is present from
+startup, at zero, and every label is a fixed word or a tool name: no metric
+carries a token, a client, a network address or a login name.
+
+| Metric | What the number means |
+|---|---|
+| `ledger_mcp_tool_calls_total` | How many times each tool was called, by tool name. |
+| `ledger_mcp_rejected_tokens_total` | How many access tokens were presented and refused, by reason: `expired` (the token had run out), `wrong_audience` (the token was issued for a different resource) or `invalid` (the token was malformed, unknown or revoked). A request with no token, or an empty one, is a normal first contact and is not counted. |
+| `ledger_oauth_grants_created_total` | How many Claude connections were approved on the consent page. |
+| `ledger_oauth_refresh_token_reuse_total` | How many times a refresh token was presented again after it had already been used. When that happens every token of that connection is revoked and one warning is logged, without any token text. |
+
+Three alerts, in the Access folder in Grafana, email the operator through the
+same contact point as every other alert. Their texts are fixed: they never
+contain a token, a client address or anything financial.
+
+| Alert | What it means | What to do |
+|---|---|---|
+| Many Claude access tokens were rejected | More than 10 access tokens were refused within 10 minutes. | Run `sudo ledger-grants list` on the ledger host. A single connection whose token simply ran out is harmless; many rejections you cannot explain are not. |
+| A new Claude connection was approved | Someone approved a consent. | Run `sudo ledger-grants list` and check the connection is one you made. If it is not, run `sudo ledger-grants revoke-all`, then sign in again from home or the VPN when you reconnect Claude. |
+| A Claude refresh token was reused and its connection revoked | A refresh token was used a second time, which can mean a copy of it exists somewhere else. | Run `sudo ledger-grants list`. If you cannot explain it, run `sudo ledger-grants revoke-all`, then sign in again from home or the VPN when you reconnect Claude. |
+
+`sudo ledger-grants revoke-all` revokes every connection and every token at
+once; the next request with any earlier token is refused. `sudo ledger-grants
+revoke GRANT_ID` revokes one connection, using the id that `list` shows next
+to its client, creation time, status and live token count. A request that was
+already past validation when you ran it may still finish.
+
+Logins are managed with `ledger-login` on the same host: `sudo ledger-login
+create NAME` enrols a login (the password is typed without echo and never goes
+on the command line, and the authenticator secret is shown once), `confirm-totp
+NAME` asks for the current authenticator code (at a prompt, or on standard input when piped; never as an argument) and switches the login on after that first code, `reset-totp NAME` issues
+a new authenticator secret, `set-password NAME` replaces the password and
+`remove NAME` deletes the login. Resetting the authenticator, setting a new
+password and removing a login each revoke that login's connections. Adding a
+second login is just another `create`.
+
+Requests blocked by the reverse proxy never reach the application, so they are
+not counted here; they appear only in the proxy's own access log.
+
 ## Looking at the raw metrics
 
 There is no direct network route to Prometheus. The operator has two ways

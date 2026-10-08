@@ -4,7 +4,9 @@
 # offline before unpacking anything, refuses downgrades, runs any pending
 # migration as the migrator OS user, activates the release atomically,
 # health-checks it, rolls back automatically unless a migration ran, and
-# reports the outcome by email and Prometheus textfile metrics.
+# reports the outcome by email and Prometheus textfile metrics. Before it
+# changes anything it makes sure the certificate the application presents to
+# the reverse proxy exists.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -17,6 +19,8 @@ fi
 
 # shellcheck source=deploy/lib/common.sh
 source "${LIB_DIR}/common.sh"
+# shellcheck source=deploy/lib/backend-tls.sh
+source "${LIB_DIR}/backend-tls.sh"
 # shellcheck source=deploy/lib/deploy.sh
 source "${LIB_DIR}/deploy.sh"
 

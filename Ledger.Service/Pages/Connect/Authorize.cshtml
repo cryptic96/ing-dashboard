@@ -1,0 +1,32 @@
+@page "/connect/authorize"
+@model Ledger.Service.Pages.Connect.AuthorizeModel
+@{
+    Layout = "_SignInLayout";
+    ViewData["Title"] = "Allow access";
+}
+<h1>Allow access to the ledger?</h1>
+<dl>
+    <dt>Application</dt>
+    <dd>@Model.ClientName</dd>
+    <dt>Returns you to</dt>
+    <dd>@Model.RedirectHost</dd>
+    <dt>Signed in as</dt>
+    <dd>@Model.LoginName</dd>
+</dl>
+<p>Approving lets this application:</p>
+<ul>
+    <li>read the household's account balances, transactions and totals;</li>
+    @if (Model.OfflineAccess)
+    {
+        <li>stay connected without asking you to sign in again for a long time.</li>
+    }
+</ul>
+<p>It cannot change anything or move money. Approve only a connection you just started yourself.</p>
+<form method="post">
+    @foreach (var parameter in Model.RequestParameters)
+    {
+        <input type="hidden" name="@parameter.Key" value="@parameter.Value">
+    }
+    <button type="submit" name="decision" value="approve">Approve</button>
+    <button type="submit" name="decision" value="deny">Deny</button>
+</form>
