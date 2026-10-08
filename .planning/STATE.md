@@ -89,6 +89,7 @@ Recent decisions affecting current work:
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
 | 261007-vrj | Encrypt TOTP authenticator secrets at rest with the Data Protection key ring; operator commands share the real key ring | 2026-10-07 | 3eb9648 | [261007-vrj-encrypt-totp-authenticator-secrets-at-re](./quick/261007-vrj-encrypt-totp-authenticator-secrets-at-re/) |
+| 261008-0av | Encrypt the proxy-to-application hop: HTTPS on 5080 with a host-generated certificate pinned by Traefik | 2026-10-08 | 6b9bf5e | [261008-0av-encrypt-the-proxy-to-app-hop-with-a-pinn](./quick/261008-0av-encrypt-the-proxy-to-app-hop-with-a-pinn/) |
 
 ## Deferred Items
 
