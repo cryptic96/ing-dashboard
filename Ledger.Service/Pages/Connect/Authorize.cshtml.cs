@@ -18,7 +18,8 @@ namespace Ledger.Service.Pages.Connect;
 
 /// <summary>
 /// The authorization endpoint. It refuses a request for any resource other than the MCP endpoint, sends a person who is not signed
-/// in to the sign-in page, asks for explicit consent naming the client and where the browser returns to, and on approval records
+/// in to the sign-in page (a sign-in that predates a password or authenticator change, a lockout or the removal of the login counts as
+/// not signed in), asks for explicit consent naming the client and where the browser returns to, and on approval records
 /// the grant and lets OpenIddict issue the code.
 /// </summary>
 [AllowAnonymous]
@@ -26,10 +27,19 @@ public class AuthorizeModel(
     IOpenIddictApplicationManager applications,
     IOpenIddictAuthorizationManager authorizations,
     UserManager<LedgerUserEntity> users,
+    SignInManager<LedgerUserEntity> signInManager,
     IOptions<LedgerOAuthOptions> oauthOptions,
     ILogger<AuthorizeModel> logger) : PageModel
 {
-    private static readonly string[] FormFieldsNotForwarded = ["decision", "__RequestVerificationToken"];
+    private const string DecisionField = "decision";
+    private const string ApproveDecision = "approve";
+    private const string DenyDecision = "deny";
+
+    private static readonly string[] ForwardedParameters =
+    [
+        "client_id", "redirect_uri", "response_type", "scope", "state", "nonce",
+        "code_challenge", "code_challenge_method", "resource", "response_mode", "prompt"
+    ];
 
     /// <summary>The name of the client asking for access.</summary>
     public string ClientName { get; private set; } = string.Empty;
@@ -43,7 +53,7 @@ public class AuthorizeModel(
     /// <summary>Whether the client asked to stay connected.</summary>
     public bool OfflineAccess { get; private set; }
 
-    /// <summary>The original request parameters, carried through the consent form unchanged.</summary>
+    /// <summary>The OAuth request parameters the consent form carries along, taken from an explicit allow-list and never the decision.</summary>
     public IReadOnlyList<KeyValuePair<string, string>> RequestParameters { get; private set; } = [];
 
     /// <summary>Handles the redirect from the client: sign-in, then the consent page.</summary>
@@ -52,10 +62,13 @@ public class AuthorizeModel(
         return await HandleAsync(decision: null);
     }
 
-    /// <summary>Handles the decision from the consent page.</summary>
-    public async Task<IActionResult> OnPostAsync(string? decision)
+    /// <summary>
+    /// Handles the decision from the consent page. The decision is read only from the one form field the page's own buttons send;
+    /// a form that carries the field more than once or under another spelling is read as a refusal.
+    /// </summary>
+    public async Task<IActionResult> OnPostAsync()
     {
-        return await HandleAsync(decision);
+        return await HandleAsync(ReadDecision());
     }
 
     private async Task<IActionResult> HandleAsync(string? decision)
@@ -76,10 +89,12 @@ public class AuthorizeModel(
         }
 
         var cookie = await HttpContext.AuthenticateAsync(IdentityConstants.ApplicationScheme);
-        var user = cookie.Succeeded ? await users.GetUserAsync(cookie.Principal!) : null;
+        var user = cookie.Succeeded ? await signInManager.ValidateSecurityStampAsync(cookie.Principal!) : null;
 
-        if (user is null)
+        if (user is null || await users.IsLockedOutAsync(user) || !await users.GetTwoFactorEnabledAsync(user))
         {
+            await HttpContext.SignOutAsync(IdentityConstants.ApplicationScheme);
+
             return Challenge(
                 new AuthenticationProperties { RedirectUri = AuthorizeAddress() },
                 IdentityConstants.ApplicationScheme);
@@ -92,12 +107,12 @@ public class AuthorizeModel(
             return BadRequest();
         }
 
-        if (string.Equals(decision, "deny", StringComparison.Ordinal))
+        if (string.Equals(decision, DenyDecision, StringComparison.Ordinal))
         {
             return Rejected(Errors.AccessDenied, "The access was not approved.");
         }
 
-        if (string.Equals(decision, "approve", StringComparison.Ordinal))
+        if (string.Equals(decision, ApproveDecision, StringComparison.Ordinal))
         {
             return await ApproveAsync(request, application, user, canonicalResource);
         }
@@ -108,9 +123,7 @@ public class AuthorizeModel(
         RedirectHost = redirect.Authority;
         LoginName = user.UserName ?? string.Empty;
         OfflineAccess = request.HasScope(Scopes.OfflineAccess);
-        RequestParameters = CurrentParameters()
-            .Where(parameter => !FormFieldsNotForwarded.Contains(parameter.Key, StringComparer.Ordinal))
-            .ToList();
+        RequestParameters = ForwardedRequestParameters().ToList();
 
         return Page();
     }
@@ -167,11 +180,29 @@ public class AuthorizeModel(
 
     private string AuthorizeAddress()
     {
-        var query = QueryString.Create(CurrentParameters()
-            .Where(parameter => !FormFieldsNotForwarded.Contains(parameter.Key, StringComparer.Ordinal))
+        var query = QueryString.Create(ForwardedRequestParameters()
             .Select(parameter => new KeyValuePair<string, string?>(parameter.Key, parameter.Value)));
 
         return Request.PathBase + Request.Path + query;
+    }
+
+    private string? ReadDecision()
+    {
+        var fields = Request.Form
+            .Where(field => field.Key.Equals(DecisionField, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        return fields switch
+        {
+            [] => null,
+            [{ Key: DecisionField, Value: { Count: 1 } value }] => value[0],
+            _ => DenyDecision
+        };
+    }
+
+    private IEnumerable<KeyValuePair<string, string>> ForwardedRequestParameters()
+    {
+        return CurrentParameters().Where(parameter => ForwardedParameters.Contains(parameter.Key, StringComparer.Ordinal));
     }
 
     private IEnumerable<KeyValuePair<string, string>> CurrentParameters()

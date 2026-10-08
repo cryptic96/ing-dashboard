@@ -1,4 +1,5 @@
 using Ledger.Repository.Entities;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
@@ -8,8 +9,10 @@ namespace Ledger.Service.Pages.Account;
 
 /// <summary>
 /// The password sign-in page, the first of two steps. A correct password only continues to the one-time code page; a login
-/// without a confirmed second factor, or without a readable authenticator secret, can never sign in. Every way a sign-in can fail, including an unknown user name and a
-/// locked login, shows the same message, so the page never reveals which logins exist.
+/// without a confirmed second factor, or without a readable authenticator secret, can never sign in. A password check that
+/// signs in without asking for a second factor is treated as a failure and the sign-in it issued is withdrawn at once. Every way
+/// a sign-in can fail, including an unknown user name and a locked login, shows the same message, so the page never reveals which
+/// logins exist.
 /// </summary>
 [AllowAnonymous]
 public class LoginModel(
@@ -55,6 +58,12 @@ public class LoginModel(
         }
 
         var result = await signInManager.PasswordSignInAsync(user, Password, isPersistent: false, lockoutOnFailure: true);
+
+        if (result.Succeeded)
+        {
+            await HttpContext.SignOutAsync(IdentityConstants.ApplicationScheme);
+            await HttpContext.SignOutAsync(IdentityConstants.TwoFactorUserIdScheme);
+        }
 
         if (!result.RequiresTwoFactor)
         {

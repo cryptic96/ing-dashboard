@@ -10,28 +10,40 @@ namespace Ledger.IntegrationTests.Infrastructure;
 
 /// <summary>
 /// A login created for a test, with the password and the authenticator key it signs in with. Each call to <see cref="NextCode"/>
-/// returns a code from a time step that was not handed out before, because the host refuses a code it has already accepted.
+/// returns a code from a later time step than any handed out before, because the host refuses a code from a step at or below
+/// the last one it accepted.
 /// </summary>
 public sealed class TestLogin(Guid id, string userName, string password, string authenticatorKey)
 {
-    private static readonly int[] StepOffsets = [0, 1, 2, -1, -2];
-    private readonly HashSet<long> _usedSteps = [];
+    private const int FirstStepOffset = -1;
+    private const int LastStepOffset = 2;
+    private readonly object _gate = new();
     private readonly List<string> _issuedCodes = [];
+    private long _highestStep;
 
     /// <summary>
     /// The same login after its password was replaced. The time steps already handed out stay used, because the host remembers
-    /// the codes it accepted whichever password followed.
+    /// the steps it accepted whichever password followed.
     /// </summary>
     public TestLogin WithPassword(string newPassword)
     {
         var copy = new TestLogin(Id, UserName, newPassword, AuthenticatorKey);
 
-        lock (_usedSteps)
+        lock (_gate)
         {
-            copy._usedSteps.UnionWith(_usedSteps);
+            copy._highestStep = _highestStep;
         }
 
         return copy;
+    }
+
+    /// <summary>Records that the host accepted a code computed at the given moment by some other route, such as the operator command.</summary>
+    public void NoteCodeUsedAt(DateTimeOffset moment)
+    {
+        lock (_gate)
+        {
+            _highestStep = Math.Max(_highestStep, TotpCode.StepOf(moment));
+        }
     }
 
     /// <summary>The identifier of the login.</summary>
@@ -51,35 +63,33 @@ public sealed class TestLogin(Guid id, string userName, string password, string 
     {
         get
         {
-            lock (_usedSteps)
+            lock (_gate)
             {
                 return [.. _issuedCodes];
             }
         }
     }
 
-    /// <summary>A code the host accepts now and has not been given by this object before.</summary>
+    /// <summary>A code the host accepts now, from a later time step than any this object handed out or was told about before.</summary>
     public string NextCode()
     {
-        lock (_usedSteps)
+        lock (_gate)
         {
             var now = DateTimeOffset.UtcNow;
+            var nowStep = TotpCode.StepOf(now);
+            var step = Math.Max(_highestStep + 1, nowStep + FirstStepOffset);
 
-            foreach (var offset in StepOffsets)
+            if (step > nowStep + LastStepOffset)
             {
-                var moment = now.AddSeconds(offset * 30);
-
-                if (_usedSteps.Add(moment.ToUnixTimeSeconds() / 30))
-                {
-                    var code = TotpCode.Compute(AuthenticatorKey, moment);
-                    _issuedCodes.Add(code);
-
-                    return code;
-                }
+                throw new InvalidOperationException("Every time step that the host accepts has been used for this login.");
             }
-        }
 
-        throw new InvalidOperationException("Every time step that the host accepts has been used for this login.");
+            _highestStep = step;
+            var code = TotpCode.Compute(AuthenticatorKey, DateTimeOffset.FromUnixTimeSeconds(step * 30));
+            _issuedCodes.Add(code);
+
+            return code;
+        }
     }
 }
 
@@ -100,6 +110,9 @@ public sealed record DiscoveryDocuments(
 
 /// <summary>What the authorization step handed back: the code and the PKCE verifier that goes with it, or the error the redirect carried.</summary>
 public sealed record AuthorizationOutcome(string? Code, string? Error, string CodeVerifier, string RedirectUri, string Location, string ConsentHtml);
+
+/// <summary>The consent page as a signed-in browser sees it: its markup and the hidden fields it posts back.</summary>
+public sealed record ConsentPage(string Html, IReadOnlyDictionary<string, string> Fields);
 
 /// <summary>The answer of the token endpoint.</summary>
 public sealed record TokenResult(HttpStatusCode Status, string? AccessToken, string? RefreshToken, string? Error, JsonElement Body)
@@ -152,9 +165,16 @@ public sealed partial class OAuthTestDriver(HttpClient browser)
         string redirectUri,
         bool approve = true,
         string? resource = null,
-        string scope = "ledger.read offline_access")
+        string scope = "ledger.read offline_access",
+        string? extraQuery = null)
     {
         var (authorizeUrl, verifier, state) = BuildAuthorizeAddress(discovery, clientId, redirectUri, resource, scope);
+
+        if (extraQuery is not null)
+        {
+            authorizeUrl += "&" + extraQuery;
+        }
+
 
         using var first = await browser.GetAsync(authorizeUrl, TestContext.Current.CancellationToken);
 
@@ -188,6 +208,46 @@ public sealed partial class OAuthTestDriver(HttpClient browser)
             TestContext.Current.CancellationToken);
 
         return Outcome(decided, verifier, redirectUri, state, consentHtml);
+    }
+
+    /// <summary>Starts an authorization request, signs in with the password and a fresh code, and returns the consent page that follows.</summary>
+    public async Task<ConsentPage> OpenConsentPageAsync(
+        DiscoveryDocuments discovery,
+        string clientId,
+        TestLogin login,
+        string redirectUri,
+        string? extraQuery = null)
+    {
+        var (address, _, _) = BuildAuthorizeAddress(discovery, clientId, redirectUri);
+
+        if (extraQuery is not null)
+        {
+            address += "&" + extraQuery;
+        }
+
+        using var first = await browser.GetAsync(address, TestContext.Current.CancellationToken);
+        first.StatusCode.Should().Be(HttpStatusCode.Redirect);
+
+        using var password = await PostPasswordAsync(first.Headers.Location!.ToString(), login.UserName, login.Password);
+        using var signedIn = await PostCodeAsync(password.Headers.Location!.ToString(), login.NextCode());
+        signedIn.StatusCode.Should().Be(HttpStatusCode.Redirect);
+
+        using var consent = await browser.GetAsync(signedIn.Headers.Location!.ToString(), TestContext.Current.CancellationToken);
+        consent.StatusCode.Should().Be(HttpStatusCode.OK);
+        var html = await consent.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+
+        return new ConsentPage(html, HiddenFields(html));
+    }
+
+    /// <summary>Posts the decision of a consent page, with its hidden fields, to the authorization endpoint.</summary>
+    public async Task<HttpResponseMessage> PostDecisionAsync(DiscoveryDocuments discovery, ConsentPage page, string decision)
+    {
+        var fields = new Dictionary<string, string>(page.Fields, StringComparer.Ordinal) { ["decision"] = decision };
+
+        return await browser.PostAsync(
+            discovery.AuthorizationEndpoint,
+            new FormUrlEncodedContent(fields),
+            TestContext.Current.CancellationToken);
     }
 
     /// <summary>The address of the authorization request a client starts with, and the PKCE verifier and state that go with it.</summary>
@@ -335,7 +395,8 @@ public sealed partial class OAuthTestDriver(HttpClient browser)
             && response.Headers.Location?.ToString().StartsWith(redirectUri, StringComparison.Ordinal) == true;
     }
 
-    private static Dictionary<string, string> HiddenFields(string html)
+    /// <summary>The hidden form fields of a page, by name, as a browser would post them back.</summary>
+    public static Dictionary<string, string> HiddenFields(string html)
     {
         var fields = new Dictionary<string, string>(StringComparer.Ordinal);
 

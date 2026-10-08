@@ -59,7 +59,7 @@ public sealed class McpTestHost : IAsyncDisposable
 
     /// <summary>Starts a host on the given database with OAuth switched on, waits until it is healthy and returns it.</summary>
     /// <param name="connectionString">The runtime connection string of the database to use.</param>
-    /// <param name="configuration">Extra configuration, for example token lifetimes.</param>
+    /// <param name="configuration">Extra configuration, for example token lifetimes. The loopback address is the trusted proxy unless this replaces it, because the emulated proxy connects from there.</param>
     /// <param name="configureServices">Replacements for services.</param>
     /// <param name="enableOAuth">Whether to set the public base address; false starts the host as an unconfigured one would.</param>
     public static async Task<McpTestHost> StartAsync(
@@ -68,7 +68,7 @@ public sealed class McpTestHost : IAsyncDisposable
         Action<IServiceCollection>? configureServices = null,
         bool enableOAuth = true)
     {
-        var settings = new Dictionary<string, string?>();
+        var settings = new Dictionary<string, string?> { ["ReverseProxy:KnownProxies:0"] = "127.0.0.1" };
 
         if (enableOAuth)
         {

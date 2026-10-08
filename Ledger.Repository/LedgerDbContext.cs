@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.DataProtection.EntityFrameworkCore;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata;
 using OpenIddict.EntityFrameworkCore.Models;
 
 namespace Ledger.Repository;
@@ -102,8 +103,7 @@ public class LedgerDbContext(DbContextOptions<LedgerDbContext> options)
         {
             entity.ToTable("identity_users");
             entity.Property(user => user.CreatedAt).IsRequired();
-            entity.Property(user => user.LastTotpCodeSha256);
-            entity.Property(user => user.LastTotpAcceptedAt);
+            entity.Property(user => user.LastTotpStep).Metadata.SetAfterSaveBehavior(PropertySaveBehavior.Ignore);
         });
 
         modelBuilder.Entity<IdentityUserClaim<Guid>>().ToTable("identity_user_claims");

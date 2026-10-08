@@ -420,21 +420,20 @@ check_sudo_logins() {
   fi
 }
 
-# Sets REQ_STATUS, REQ_HEADERS and REQ_BODY for a request sent to the app's
-# loopback port as if the reverse proxy had forwarded it for HOST over
-# HTTPS. The app trusts forwarded headers from loopback, and loopback is
-# not one of the sign-in networks.
+# Sets REQ_STATUS and REQ_HEADERS for a request sent to the app's
+# loopback port with HOST as the Host header. The app trusts forwarded
+# headers only from the configured reverse proxy, so no forwarded header is
+# sent and the caller is judged by its real address, loopback, which is not
+# one of the sign-in networks.
 local_request() {
-  local method="$1" path="$2" host="$3" header_file body_file
+  local method="$1" path="$2" host="$3" header_file
   header_file="$(mktemp)"
-  body_file="$(mktemp)"
   REQ_STATUS="$(curl --silent --max-time 5 --request "$method" \
-    --header "Host: ${host}" --header "X-Forwarded-Proto: https" \
-    --dump-header "$header_file" --output "$body_file" --write-out '%{http_code}' \
+    --header "Host: ${host}" \
+    --dump-header "$header_file" --output /dev/null --write-out '%{http_code}' \
     "http://127.0.0.1:5080${path}" 2> /dev/null || true)"
   REQ_HEADERS="$(cat "$header_file")"
-  REQ_BODY="$(cat "$body_file")"
-  rm -f "$header_file" "$body_file"
+  rm -f "$header_file"
 }
 
 check_mcp_endpoint() {
@@ -451,7 +450,6 @@ check_mcp_endpoint() {
 
   host="${base_url#https://}"
   host="${host%%/*}"
-  local resource_url="https://${host}/mcp"
   local metadata_url="https://${host}/.well-known/oauth-protected-resource/mcp"
 
   local_request POST /mcp "$host"
@@ -462,15 +460,6 @@ check_mcp_endpoint() {
     fail "POST /mcp without a token returned 401 but not the resource_metadata challenge for ${metadata_url}"
   else
     fail "POST /mcp without a token returned ${REQ_STATUS}, expected 401"
-  fi
-
-  local_request GET /.well-known/oauth-protected-resource/mcp "$host"
-  local resource
-  resource="$(jq -r '.resource // empty' <<< "$REQ_BODY" 2> /dev/null || true)"
-  if [[ "$REQ_STATUS" == "200" && "$resource" == "$resource_url" ]]; then
-    pass "the protected-resource document names ${resource_url}"
-  else
-    fail "the protected-resource document returned ${REQ_STATUS} naming '${resource}', expected 200 naming ${resource_url}"
   fi
 
   local_request GET /api/v1/status "$host"

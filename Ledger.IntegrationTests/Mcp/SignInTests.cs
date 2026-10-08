@@ -72,6 +72,98 @@ public class SignInTests(DatabaseFixture fixture)
 
     [Fact]
     [Trait("Category", "OAuth")]
+    public async Task Another_spelling_of_an_accepted_code_is_refused_with_the_generic_message()
+    {
+        await using var host = await StartHostAsync();
+        var login = await host.CreateLoginAsync();
+        var code = login.NextCode();
+
+        using var first = host.CreateBrowser();
+        (await SignInAsync(first, login, code)).Should().Be(HttpStatusCode.Redirect);
+
+        using var second = host.CreateBrowser();
+        var driver = new OAuthTestDriver(second);
+        var (_, loginAddress) = await StartAuthorizationAsync(driver, second);
+        using var password = await driver.PostPasswordAsync(loginAddress, login.UserName, login.Password);
+        var codeAddress = password.Headers.Location!.ToString();
+
+        foreach (var spelling in OtherSpellings(code))
+        {
+            using var attempt = await driver.PostCodeAsync(codeAddress, spelling);
+
+            attempt.StatusCode.Should().Be(HttpStatusCode.OK, $"the spelling [{spelling.Replace("\t", "<tab>", StringComparison.Ordinal)}] must not work");
+            (await attempt.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).Should().Contain(GenericMessage);
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "OAuth")]
+    public async Task Another_spelling_of_a_fresh_code_is_refused_and_does_not_use_the_code_up()
+    {
+        await using var host = await StartHostAsync();
+        var login = await host.CreateLoginAsync();
+        var code = login.NextCode();
+        using var browser = host.CreateBrowser();
+        var driver = new OAuthTestDriver(browser);
+        var (_, loginAddress) = await StartAuthorizationAsync(driver, browser);
+        using var password = await driver.PostPasswordAsync(loginAddress, login.UserName, login.Password);
+        var codeAddress = password.Headers.Location!.ToString();
+
+        foreach (var spelling in OtherSpellings(code))
+        {
+            using var attempt = await driver.PostCodeAsync(codeAddress, spelling);
+
+            attempt.StatusCode.Should().Be(HttpStatusCode.OK);
+            (await attempt.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).Should().Contain(GenericMessage);
+        }
+
+        using var canonical = await driver.PostCodeAsync(codeAddress, code);
+
+        canonical.StatusCode.Should().Be(HttpStatusCode.Redirect, "the canonical spelling still works because nothing was claimed");
+    }
+
+    [Fact]
+    [Trait("Category", "OAuth")]
+    public async Task A_code_accepted_after_a_failed_attempt_is_still_refused_when_presented_again()
+    {
+        await using var host = await StartHostAsync();
+        var login = await host.CreateLoginAsync();
+        var code = login.NextCode();
+        using var firstBrowser = host.CreateBrowser();
+        var firstDriver = new OAuthTestDriver(firstBrowser);
+        var (_, loginAddress) = await StartAuthorizationAsync(firstDriver, firstBrowser);
+        using var password = await firstDriver.PostPasswordAsync(loginAddress, login.UserName, login.Password);
+        var codeAddress = password.Headers.Location!.ToString();
+
+        using var wrong = await firstDriver.PostCodeAsync(codeAddress, TotpCode.Wrong(login.AuthenticatorKey, DateTimeOffset.UtcNow));
+        wrong.StatusCode.Should().Be(HttpStatusCode.OK);
+        using var accepted = await firstDriver.PostCodeAsync(codeAddress, code);
+        accepted.StatusCode.Should().Be(HttpStatusCode.Redirect, "the failed attempt makes the sign-in save the login again, which must not undo the claim");
+
+        using var secondBrowser = host.CreateBrowser();
+        (await SignInAsync(secondBrowser, login, code)).Should().Be(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    [Trait("Category", "OAuth")]
+    public async Task A_code_from_an_earlier_time_step_is_refused_once_a_later_step_was_accepted()
+    {
+        await using var host = await StartHostAsync();
+        var login = await host.CreateLoginAsync();
+        var codeA = login.NextCode();
+        var codeB = login.NextCode();
+
+        using var firstBrowser = host.CreateBrowser();
+        using var secondBrowser = host.CreateBrowser();
+        using var thirdBrowser = host.CreateBrowser();
+
+        (await SignInAsync(firstBrowser, login, codeA)).Should().Be(HttpStatusCode.Redirect);
+        (await SignInAsync(secondBrowser, login, codeB)).Should().Be(HttpStatusCode.Redirect);
+        (await SignInAsync(thirdBrowser, login, codeA)).Should().Be(HttpStatusCode.OK, "the first code is from a step the login already moved past");
+    }
+
+    [Fact]
+    [Trait("Category", "OAuth")]
     public async Task Two_simultaneous_submissions_of_one_fresh_code_yield_exactly_one_success()
     {
         await using var host = await StartHostAsync();
@@ -215,6 +307,9 @@ public class SignInTests(DatabaseFixture fixture)
         html.Should().Contain("Claude (claude.ai").And.Contain("claude.ai").And.Contain("__RequestVerificationToken");
         html.Should().NotContain("<script");
     }
+
+    private static string[] OtherSpellings(string code) =>
+        ["+" + code, "0" + code, "\t" + code, "00" + code];
 
     private async Task<McpTestHost> StartHostAsync()
     {

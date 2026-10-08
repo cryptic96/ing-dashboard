@@ -12,6 +12,9 @@ public static class TotpCode
     private const string Base32Alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
     private const int StepSeconds = 30;
 
+    /// <summary>The number of the 30-second time step that contains the moment.</summary>
+    public static long StepOf(DateTimeOffset moment) => moment.ToUnixTimeSeconds() / StepSeconds;
+
     /// <summary>The code an authenticator holding the key shows at the given moment.</summary>
     public static string Compute(string base32Key, DateTimeOffset at)
     {

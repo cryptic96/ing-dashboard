@@ -170,6 +170,38 @@ public class EndpointBoundaryTests(DatabaseFixture fixture)
 
     [Fact]
     [Trait("Category", "OAuth")]
+    public async Task A_caller_on_the_loopback_address_is_not_a_trusted_proxy_unless_it_is_configured_as_one()
+    {
+        await using var host = await McpTestHost.StartAsync(
+            fixture.ConnectionStringFor("ledger_runtime"),
+            new Dictionary<string, string?> { ["ReverseProxy:KnownProxies:0"] = "192.0.2.10" });
+        using var browser = host.CreateBrowser("192.0.2.50");
+
+        using var response = await browser.GetAsync("/account/login", TestContext.Current.CancellationToken);
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound, "the forwarded client address of an untrusted caller is ignored, so loopback is judged");
+    }
+
+    [Fact]
+    [Trait("Category", "OAuth")]
+    public async Task A_plain_loopback_probe_with_the_public_host_name_gets_the_challenge_but_no_status_endpoint_or_sign_in_page()
+    {
+        await using var host = await StartHostAsync();
+        using var client = host.Factory.CreateApiClient();
+
+        using var challenge = await SendProbeAsync(client, HttpMethod.Post, "/mcp");
+        using var status = await SendProbeAsync(client, HttpMethod.Get, "/api/v1/status");
+        using var signIn = await SendProbeAsync(client, HttpMethod.Get, "/account/login");
+
+        challenge.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        string.Join(", ", challenge.Headers.WwwAuthenticate.Select(value => value.ToString()))
+            .Should().Contain("resource_metadata=\"https://mcp.example.com/.well-known/oauth-protected-resource/mcp\"");
+        status.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        signIn.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
+    [Trait("Category", "OAuth")]
     public async Task A_client_address_the_caller_prepends_to_the_forwarded_chain_is_ignored()
     {
         await using var host = await StartHostAsync();
@@ -455,6 +487,14 @@ public class EndpointBoundaryTests(DatabaseFixture fixture)
     private async Task<McpTestHost> StartHostAsync()
     {
         return await McpTestHost.StartAsync(fixture.ConnectionStringFor("ledger_runtime"));
+    }
+
+    private static async Task<HttpResponseMessage> SendProbeAsync(HttpClient client, HttpMethod method, string path)
+    {
+        using var request = new HttpRequestMessage(method, path);
+        request.Headers.Host = "mcp.example.com";
+
+        return await client.SendAsync(request, TestContext.Current.CancellationToken);
     }
 
     private static async Task<HttpResponseMessage> PostLoginFormAsync(HttpClient browser)
