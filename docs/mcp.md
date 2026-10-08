@@ -122,7 +122,12 @@ certificate for the new hostname.
 `deploy/traefik/ledger.yml.example` already holds the MCP middleware and
 both routers. Copy it into the reverse proxy's dynamic configuration
 directory as described in [the host setup guide](lxc-setup.md), and fill in
-the real hostnames, subnets and the ledger host's address.
+the real hostnames, subnets and the ledger host's address. The same file also
+pins the ledger host's certificate: the reverse proxy reaches the application
+over HTTPS and trusts exactly that one certificate, so passwords, one-time
+codes, tokens and every answer are encrypted on the way to the application too.
+Paste the public certificate into the file as the host setup guide describes;
+the private key stays on the ledger host.
 
 Roll the public router out in two stages:
 
@@ -278,6 +283,12 @@ enforces that.
   must be no `AAAA` record. Then check for a CGNAT address, a router that
   does not forward port 443, and an address list that is still the staged
   home-and-VPN-only one. Run `build/check-exposure.sh --from outside`.
+- **The reverse proxy answers with a bad gateway error for the MCP or REST
+  hostnames.** The proxy no longer trusts the certificate the application
+  presents, or the application is not running. Compare the fingerprint the
+  application presents with the certificate in the route file, as described in
+  the host setup guide; after a certificate change the route file must hold the
+  new certificate.
 - **The sign-in page says not found.** The browser is not on the home
   network or VPN, or the address in `OAuth__SignInNetworks__N` does not
   cover it. On a phone, turn the VPN on.
