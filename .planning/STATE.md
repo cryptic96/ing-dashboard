@@ -90,6 +90,7 @@ Recent decisions affecting current work:
 |---|-------------|------|--------|-----------|
 | 261007-vrj | Encrypt TOTP authenticator secrets at rest with the Data Protection key ring; operator commands share the real key ring | 2026-10-07 | 3eb9648 | [261007-vrj-encrypt-totp-authenticator-secrets-at-re](./quick/261007-vrj-encrypt-totp-authenticator-secrets-at-re/) |
 | 261008-0av | Encrypt the proxy-to-application hop: HTTPS on 5080 with a host-generated certificate pinned by Traefik | 2026-10-08 | 6b9bf5e | [261008-0av-encrypt-the-proxy-to-app-hop-with-a-pinn](./quick/261008-0av-encrypt-the-proxy-to-app-hop-with-a-pinn/) |
+| 261008-evv | Remove the integration-test free-port race: test hosts keep their bound sockets until Kestrel takes them | 2026-10-08 | df423d6 | [261008-evv-bind-test-hosts-to-port-zero-to-remove-t](./quick/261008-evv-bind-test-hosts-to-port-zero-to-remove-t/) |
 
 ## Deferred Items
 
