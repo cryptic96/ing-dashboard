@@ -30,7 +30,11 @@ Things to know about the answers:
   transactions it covers and what it left out, such as pending items or
   transfers between the household's own accounts. Claude never adds amounts
   up itself.
-- Account numbers are masked in everything Claude sees.
+- Account numbers are masked in everything Claude sees: the counterparty's
+  account is shown as its first two letters and last four characters, and an
+  account number written inside a description or a counterparty name is
+  masked the same way, however it is spelled. The rest of the text is shown
+  as the bank sent it.
 
 ## How it is exposed
 
@@ -140,14 +144,16 @@ ledger host:
 
 ```bash
 sudo ledger-login create example-login
-sudo ledger-login confirm-totp example-login 123456
+sudo ledger-login confirm-totp example-login
 ```
 
 `create` asks for a password twice without echo. Take it from the password
 manager. It then shows the authenticator secret once. Put it in an
 authenticator app or the password manager and nowhere else. `confirm-totp`
-switches the login on after its first code, here `123456`, taken from the
-authenticator. Adding a second household member is just another `create`.
+asks for the current code from the authenticator at a prompt (or reads it from
+standard input when piped) and switches the login on after that first code. The
+code is never an argument, so it does not land in the shell history. Adding a
+second household member is just another `create`.
 The other commands (`reset-totp`, `set-password`, `list`, `remove`) are in
 [the monitoring guide](monitoring.md#claude-access).
 
@@ -172,6 +178,15 @@ Do this only after the connection from step 5 works and
 `ledger-selfcheck` on the host reports no failures, including its checks
 that no extra login can use sudo and that the MCP boundary answers as
 designed.
+
+Before anything else, remove all the temporary access that was used to set
+the hosts up: delete every temporary operator login and SSH key on the ledger
+host, on the reverse proxy host and on the workstation (check each login's
+`authorized_keys` file and the SSH configuration on both hosts). Then run
+`ledger-selfcheck` again. It only catches logins that can use sudo on the
+ledger host: a login without sudo, an SSH key, or anything on the reverse
+proxy host is outside its reach, so those must be removed and checked by hand.
+Only after that, continue with the steps below.
 
 1. Confirm Anthropic's address range is still current:
 

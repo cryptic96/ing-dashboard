@@ -204,6 +204,46 @@ public static class LedgerQuerySeed
     /// <summary>The opaque keys of the two synced accounts of the totals scenario.</summary>
     public sealed record TotalsScenario(string JointKey, string SavingsKey);
 
+    /// <summary>The synthetic account numbers that August 2026 descriptions and a counterparty name carry in the free text scenario.</summary>
+    public static readonly IReadOnlyList<string> FreeTextIbans =
+    [
+        "XX00SYNT0000000007",
+        "xx00 synt 0000 0000 08",
+        "Xx00sYnT0000000009",
+        "XX00 SYNT 0000 0000 10"
+    ];
+
+    /// <summary>
+    /// Seeds one synced account with four August 2026 payments whose description or counterparty name carries a synthetic account
+    /// number: unspaced, spaced and lower case, mixed case, and spaced inside the counterparty name. Every value is made up.
+    /// </summary>
+    public static async Task SeedFreeTextScenarioAsync(string connectionString)
+    {
+        await using var context = OpenContext(connectionString);
+        var connection = await AddConnectionAsync(context);
+        var joint = AddAccount(context, connection, "Joint", JointIban, AccountKind.Current, true, At(2026, 1, 1), JointProviderName);
+
+        context.SyncRuns.Add(new SyncRunEntity
+        {
+            Id = Guid.NewGuid(),
+            BankConnectionId = connection.Id,
+            Trigger = SyncTrigger.Scheduled,
+            StartedAt = TotalsSyncFinishedAt.AddMinutes(-1),
+            FinishedAt = TotalsSyncFinishedAt,
+            Outcome = SyncOutcome.Succeeded
+        });
+
+        var seen = new DateTimeOffset(2026, 8, 20, 9, 0, 0, TimeSpan.Zero);
+
+        context.Transactions.AddRange(
+            Row(joint, LedgerTransactionStatus.Booked, "2026-08-03", -10m, "EUR", "Example Landlord", "XX00SYNT9999999999", $"Rent August IBAN: {FreeTextIbans[0]} thanks", seen),
+            Row(joint, LedgerTransactionStatus.Booked, "2026-08-04", -11m, "EUR", "Example Landlord", "XX00SYNT9999999999", $"Rent to {FreeTextIbans[1]}, reference 4711", seen),
+            Row(joint, LedgerTransactionStatus.Booked, "2026-08-05", -12m, "EUR", "Example Landlord", "XX00SYNT9999999999", $"{FreeTextIbans[2]}", seen),
+            Row(joint, LedgerTransactionStatus.Booked, "2026-08-06", -13m, "EUR", $"Example Payee {FreeTextIbans[3]}", "XX00SYNT9999999999", "Plain description", seen));
+
+        await context.SaveChangesAsync();
+    }
+
     private static LedgerTransactionEntity Row(
         LedgerAccountEntity account,
         LedgerTransactionStatus status,

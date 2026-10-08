@@ -36,7 +36,7 @@ public class LedgerQueryService(
     public async Task<OverviewResult> OverviewAsync(CancellationToken cancellationToken)
     {
         var options = ingestionOptions.Value;
-        var zone = options.ResolveTimeZone();
+        var zone = QueryTimeZone.Resolve(options.TimeZone);
         var now = timeProvider.GetUtcNow();
         var today = SyncSchedule.LocalDate(now, zone);
 
@@ -44,7 +44,7 @@ public class LedgerQueryService(
 
         if (accounts.Count == 0)
         {
-            return new OverviewResult(DateText(today), options.TimeZone, [], NothingSyncedNote);
+            return new OverviewResult(DateText(today), zone.Id, [], NothingSyncedNote);
         }
 
         var status = await ingestionStatus.ReadAsync(now, cancellationToken);
@@ -76,7 +76,7 @@ public class LedgerQueryService(
             })
             .ToList();
 
-        return new OverviewResult(DateText(today), options.TimeZone, shown, null);
+        return new OverviewResult(DateText(today), zone.Id, shown, null);
     }
 
     /// <summary>
@@ -89,7 +89,7 @@ public class LedgerQueryService(
     public async Task<TotalsResult> TotalsAsync(TotalsRequest request, CancellationToken cancellationToken)
     {
         var options = ingestionOptions.Value;
-        var zone = options.ResolveTimeZone();
+        var zone = QueryTimeZone.Resolve(options.TimeZone);
 
         var resolver = new PeriodResolver(timeProvider, zone);
         var period = resolver.Resolve(request.Period, ParseDate(request.FromDate), ParseDate(request.ToDate));
@@ -123,7 +123,7 @@ public class LedgerQueryService(
 
         var aggregate = TotalsAggregator.Aggregate(data, grouping, period.Range);
 
-        return Shape(request, period, filter, grouping, data, aggregate, options.TimeZone);
+        return Shape(request, period, filter, grouping, data, aggregate, zone.Id);
     }
 
     /// <summary>
@@ -136,7 +136,7 @@ public class LedgerQueryService(
     public async Task<SearchResult> SearchAsync(SearchRequest request, CancellationToken cancellationToken)
     {
         var options = ingestionOptions.Value;
-        var zone = options.ResolveTimeZone();
+        var zone = QueryTimeZone.Resolve(options.TimeZone);
 
         var resolver = new PeriodResolver(timeProvider, zone);
         var period = resolver.Resolve(request.Period, ParseDate(request.FromDate), ParseDate(request.ToDate));
@@ -177,10 +177,10 @@ public class LedgerQueryService(
                 MoneyText.Format(row.Amount),
                 row.Amount < 0m ? "out" : "in",
                 row.Currency,
-                row.CounterpartyName,
+                IbanText.MaskInText(row.CounterpartyName),
                 CounterpartyRef.For(row.CounterpartyName),
                 row.CounterpartyAccountMasked,
-                row.Description,
+                IbanText.MaskInText(row.Description),
                 row.AccountKey,
                 row.AccountName ?? "Account " + row.AccountKey,
                 row.InternalTransfer))
@@ -195,7 +195,7 @@ public class LedgerQueryService(
             + (nextCursor is null ? string.Empty : " More rows match: narrow the period or filters, or pass next_cursor for the next page.");
 
         return new SearchResult(
-            new TotalsPeriod(DateText(period.Range.From), DateText(period.Range.To), period.Requested, options.TimeZone),
+            new TotalsPeriod(DateText(period.Range.From), DateText(period.Range.To), period.Requested, zone.Id),
             new SearchFilters(
                 filter.CounterpartyTerms,
                 filter.CounterpartyRefs ?? [],
@@ -225,7 +225,7 @@ public class LedgerQueryService(
     public async Task<CounterpartiesResult> FindCounterpartiesAsync(CounterpartiesRequest request, CancellationToken cancellationToken)
     {
         var options = ingestionOptions.Value;
-        var zone = options.ResolveTimeZone();
+        var zone = QueryTimeZone.Resolve(options.TimeZone);
 
         var text = string.Join(' ', (request.Text ?? string.Empty).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 
@@ -263,7 +263,7 @@ public class LedgerQueryService(
         var truncated = merged.Count > shown.Count;
         var periodText = range is null
             ? "all history"
-            : $"{DateText(range.From)} to {DateText(range.To)} ({options.TimeZone})";
+            : $"{DateText(range.From)} to {DateText(range.To)} ({zone.Id})";
 
         var note = $"Showing {shown.Count} of {merged.Count} matching counterparties, most transactions first. "
             + "These are counterparty names, not categories. Pass counterpartyRef or the spellings to money_totals or search_transactions."
@@ -299,9 +299,9 @@ public class LedgerQueryService(
             .ToList();
 
         return new CounterpartyEntry(
-            spellings[0].Name,
+            IbanText.MaskInText(spellings[0].Name)!,
             CounterpartyRef.For(spellings[0].Name)!,
-            spellings.Take(MaxSpellings).Select(spelling => spelling.Name).ToList(),
+            spellings.Take(MaxSpellings).Select(spelling => IbanText.MaskInText(spelling.Name)!).Distinct(StringComparer.Ordinal).ToList(),
             group.Sum(row => row.Count),
             currencies,
             DateText(group.Min(row => row.FirstDate)),
@@ -372,7 +372,7 @@ public class LedgerQueryService(
                 currency.CounterpartyCount,
                 currency.Counterparties
                     .Select(share => new TotalsCounterparty(
-                        share.Name,
+                        IbanText.MaskInText(share.Name)!,
                         share.Ref,
                         MoneyText.Format(share.MoneyOut),
                         MoneyText.Format(share.MoneyIn),
@@ -381,7 +381,7 @@ public class LedgerQueryService(
                     .ToList(),
                 currency.Groups
                     .Select(group => new TotalsGroup(
-                        group.Label,
+                        group.CounterpartyRef is null ? group.Label : IbanText.MaskInText(group.Label)!,
                         group.From is { } groupFrom ? DateText(groupFrom) : null,
                         group.To is { } groupTo ? DateText(groupTo) : null,
                         group.AccountKey,
@@ -429,7 +429,8 @@ public class LedgerQueryService(
 
     private static string BasisText(string timeZone)
     {
-        return $"booked transactions by booking date in {timeZone}; pending reported separately; "
+        return $"booked transactions by booking date (value date, transaction date or first-seen day where the bank gave none) in {timeZone}; "
+            + "pending reported separately; "
             + "transfers between the household's own synced accounts excluded";
     }
 

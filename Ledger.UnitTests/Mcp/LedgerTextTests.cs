@@ -36,6 +36,33 @@ public class LedgerTextTests
         IbanText.Mask(null).Should().BeNull();
     }
 
+    [Theory]
+    [InlineData("Rent IBAN: XX00SYNT0000000007 thanks", "Rent IBAN: XX••••0007 thanks")]
+    [InlineData("Rent to xx00 synt 0000 0000 08, reference 4711", "Rent to XX••••0008, reference 4711")]
+    [InlineData("Xx00sYnT0000000009", "XX••••0009")]
+    [InlineData("two XX00SYNT0000000001 and XX00 SYNT 0000 0000 02 here", "two XX••••0001 and XX••••0002 here")]
+    [InlineData("IBANXX00SYNT0000000003", "IBANXX••••0003")]
+    public void Masking_text_hides_every_account_number_however_it_is_written(string text, string expected)
+    {
+        IbanText.MaskInText(text).Should().Be(expected);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("Weekly groceries and bags")]
+    [InlineData("Invoice 20260815 for order 4711")]
+    [InlineData("ab12cdefgh")]
+    public void Masking_text_leaves_text_without_an_account_number_alone(string text)
+    {
+        IbanText.MaskInText(text).Should().Be(text);
+    }
+
+    [Fact]
+    public void Masking_text_keeps_null_as_null()
+    {
+        IbanText.MaskInText(null).Should().BeNull();
+    }
+
     [Fact]
     public void A_counterparty_reference_ignores_case_and_spacing_but_not_the_name()
     {

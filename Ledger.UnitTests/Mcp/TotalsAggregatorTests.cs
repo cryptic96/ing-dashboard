@@ -55,6 +55,30 @@ public class TotalsAggregatorTests
     }
 
     [Fact]
+    public void Counterparties_are_ranked_by_money_out_plus_money_in_so_large_income_sources_stay_in_the_list()
+    {
+        var rows = Enumerable.Range(1, 30).Select(index => Row($"Example Supplier {index:00}", index, 0m)).ToList();
+        rows.Add(Row("Example Employer", 0m, 2000m));
+        rows.Add(Row("Example Refund Shop", 3m, 40m));
+
+        var totals = Single(Data(rows), TotalsGrouping.None, Range("2026-08-01", "2026-08-31"));
+
+        totals.Counterparties.Should().HaveCount(26);
+        totals.Counterparties[0].Name.Should().Be("Example Employer");
+        totals.Counterparties[1].Name.Should().Be("Example Refund Shop");
+        totals.Counterparties.Select(share => share.Name).Should().Contain("Example Supplier 30");
+
+        var remainder = totals.Counterparties[25];
+        remainder.IsRemainder.Should().BeTrue();
+        remainder.MergedCounterparties.Should().Be(7);
+        remainder.MoneyOut.Should().Be(1m + 2m + 3m + 4m + 5m + 6m + 7m);
+        remainder.MoneyIn.Should().Be(0m);
+        totals.Counterparties.Sum(share => share.MoneyOut).Should().Be(totals.MoneyOut);
+        totals.Counterparties.Sum(share => share.MoneyIn).Should().Be(totals.MoneyIn).And.Be(2040m);
+        totals.Counterparties.Sum(share => share.Count).Should().Be(totals.Count).And.Be(32);
+    }
+
+    [Fact]
     public void Twenty_five_counterparties_have_no_remainder_row()
     {
         var rows = Enumerable.Range(1, 25).Select(index => Row($"Example Supplier {index:00}", index, 0m)).ToList();
