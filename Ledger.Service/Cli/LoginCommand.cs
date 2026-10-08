@@ -215,6 +215,7 @@ public static partial class LoginCommand
 
     private static async Task PrintAuthenticatorAsync(UserManager<LedgerUserEntity> users, LedgerUserEntity user)
     {
+        user.LastTotpStep = null;
         await users.ResetAuthenticatorKeyAsync(user);
         var key = (await users.GetAuthenticatorKeyAsync(user))!;
 

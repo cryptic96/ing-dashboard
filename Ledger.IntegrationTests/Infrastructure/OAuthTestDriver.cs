@@ -10,28 +10,40 @@ namespace Ledger.IntegrationTests.Infrastructure;
 
 /// <summary>
 /// A login created for a test, with the password and the authenticator key it signs in with. Each call to <see cref="NextCode"/>
-/// returns a code from a time step that was not handed out before, because the host refuses a code it has already accepted.
+/// returns a code from a later time step than any handed out before, because the host refuses a code from a step at or below
+/// the last one it accepted.
 /// </summary>
 public sealed class TestLogin(Guid id, string userName, string password, string authenticatorKey)
 {
-    private static readonly int[] StepOffsets = [0, 1, 2, -1, -2];
-    private readonly HashSet<long> _usedSteps = [];
+    private const int FirstStepOffset = -1;
+    private const int LastStepOffset = 2;
+    private readonly object _gate = new();
     private readonly List<string> _issuedCodes = [];
+    private long _highestStep;
 
     /// <summary>
     /// The same login after its password was replaced. The time steps already handed out stay used, because the host remembers
-    /// the codes it accepted whichever password followed.
+    /// the steps it accepted whichever password followed.
     /// </summary>
     public TestLogin WithPassword(string newPassword)
     {
         var copy = new TestLogin(Id, UserName, newPassword, AuthenticatorKey);
 
-        lock (_usedSteps)
+        lock (_gate)
         {
-            copy._usedSteps.UnionWith(_usedSteps);
+            copy._highestStep = _highestStep;
         }
 
         return copy;
+    }
+
+    /// <summary>Records that the host accepted a code computed at the given moment by some other route, such as the operator command.</summary>
+    public void NoteCodeUsedAt(DateTimeOffset moment)
+    {
+        lock (_gate)
+        {
+            _highestStep = Math.Max(_highestStep, TotpCode.StepOf(moment));
+        }
     }
 
     /// <summary>The identifier of the login.</summary>
@@ -51,35 +63,33 @@ public sealed class TestLogin(Guid id, string userName, string password, string 
     {
         get
         {
-            lock (_usedSteps)
+            lock (_gate)
             {
                 return [.. _issuedCodes];
             }
         }
     }
 
-    /// <summary>A code the host accepts now and has not been given by this object before.</summary>
+    /// <summary>A code the host accepts now, from a later time step than any this object handed out or was told about before.</summary>
     public string NextCode()
     {
-        lock (_usedSteps)
+        lock (_gate)
         {
             var now = DateTimeOffset.UtcNow;
+            var nowStep = TotpCode.StepOf(now);
+            var step = Math.Max(_highestStep + 1, nowStep + FirstStepOffset);
 
-            foreach (var offset in StepOffsets)
+            if (step > nowStep + LastStepOffset)
             {
-                var moment = now.AddSeconds(offset * 30);
-
-                if (_usedSteps.Add(moment.ToUnixTimeSeconds() / 30))
-                {
-                    var code = TotpCode.Compute(AuthenticatorKey, moment);
-                    _issuedCodes.Add(code);
-
-                    return code;
-                }
+                throw new InvalidOperationException("Every time step that the host accepts has been used for this login.");
             }
-        }
 
-        throw new InvalidOperationException("Every time step that the host accepts has been used for this login.");
+            _highestStep = step;
+            var code = TotpCode.Compute(AuthenticatorKey, DateTimeOffset.FromUnixTimeSeconds(step * 30));
+            _issuedCodes.Add(code);
+
+            return code;
+        }
     }
 }
 

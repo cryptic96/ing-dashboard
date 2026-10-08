@@ -4,31 +4,18 @@ using Microsoft.EntityFrameworkCore;
 namespace Ledger.Repository.Stores;
 
 /// <summary>
-/// Claims a one-time code with a single conditional update on the login row, so the database decides which of two simultaneous
-/// submissions wins and a restart or a second host cannot forget a code that was used.
+/// Claims a one-time code time step with a single conditional update on the login row, so the database decides which of two
+/// simultaneous submissions wins and a restart or a second host cannot forget a step that was used.
 /// </summary>
 public class TotpReplayStore(LedgerDbContext dbContext) : ITotpReplayStore
 {
     /// <inheritdoc />
-    public async Task<bool> TryClaimAsync(
-        Guid loginId,
-        byte[] codeSha256,
-        DateTimeOffset now,
-        TimeSpan window,
-        CancellationToken cancellationToken)
+    public async Task<bool> TryClaimAsync(Guid loginId, long timeStep, CancellationToken cancellationToken)
     {
-        var oldest = now - window;
-
         var changed = await dbContext.Users
-            .Where(login => login.Id == loginId
-                && (login.LastTotpCodeSha256 == null
-                    || login.LastTotpCodeSha256 != codeSha256
-                    || login.LastTotpAcceptedAt == null
-                    || login.LastTotpAcceptedAt < oldest))
+            .Where(login => login.Id == loginId && (login.LastTotpStep == null || login.LastTotpStep < timeStep))
             .ExecuteUpdateAsync(
-                setters => setters
-                    .SetProperty(login => login.LastTotpCodeSha256, codeSha256)
-                    .SetProperty(login => login.LastTotpAcceptedAt, now),
+                setters => setters.SetProperty(login => login.LastTotpStep, timeStep),
                 cancellationToken);
 
         return changed == 1;

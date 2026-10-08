@@ -1,5 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
 using Ledger.Domain.Auth;
 using Ledger.Repository.Entities;
 using Microsoft.AspNetCore.Authentication;
@@ -11,9 +9,9 @@ using Microsoft.AspNetCore.Mvc.RazorPages;
 namespace Ledger.Service.Pages.Account;
 
 /// <summary>
-/// The one-time code page, the second step of sign-in. The code must be valid for the login that just entered its password, must
-/// not have been accepted before within the replay window, and every refusal counts towards the login's lockout and shows the
-/// same message as a wrong password.
+/// The one-time code page, the second step of sign-in. The code must be valid for the login that just entered its password and
+/// must belong to a later 30-second time step than any code the login used before, and every refusal counts towards the
+/// login's lockout and shows the same message as a wrong password.
 /// </summary>
 [AllowAnonymous]
 public class TotpModel(
@@ -22,12 +20,6 @@ public class TotpModel(
     ITotpReplayStore replayStore,
     TimeProvider timeProvider) : PageModel
 {
-    /// <summary>
-    /// How long an accepted code keeps being refused. Identity accepts a code for two 30-second steps either side of the
-    /// current one, so five minutes covers every moment the same code could still verify.
-    /// </summary>
-    public static readonly TimeSpan ReplayWindow = TimeSpan.FromMinutes(5);
-
     private const string AuthenticationMethod = "mfa";
 
     /// <summary>Where to continue after signing in; only an address on this host is followed.</summary>
@@ -72,19 +64,14 @@ public class TotpModel(
             return await RefuseAsync(user, countFailure: true);
         }
 
-        var valid = await users.VerifyTwoFactorTokenAsync(user, users.Options.Tokens.AuthenticatorTokenProvider, code);
+        var step = TotpCodes.MatchTimeStep(await users.GetAuthenticatorKeyAsync(user), code, timeProvider.GetUtcNow());
 
-        if (!valid)
+        if (step is null)
         {
             return await RefuseAsync(user, countFailure: true);
         }
 
-        var claimed = await replayStore.TryClaimAsync(
-            user.Id,
-            SHA256.HashData(Encoding.UTF8.GetBytes(code)),
-            timeProvider.GetUtcNow(),
-            ReplayWindow,
-            cancellationToken);
+        var claimed = await replayStore.TryClaimAsync(user.Id, step.Value, cancellationToken);
 
         if (!claimed)
         {

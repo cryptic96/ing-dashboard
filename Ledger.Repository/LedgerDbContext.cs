@@ -102,8 +102,7 @@ public class LedgerDbContext(DbContextOptions<LedgerDbContext> options)
         {
             entity.ToTable("identity_users");
             entity.Property(user => user.CreatedAt).IsRequired();
-            entity.Property(user => user.LastTotpCodeSha256);
-            entity.Property(user => user.LastTotpAcceptedAt);
+            entity.Property(user => user.LastTotpStep);
         });
 
         modelBuilder.Entity<IdentityUserClaim<Guid>>().ToTable("identity_user_claims");

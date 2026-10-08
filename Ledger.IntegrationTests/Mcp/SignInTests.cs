@@ -124,6 +124,24 @@ public class SignInTests(DatabaseFixture fixture)
 
     [Fact]
     [Trait("Category", "OAuth")]
+    public async Task A_code_from_an_earlier_time_step_is_refused_once_a_later_step_was_accepted()
+    {
+        await using var host = await StartHostAsync();
+        var login = await host.CreateLoginAsync();
+        var codeA = login.NextCode();
+        var codeB = login.NextCode();
+
+        using var firstBrowser = host.CreateBrowser();
+        using var secondBrowser = host.CreateBrowser();
+        using var thirdBrowser = host.CreateBrowser();
+
+        (await SignInAsync(firstBrowser, login, codeA)).Should().Be(HttpStatusCode.Redirect);
+        (await SignInAsync(secondBrowser, login, codeB)).Should().Be(HttpStatusCode.Redirect);
+        (await SignInAsync(thirdBrowser, login, codeA)).Should().Be(HttpStatusCode.OK, "the first code is from a step the login already moved past");
+    }
+
+    [Fact]
+    [Trait("Category", "OAuth")]
     public async Task Two_simultaneous_submissions_of_one_fresh_code_yield_exactly_one_success()
     {
         await using var host = await StartHostAsync();

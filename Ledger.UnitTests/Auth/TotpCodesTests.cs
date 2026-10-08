@@ -35,4 +35,50 @@ public class TotpCodesTests
     {
         TotpCodes.IsWellFormed(code).Should().BeFalse();
     }
+
+    private const string Seed = SeedHalf + SeedHalf;
+    private const string SeedHalf = "GEZDGNBVGY3TQOJQ";
+    private const string ReferenceCodeForStepOne = "287082";
+
+    [Fact]
+    public void A_code_reports_the_time_step_it_belongs_to()
+    {
+        TotpCodes.MatchTimeStep(Seed, ReferenceCodeForStepOne, DateTimeOffset.FromUnixTimeSeconds(59)).Should().Be(1);
+    }
+
+    [Theory]
+    [InlineData(-60, 1)]
+    [InlineData(60, 1)]
+    public void A_code_still_verifies_within_two_steps_either_side_and_keeps_its_own_step(int shiftSeconds, long expectedStep)
+    {
+        var now = DateTimeOffset.FromUnixTimeSeconds(59 + shiftSeconds);
+
+        TotpCodes.MatchTimeStep(Seed, ReferenceCodeForStepOne, now).Should().Be(expectedStep);
+    }
+
+    [Fact]
+    public void A_code_outside_the_tolerance_does_not_match()
+    {
+        TotpCodes.MatchTimeStep(Seed, ReferenceCodeForStepOne, DateTimeOffset.FromUnixTimeSeconds(59 + 90)).Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData("+287082")]
+    [InlineData("0287082")]
+    [InlineData("\t287082")]
+    [InlineData("")]
+    [InlineData(null)]
+    public void A_badly_formed_code_never_matches(string? code)
+    {
+        TotpCodes.MatchTimeStep(Seed, code, DateTimeOffset.FromUnixTimeSeconds(59)).Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("not base32 !")]
+    public void An_unreadable_key_never_matches(string? key)
+    {
+        TotpCodes.MatchTimeStep(key, ReferenceCodeForStepOne, DateTimeOffset.FromUnixTimeSeconds(59)).Should().BeNull();
+    }
 }
