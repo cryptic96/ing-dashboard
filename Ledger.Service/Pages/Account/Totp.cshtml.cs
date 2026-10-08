@@ -11,14 +11,14 @@ namespace Ledger.Service.Pages.Account;
 /// <summary>
 /// The one-time code page, the second step of sign-in. The code must be valid for the login that just entered its password and
 /// must belong to a later 30-second time step than any code the login used before, and every refusal counts towards the
-/// login's lockout and shows the same message as a wrong password.
+/// login's lockout and shows the same message as a wrong password. Codes are judged against the system clock, as an
+/// authenticator app is.
 /// </summary>
 [AllowAnonymous]
 public class TotpModel(
     SignInManager<LedgerUserEntity> signInManager,
     UserManager<LedgerUserEntity> users,
-    ITotpReplayStore replayStore,
-    TimeProvider timeProvider) : PageModel
+    ITotpReplayStore replayStore) : PageModel
 {
     private const string AuthenticationMethod = "mfa";
 
@@ -64,7 +64,7 @@ public class TotpModel(
             return await RefuseAsync(user, countFailure: true);
         }
 
-        var step = TotpCodes.MatchTimeStep(await users.GetAuthenticatorKeyAsync(user), code, timeProvider.GetUtcNow());
+        var step = TotpCodes.MatchTimeStep(await users.GetAuthenticatorKeyAsync(user), code, DateTimeOffset.UtcNow);
 
         if (step is null)
         {
