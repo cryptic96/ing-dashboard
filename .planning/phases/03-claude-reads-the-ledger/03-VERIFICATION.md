@@ -31,7 +31,9 @@ human_verification:
 
 **Phase Goal:** Claude can answer accurate "how much" and "what did we spend" questions from the household's real transactions, on desktop, in Claude Code and on claude.ai web and mobile, through a securely exposed MCP endpoint.
 **Verified:** 2026-10-08
-**Status:** human_needed
+**Status:** passed with a recorded deferral (was human_needed on 2026-10-08)
+
+> **Update 2026-10-09:** UAT passed 3/3 runnable tests (sign-in pages on desktop and phone, kill switch and re-authorisation with Claude Code, new-grant alert email). The hosted-client checks were moved to `.planning/todos/pending/2026-10-08-connect-hosted-claude-clients.md` by operator decision and recorded as an override in the frontmatter; ADV-10 stays open until that todo is done. The phase security audit (03-SECURITY.md) closed all 64 threats.
 **Re-verification:** No - initial verification
 
 ## Verdict in one paragraph
