@@ -1,10 +1,14 @@
 ---
 phase: 03-claude-reads-the-ledger
 verified: 2026-10-08T00:00:00Z
-status: human_needed
+status: passed
 score: 3/5 must-haves verified
 behavior_unverified: 2
-overrides_applied: 0
+overrides_applied: 1
+overrides:
+  - truth: "SC1 hosted clients (claude.ai web, mobile, Desktop chats) and the allow side of SC5 observed live"
+    decision: "Deferred by the operator on 2026-10-09 to .planning/todos/pending/2026-10-08-connect-hosted-claude-clients.md: the household has no Claude subscription with custom connectors yet. Everything else verified in code, tests and on the live host; UAT 3/3 runnable tests passed."
+    requirements_left_open: [ADV-10]
 behavior_unverified_items:
   - truth: "SC1 - The user adds the ledger as a custom connector in claude.ai, signs in through OAuth 2.1, and gets answers on web and mobile (Desktop chats too)"
     test: "With a household Claude subscription that allows custom connectors, reopen the public MCP route (ledger-mcp-public on ledger-mcp-allow) and add the connector in claude.ai with client ID ledger-claude-hosted and an empty secret; sign in from home or VPN; ask a how-much question on web, then on the mobile app and in a Desktop chat"
