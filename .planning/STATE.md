@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_phase: 03
-current_phase_name: claude-reads-the-ledger
-status: executing
-stopped_at: Phase 3 context gathered
-last_updated: "2026-10-08T09:44:09.711Z"
-last_activity: 2026-10-07
-last_activity_desc: Phase 2 complete, transitioned to Phase 3
+current_phase: 4
+current_phase_name: Trustworthy Categorisation
+status: planning
+stopped_at: Phase 3 complete; Phase 4 ready to plan
+last_updated: "2026-10-09T07:38:09.307Z"
+last_activity: 2026-10-09
+last_activity_desc: Phase 3 complete, transitioned to Phase 4
 progress:
   total_phases: 3
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 36
-  completed_plans: 35
+  completed_plans: 36
 ---
 
 # Project State
@@ -23,14 +23,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-09-26)
 
 **Core value:** Claude can serve as a trustworthy financial advisor for the household, because it has complete, correctly categorised transaction data, budgets, goals and a shared advisor memory to reason over.
-**Current focus:** Phase 03 — claude-reads-the-ledger
+**Current focus:** Phase 04 — trustworthy-categorisation (ready to plan)
 
 ## Current Position
 
-Phase: 03 (claude-reads-the-ledger) — EXECUTING
-Plan: 8 of 8
-Status: Ready to execute
-Last activity: 2026-10-07 — Phase 03 execution started
+Phase: 4 — Trustworthy Categorisation
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-10-09 — Phase 3 complete, transitioned to Phase 4
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -38,7 +38,7 @@ Progress: [░░░░░░░░░░] 0%
 
 **Velocity:**
 
-- Total plans completed: 28
+- Total plans completed: 36
 - Average duration: -
 - Total execution time: 0.0 hours
 
@@ -48,6 +48,7 @@ Progress: [░░░░░░░░░░] 0%
 |-------|-------|-------|----------|
 | 01 | 12 | - | - |
 | 2 | 16 | - | - |
+| 3 | 8 | - | - |
 
 **Recent Trend:**
 
@@ -73,16 +74,15 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-- [minor] Harden privileged units and scan logs for secrets — `.planning/todos/pending/2026-09-29-harden-privileged-units-and-scan-logs-for-secrets.md`
-- [major] Remove temporary Claude SSH access to the ledger host before /mcp goes public (kept through bank sync by operator decision; key is passphrase-protected) — `.planning/todos/pending/2026-09-28-remove-temporary-claude-ssh-access-before-real-bank-data.md`
-- [minor] Migrate tests to Microsoft.Testing.Platform for xunit v4 (after go-live) — `.planning/todos/pending/2026-09-28-migrate-tests-to-microsoft-testing-platform-for-xunit-v4.md`
+- [major] Connect the hosted Claude clients (claude.ai web, mobile, Desktop chats) once a household subscription allows custom connectors — `.planning/todos/pending/2026-10-08-connect-hosted-claude-clients.md`
+- [minor] Encrypt the reverse-proxy-to-Grafana hop like the application hop — `.planning/todos/pending/2026-10-08-encrypt-the-proxy-to-grafana-hop.md`
+- [minor] Confirm the first real pending payments book as single rows — `.planning/todos/pending/2026-10-07-confirm-pending-payments-book-as-single-rows.md` (a balance-reconciliation alert fired 2026-10-09 06:34 Amsterdam time; investigate)
+- [minor] Confirm the first real household alert email — `.planning/todos/pending/2026-10-07-confirm-first-real-alert-email.md`
+- [minor] Confirm the first consent renewal keeps history — `.planning/todos/pending/2026-10-07-confirm-first-consent-renewal-keeps-history.md`
 
 ### Blockers/Concerns
 
-- Phase 2: It is unconfirmed whether Enable Banking's ING NL consent covers the savings accounts. Run the spike first; Salt Edge is the fallback.
-- Phase 3: The OAuth server choice is open (separate Authentik vs embedded lightweight server). Settle it in phase research; it depends on claude.ai client-registration requirements and the single-LXC resource budget.
-- Phase 3: If the Anthropic IP allowlist also covers the browser-facing authorize/login step, connecting claude.ai only works from the home network or VPN. Confirm that is acceptable and that refresh-token lifetimes keep re-authorisation rare.
-- Phase 3 (go-live, in progress 2026-10-08): Claude's temporary SSH access is removed and verified gone; full selfcheck 0 FAIL; Anthropic range check passed; public route opened (MCP router admits Anthropic's range plus home/VPN); outside check passed from a phone on mobile data (all ledger paths refused, unknown paths 404); inside check 0 FAIL. BLOCKED on claude.ai: the operator's current Claude account belongs to a work organisation that disables custom connectors, and household data should not live there anyway. Waiting for a personal/household Claude subscription; then resume at the connector step (client `ledger-claude-hosted`), surface checks, kill switch, access-log counts and the approval email. The Claude Code test session from the home-network proof ran under the work account; the operator was advised to delete it and its local transcript.
+- Phase 3 follow-up: claude.ai web/mobile/Desktop chats need a household Claude subscription with custom connectors (work-organisation account disables them); public route stays closed until then (see hosted-clients todo).
 - Phase 6: The research summary favoured the app calling the Messages API for reviews. The household decided on Claude-side scheduling (PROJECT.md), and that decision stands. Phase research should only pick the Claude-side scheduler.
 
 ### Quick Tasks Completed
@@ -104,5 +104,5 @@ Items acknowledged and carried forward from previous milestone close:
 ## Session Continuity
 
 Last session: 2026-10-07T13:17:52.776Z
-Stopped at: Phase 3 context gathered
-Resume file: .planning/phases/03-claude-reads-the-ledger/03-CONTEXT.md
+Stopped at: Phase 3 complete (UAT 3/3, security 64/64 closed); Phase 4 ready to plan
+Resume file: None

@@ -42,16 +42,16 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Advisor (MCP)
 
-- [ ] **ADV-01**: The MCP server exposes a small set of intent-shaped tools (roughly 8–15), not one tool per table or endpoint
-- [ ] **ADV-02**: Every "how much" answer comes from server-side aggregation, and each tool result states its provenance (date range, filters, number of transactions included)
-- [ ] **ADV-03**: Transaction search is paginated with a server-side cap and explicitly reports when results are truncated
+- [x] **ADV-01**: The MCP server exposes a small set of intent-shaped tools (roughly 8–15), not one tool per table or endpoint
+- [x] **ADV-02**: Every "how much" answer comes from server-side aggregation, and each tool result states its provenance (date range, filters, number of transactions included)
+- [x] **ADV-03**: Transaction search is paginated with a server-side cap and explicitly reports when results are truncated
 - [ ] **ADV-04**: A single affordability tool answers "can we afford X by date Y" by combining forecast, goals, recurring and annual costs, and expected income
 - [ ] **ADV-05**: Write tools let Claude recategorise transactions, manage rules, manage budgets and goals, annotate transactions, update advisor memory and store reviews
 - [ ] **ADV-06**: Every change made through MCP or REST is audit-logged (what changed, before and after, when, which client) and can be reverted
 - [ ] **ADV-07**: Text originating from bank data (descriptions, counterparty names, payment-request messages) is returned to Claude clearly marked as untrusted data; write tools act only on explicit parameters, bulk writes require an explicit confirmation step, and writes are rate-limited
 - [ ] **ADV-08**: Advisor memory holds a household profile (goals, fixed commitments, preferences) as current state plus history, with superseded entries kept alongside their source, and any Claude session can load it at the start
 - [ ] **ADV-09**: An advice and decision log records what was flagged and what the household decided, so dismissed topics are not raised again
-- [ ] **ADV-10**: Claude Desktop and Claude Code connect on the home network or VPN; claude.ai web and mobile connect through the public `/mcp` endpoint over HTTPS with OAuth 2.1
+- [ ] **ADV-10**: Claude Desktop and Claude Code connect on the home network or VPN; claude.ai web and mobile connect through the public `/mcp` endpoint over HTTPS with OAuth 2.1 *(Partial: Claude Code from home/VPN done in Phase 3; claude.ai web/mobile/Desktop chats deferred — `.planning/todos/pending/2026-10-08-connect-hosted-claude-clients.md`)*
 - [ ] **ADV-11**: A Claude-side scheduled task (Claude Code, Claude Desktop or a cloud routine) runs a monthly review through the MCP server — guided by a server-provided review prompt so every review covers the same ground — and stores the result in the app
 - [ ] **ADV-12**: Stored reviews are readable through MCP and shown in Grafana
 - [ ] **ADV-13**: When a review is stored, both partners receive a notification email that contains no financial details — only that a review is ready and a link to the dashboard
@@ -75,7 +75,7 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **OPS-03**: App, PostgreSQL, Grafana and Prometheus run in one LXC as systemd services; setup is automated where possible and any one-time steps are documented step by step
 - [x] **OPS-04**: Finance database backups are encrypted, and a restore procedure is documented and tested
 - [x] **OPS-05**: Data Protection keys are persisted, so encrypted bank credentials survive restarts and redeploys (verified by an actual restart)
-- [ ] **OPS-06**: All period bucketing (days, months, years) uses the Europe/Amsterdam time zone
+- [x] **OPS-06**: All period bucketing (days, months, years) uses the Europe/Amsterdam time zone
 - [x] **OPS-07**: Database schema changes ship as Entity Framework Core migrations and are applied automatically during deployment with the migrator role
 - [ ] **OPS-08**: The app exposes the categorisation review-queue size on `/metrics`
 
@@ -84,7 +84,7 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **SEC-01**: Bank access is read-only; no code path exists that can initiate a payment or move money
 - [x] **SEC-02**: The app uses separate database roles — runtime (data access to its own tables only, no schema changes), migrator (schema changes) and Grafana reader (SELECT on reporting views only); the database superuser is never used by the app
 - [x] **SEC-03**: Secrets live only in a server-side env file readable by the app alone; bank consent tokens and the aggregator key are encrypted at rest
-- [ ] **SEC-04**: Only `/mcp` and the OAuth endpoints it needs are internet-facing via Traefik, restricted to Anthropic's published IP ranges; access tokens are audience-validated on every request and never passed through to other services
+- [x] **SEC-04**: Only `/mcp` and the OAuth endpoints it needs are internet-facing via Traefik, restricted to Anthropic's published IP ranges; access tokens are audience-validated on every request and never passed through to other services
 - [x] **SEC-05**: The database is reachable only from inside the app's LXC over its local Unix socket (no network listener), with OS-user-to-role peer authentication
 - [x] **SEC-06**: Secrets and financial details never appear in logs, exception messages or metric labels
 - [x] **SEC-07**: A semver tag triggers a build on a GitHub-hosted runner that produces a release artifact with build-provenance attestation; the server verifies the attestation before deploying
@@ -165,16 +165,16 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PLAN-07 | Phase 5 | Pending |
 | PLAN-08 | Phase 5 | Pending |
 | PLAN-09 | Phase 4 | Pending |
-| ADV-01 | Phase 3 | Pending |
-| ADV-02 | Phase 3 | Pending |
-| ADV-03 | Phase 3 | Pending |
+| ADV-01 | Phase 3 | Complete |
+| ADV-02 | Phase 3 | Complete |
+| ADV-03 | Phase 3 | Complete |
 | ADV-04 | Phase 5 | Pending |
 | ADV-05 | Phase 6 | Pending |
 | ADV-06 | Phase 4 | Pending |
 | ADV-07 | Phase 4 | Pending |
 | ADV-08 | Phase 6 | Pending |
 | ADV-09 | Phase 6 | Pending |
-| ADV-10 | Phase 3 | Pending |
+| ADV-10 | Phase 3 | Partial (hosted clients deferred) |
 | ADV-11 | Phase 6 | Pending |
 | ADV-12 | Phase 6 | Pending |
 | ADV-13 | Phase 6 | Pending |
@@ -192,13 +192,13 @@ Which phases cover which requirements. Updated during roadmap creation.
 | OPS-03 | Phase 1 | Complete |
 | OPS-04 | Phase 1 | Complete |
 | OPS-05 | Phase 1 | Complete |
-| OPS-06 | Phase 3 | Pending |
+| OPS-06 | Phase 3 | Complete |
 | OPS-07 | Phase 1 | Complete |
 | OPS-08 | Phase 4 | Pending |
 | SEC-01 | Phase 2 | Complete |
 | SEC-02 | Phase 1 | Complete |
 | SEC-03 | Phase 1 | Complete |
-| SEC-04 | Phase 3 | Pending |
+| SEC-04 | Phase 3 | Complete |
 | SEC-05 | Phase 1 | Complete |
 | SEC-06 | Phase 1 | Complete |
 | SEC-07 | Phase 1 | Complete |
