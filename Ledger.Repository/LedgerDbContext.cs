@@ -156,6 +156,7 @@ public class LedgerDbContext(DbContextOptions<LedgerDbContext> options)
             entity.Property(snapshot => snapshot.ReferenceDate).HasColumnType("date");
             entity.Property(snapshot => snapshot.ExpectedAmount).HasColumnType("numeric(19,4)");
             entity.Property(snapshot => snapshot.DriftAmount).HasColumnType("numeric(19,4)");
+            entity.Property(snapshot => snapshot.PendingAmount).HasColumnType("numeric(19,4)");
             entity.HasIndex(snapshot => new { snapshot.AccountId, snapshot.SnapshotDate, snapshot.Kind })
                 .IsUnique()
                 .HasDatabaseName("ux_balance_snapshots_account_date_kind");

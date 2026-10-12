@@ -29,7 +29,11 @@ public class BalanceSnapshotEntity
     /// <summary>The date the bank says the balance is as of, or null when it gave none.</summary>
     public DateOnly? ReferenceDate { get; set; }
 
-    /// <summary>The booked balance the ledger expected from the previous snapshot and the booked transactions, without pending items, or null when unknown.</summary>
+    /// <summary>
+    /// The booked balance the ledger expected, without pending items, or null when unknown. A balance without a reference date is
+    /// expected from the baseline snapshot and the transactions booked since; this figure is a record of the check and is never
+    /// read back by a later one.
+    /// </summary>
     public decimal? ExpectedAmount { get; set; }
 
     /// <summary>The bank's balance minus the pending items live at the fetch, minus the expected one, or null when unknown.</summary>
@@ -37,6 +41,12 @@ public class BalanceSnapshotEntity
 
     /// <summary>True when the balance matched to the cent, false when it did not, null when no verdict was possible.</summary>
     public bool? Reconciled { get; set; }
+
+    /// <summary>
+    /// The signed sum of the transactions the ledger held as pending when it read this balance, as their amounts stood then, or
+    /// null for snapshots stored before this sum was recorded.
+    /// </summary>
+    public decimal? PendingAmount { get; set; }
 
     /// <summary>The sync run that took the snapshot.</summary>
     public Guid SyncRunId { get; set; }

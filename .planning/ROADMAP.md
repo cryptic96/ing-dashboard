@@ -15,7 +15,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Secure Platform & Release Pipeline** - Hardened tag-to-deploy pipeline and a locked-down LXC (app, Prometheus, Grafana) ready to hold financial data (completed 2026-09-29)
 - [x] **Phase 2: Automatic ING Sync** - Link ING once; real transactions arrive daily, deduplicated, with consent expiry never silent (completed 2026-10-07)
-- [ ] **Phase 3: Claude Reads the Ledger** - Claude (desktop, Code, claude.ai web and mobile) answers grounded spending questions over a secured MCP endpoint
+- [x] **Phase 3: Claude Reads the Ledger** - Claude (desktop, Code, claude.ai web and mobile) answers grounded spending questions over a secured MCP endpoint (completed 2026-10-09; claude.ai web, mobile and Desktop chats deferred until a household Claude subscription — see the hosted-clients todo)
 - [ ] **Phase 4: Trustworthy Categorisation** - Rules, review queue and Claude-assisted corrections with audit and undo; category drill-down and history comparison
 - [ ] **Phase 5: Budgets, Goals & Forecast** - Budgets, savings goals, recurring costs and income, true monthly cost, forecast and a single affordability answer
 - [ ] **Phase 6: Advisor Memory & Scheduled Reviews** - Shared household context for every Claude session, monthly reviews stored and shown, notification-only email
@@ -148,7 +148,7 @@ Plans:
   4. Searching a full year of transactions returns paginated results under a server-side cap and says explicitly when a result was truncated.
   5. From outside the network, only `/mcp` and its OAuth endpoints respond, and only to Anthropic's published IP ranges. OAuth discovery works from outside the network. A token issued for a different audience is rejected, and the caller's token is never forwarded to any other service.
 
-**Plans**: 6/8 plans executed
+**Plans**: 7/8 plans executed
 
 Plans:
 **Wave 1**
@@ -171,11 +171,11 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 03-07-PLAN.md — Home-network go-live (operator): release v0.3.0, host configured, routes on the home/VPN allowlist, login enrolled, Claude Code reads the real ledger
+- [x] 03-07-PLAN.md — Home-network go-live (operator): release v0.3.0, host configured, routes on the home/VPN allowlist, login enrolled, Claude Code reads the real ledger
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [ ] 03-08-PLAN.md — Public go-live (operator): temporary SSH access removed, Anthropic range enabled, exposure proven from outside, claude.ai on web, mobile and Desktop, kill switch observed
+- [x] 03-08-PLAN.md — Public go-live (operator): temporary SSH access removed, Anthropic range enabled, exposure proven from outside, claude.ai on web, mobile and Desktop, kill switch observed
 
 **UI hint**: no
 **Open decision**: Separate Authentik service vs a lightweight embedded OAuth server. Do not decide this before phase research. It depends on whether claude.ai custom connectors accept a pre-registered client (or client metadata documents) instead of dynamic client registration, and on what fits the single-LXC resource budget on a low-power host.
@@ -245,7 +245,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 |-------|----------------|--------|-----------|
 | 1. Secure Platform & Release Pipeline | 12/12 | Complete    | 2026-09-29 |
 | 2. Automatic ING Sync | 16/16 | Complete    | 2026-10-07 |
-| 3. Claude Reads the Ledger | 6/8 | In Progress|  |
+| 3. Claude Reads the Ledger | 8/8 | Complete    | 2026-10-09 |
 | 4. Trustworthy Categorisation | 0/TBD | Not started | - |
 | 5. Budgets, Goals & Forecast | 0/TBD | Not started | - |
 | 6. Advisor Memory & Scheduled Reviews | 0/TBD | Not started | - |

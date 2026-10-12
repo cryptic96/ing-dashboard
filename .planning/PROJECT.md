@@ -25,6 +25,9 @@ Claude can serve as a trustworthy financial advisor for the household — answer
 - [x] Grafana reads financial data through a SELECT-only database role on a reporting schema of views — *Validated in Phase 2: Automatic ING Sync*
 - [x] App exposes `/metrics` for Prometheus: sync health, time of last successful sync, consent state and days until expiry, error counts — *Validated in Phase 2: Automatic ING Sync*
 - [x] Alerts for failing syncs, rate limits, consent rejection, stale syncs, balance drift and consent nearing expiry, sent to the operator without financial detail — *Validated in Phase 2: Automatic ING Sync*
+- [x] MCP read tools over the ledger: overview, money totals per period/account/counterparty in Amsterdam time with full provenance, capped and paged transaction search, counterparty lookup; account numbers masked everywhere — *Validated in Phase 3: Claude Reads the Ledger*
+- [x] Embedded OAuth 2.1 authorization server for `/mcp`: pre-registered Claude clients, PKCE S256, audience-bound reference tokens, password plus one-time code (secrets encrypted at rest), sign-in from home/VPN only, operator kill switch, access metrics and alerts — *Validated in Phase 3: Claude Reads the Ledger*
+- [x] Claude Code connects from the home network or VPN and answers from the real ledger — *Validated in Phase 3: Claude Reads the Ledger*
 
 ### Active
 
@@ -45,11 +48,11 @@ Claude can serve as a trustworthy financial advisor for the household — answer
 - [ ] End-of-month forecast from recurring costs and current spending pace
 
 **Advisor (MCP)**
-- [ ] MCP server (official C# MCP SDK) with read tools: search/query transactions, aggregates by category / period / merchant, budgets, goals, recurring costs, forecast
+- [ ] MCP read tools for categories, budgets, goals, recurring costs and forecast (transaction search and period/account/counterparty aggregates shipped in Phase 3)
 - [ ] MCP write tools: recategorise transactions, create/edit rules, create/adjust budgets and goals, annotate transactions, update advisor memory, store reviews
 - [ ] Every Claude-initiated change is audit-logged (what, when, before/after, which client) and can be reverted
 - [ ] Advisor memory stored in the app: household profile (goals, fixed commitments, preferences) plus a log of past advice and decisions, so every Claude session — desktop, phone, scheduled — starts from the same context
-- [ ] Reachable from Claude Desktop / Claude Code (home network or VPN) and from claude.ai web/mobile (public `/mcp` endpoint over HTTPS with OAuth 2.1)
+- [ ] Reachable from claude.ai web, mobile and Desktop chats through the public `/mcp` endpoint (implemented and proven from outside in Phase 3; needs a household Claude subscription that allows custom connectors — the operator's paid account is a work-organisation account that disables them; tracked in the hosted-clients todo)
 - [ ] Scheduled proactive reviews (e.g. monthly): explain the past period, flag leaks, check budgets/goals — stored in the app, visible in Grafana, and readable as a Claude conversation
 - [ ] Review notification email contains no financial details — only "your review is ready" plus a link to the dashboard
 
@@ -138,10 +141,10 @@ Claude can serve as a trustworthy financial advisor for the household — answer
 | Prometheus only for operational metrics, not financial data | No backfill, scrape-time timestamps, immutable samples conflict with recategorisation | ✓ Good (Phase 2): metrics are a projection of the database with opaque labels only |
 | Grafana reads financial data via a SELECT-only role on a `reporting` schema of views; a JSON datasource against the REST API only for computed panels | Research compared views, REST/Infinity and Prometheus; views are Grafana's own recommended least-privilege pattern and keep the app the owner of its tables | ✓ Good (Phase 2): live dashboards read through grafana_reader; writes are refused by the database |
 | Bank link via Enable Banking's free personal-use tier; verify ING savings-account coverage early, Salt Edge as fallback | Official ING API not available to individuals; GoCardless Bank Account Data closed to new signups in 2025 | ✓ Good (Phase 2): restricted mode works for ING NL; two joint accounts, no savings account (outside PSD2, joint-accounts-only fallback); 180-day consent; two years of history only right after approval; no rate limit seen up to 44 calls a day |
-| OAuth authorization server: separate Authentik vs a lightweight embedded server | claude.ai client-registration requirements (DCR vs pre-registered client) decide it; single-LXC resource budget matters | — Pending (MCP/auth phase research) |
+| OAuth authorization server: separate Authentik vs a lightweight embedded server | claude.ai client-registration requirements (DCR vs pre-registered client) decide it; single-LXC resource budget matters | ✓ Good (Phase 3): embedded OpenIddict with two pre-registered public clients ("use your own OAuth client" in claude.ai), no dynamic registration, reference tokens on the Data Protection key ring |
 | Spending compared with the household's own history, not Nibud reference figures, in v1 | Nibud figures are a paid product and cannot be committed to a public repo | — Pending |
 | Review/fix web page deferred to v2 | Corrections go through Claude in v1 | — Pending |
-| Only `/mcp` exposed publicly, behind OAuth 2.1 | claude.ai web/mobile and cloud-scheduled runs need a public endpoint; everything else stays private | — Pending |
+| Only `/mcp` exposed publicly, behind OAuth 2.1 | claude.ai web/mobile and cloud-scheduled runs need a public endpoint; everything else stays private | ✓ Good (Phase 3): exact-path public router limited to Anthropic's range, sign-in home/VPN only, proven from outside; route kept closed until a hosted client exists |
 | Dashboards on home network + VPN only | Financial data sensitivity | — Pending |
 | Nibud-based category tree, refined by Claude | Enables comparison with Dutch reference budgets | — Pending |
 | Advisor memory stored in the app | All Claude sessions share one context | — Pending |
@@ -154,6 +157,9 @@ Claude can serve as a trustworthy financial advisor for the household — answer
 | Generate the Grafana dashboards from one C# definition with an EN/NL translation file | One source for both languages, drift checked in CI, no second toolchain | ✓ Good (Phase 2) |
 | Daily balance check on ING's undated expected balance, dated at fetch time, with exposed pending payments neutral and drift flagged only when it persists | ING sends no booked or dated balance; a payment pending over a weekend must not raise a false alarm | ✓ Good (Phase 2) |
 | Background call budget of 12 per account per day; syncs the operator starts carry PSU headers; the first sync after linking is never cut off by the budget | Measured in the spike: a daily sync costs 2 calls and no limit appeared up to 44; full history is only offered right after approval | ✓ Good (Phase 2) |
+| Encrypt the reverse-proxy-to-application hop with a host-generated certificate that Traefik pins | Internet-facing neighbour containers share the server network segment; source-IP filtering does not stop interception | ✓ Good (Phase 3); Grafana hop follows (todo) |
+| Second factor for sign-in: TOTP with a highest-time-step replay guard; authenticator secrets encrypted with the Data Protection key ring | A password alone guards the household's full financial history; plaintext secrets would make a database copy enough | ✓ Good (Phase 3) |
+| Run a security-focused code review before every release that adds an internet-facing surface | The Phase 3 review found two reproducible criticals (code replay, consent override) before deployment | ✓ Good (Phase 3) |
 
 ## Evolution
 
@@ -173,4 +179,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-10-07 after Phase 2 (Automatic ING Sync) completed: v0.2.3 live; both joint ING accounts sync every morning, reconcile to the cent and show in the EN/NL sync dashboards*
+*Last updated: 2026-10-09 after Phase 3 (Claude Reads the Ledger) completed: v0.3.0 live; Claude Code answers from the real ledger over home/VPN through an OAuth-protected MCP endpoint; claude.ai web/mobile deferred until a household Claude subscription*

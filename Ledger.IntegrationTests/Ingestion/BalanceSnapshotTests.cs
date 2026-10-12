@@ -378,6 +378,61 @@ public class BalanceSnapshotTests(DatabaseFixture fixture)
     }
 
     [Fact]
+    public async Task Future_dated_debits_pending_at_the_baseline_that_book_a_day_later_never_cause_drift()
+    {
+        var (scenario, account, connectionId, accountKey, host) = await LinkWithFutureDatedPendingDebitsAsync();
+        await using var disposeHost = host;
+
+        await StepThroughFutureDatedBookingsAsync(host, scenario, account, connectionId, accountKey, rewriteDayTwoExpectation: false);
+
+        var snapshots = (await ReadSnapshotsAsync(host, accountKey)).Where(snapshot => snapshot.SnapshotDate > DayOne).ToList();
+        snapshots.Should().HaveCount(4);
+        snapshots.Should().OnlyContain(snapshot => snapshot.Reconciled == true && snapshot.Drift == 0m);
+        (await ReadFlaggedReconciliationAsync(host, accountKey)).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task A_stored_expectation_that_still_contains_the_pending_items_live_at_its_fetch_never_counts_them_twice_once_they_book()
+    {
+        var (scenario, account, connectionId, accountKey, host) = await LinkWithFutureDatedPendingDebitsAsync();
+        await using var disposeHost = host;
+
+        await StepThroughFutureDatedBookingsAsync(host, scenario, account, connectionId, accountKey, rewriteDayTwoExpectation: true);
+
+        var snapshots = (await ReadSnapshotsAsync(host, accountKey)).Where(snapshot => snapshot.SnapshotDate > DayTwo).ToList();
+        snapshots.Should().HaveCount(3);
+        snapshots.Should().OnlyContain(snapshot => snapshot.Reconciled == true && snapshot.Drift == 0m);
+        (await ReadFlaggedReconciliationAsync(host, accountKey)).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task A_pending_item_inside_the_baseline_balance_that_books_in_place_at_another_amount_reconciles_on_the_booked_amount()
+    {
+        var (scenario, account) = ScenarioWithUndatedBalance(990.00m);
+        scenario.AddTransaction(account, IngestionTestSupport.Pending("entry-card-tip", -10.00m, DayOne));
+        await using var host = await StartAsync(scenario, DayOne, UndatedConfiguration);
+        var connection = await host.LinkAsync(selectFirstAccountOnly: false);
+        var accountKey = connection.Accounts[0].AccountKey;
+        await SyncAsync(host, connection.Id);
+
+        host.Clock.SetUtcNow(InstantFor(DayTwo));
+        await SyncAsync(host, connection.Id);
+
+        scenario.Replace(account, 1, IngestionTestSupport.Booked("entry-card-tip", -12.00m, DayTwo));
+        scenario.SetBalances(account, UndatedBalances(988.00m));
+        host.Clock.SetUtcNow(InstantFor(DayTwo.AddDays(1)));
+        await SyncAsync(host, connection.Id);
+        host.Clock.SetUtcNow(InstantFor(DayTwo.AddDays(2)));
+        await SyncAsync(host, connection.Id);
+
+        (await ReadTransactionStatusesAsync(host, accountKey)).Should().Equal("booked", "booked");
+        var snapshots = (await ReadSnapshotsAsync(host, accountKey)).Where(snapshot => snapshot.SnapshotDate > DayOne).ToList();
+        snapshots.Should().HaveCount(3);
+        snapshots.Should().OnlyContain(snapshot => snapshot.Reconciled == true && snapshot.Drift == 0m);
+        snapshots[2].Expected.Should().Be(988.00m);
+    }
+
+    [Fact]
     public async Task A_pending_item_inside_the_baseline_balance_that_the_bank_drops_reconciles_once_the_balance_excludes_it()
     {
         var (scenario, account) = ScenarioWithUndatedBalance(990.00m);
@@ -502,6 +557,77 @@ public class BalanceSnapshotTests(DatabaseFixture fixture)
             .ReadAsync(host.Clock.GetUtcNow(), TestContext.Current.CancellationToken);
 
         return status.Accounts.Single(account => account.AccountKey == accountKey).LatestReconciled;
+    }
+
+    /// <summary>
+    /// Links an account whose bank balance of 950.00 includes two debits of 20.00 and 30.00 that are pending at the link and dated
+    /// one day after it, as scheduled payments are, on top of a booked balance of 1000.00.
+    /// </summary>
+    private async Task<(SyntheticBankScenario Scenario, SyntheticAccount Account, Guid ConnectionId, string AccountKey, SchedulerTestHost Host)>
+        LinkWithFutureDatedPendingDebitsAsync()
+    {
+        var (scenario, account) = ScenarioWithUndatedBalance(950.00m);
+        scenario.AddTransaction(account, IngestionTestSupport.Pending("entry-scheduled-first", -20.00m, DayTwo));
+        scenario.AddTransaction(account, IngestionTestSupport.Pending("entry-scheduled-second", -30.00m, DayTwo));
+        var host = await StartAsync(scenario, DayOne, UndatedConfiguration);
+        var connection = await host.LinkAsync(selectFirstAccountOnly: false);
+        await SyncAsync(host, connection.Id);
+
+        return (scenario, account, connection.Id, connection.Accounts[0].AccountKey, host);
+    }
+
+    /// <summary>
+    /// Steps through four daily snapshots: on the second day both debits are still pending; on the third they are booked in place
+    /// under their own references with the second day as booking date, and a new card payment of 15.00 is pending; on the fourth
+    /// that payment has booked; the fifth day changes nothing. The bank balance always includes every exposed pending item. When
+    /// asked, the second day's stored expectation is rewritten to the bank amount itself, the figure a check recorded when the
+    /// expectation still included the pending items live at the fetch.
+    /// </summary>
+    private async Task StepThroughFutureDatedBookingsAsync(
+        SchedulerTestHost host,
+        SyntheticBankScenario scenario,
+        SyntheticAccount account,
+        Guid connectionId,
+        string accountKey,
+        bool rewriteDayTwoExpectation)
+    {
+        host.Clock.SetUtcNow(InstantFor(DayTwo));
+        await SyncAsync(host, connectionId);
+
+        if (rewriteDayTwoExpectation)
+        {
+            await RewriteExpectationToBankAmountAsync(host, accountKey, DayTwo);
+        }
+
+        scenario.Replace(account, 1, IngestionTestSupport.Booked("entry-scheduled-first", -20.00m, DayTwo));
+        scenario.Replace(account, 2, IngestionTestSupport.Booked("entry-scheduled-second", -30.00m, DayTwo));
+        scenario.AddTransaction(account, IngestionTestSupport.Pending("entry-card-new", -15.00m, DayTwo.AddDays(1)));
+        scenario.SetBalances(account, UndatedBalances(935.00m));
+        host.Clock.SetUtcNow(InstantFor(DayTwo.AddDays(1)));
+        await SyncAsync(host, connectionId);
+
+        scenario.Replace(account, 3, IngestionTestSupport.Booked("entry-card-new", -15.00m, DayTwo.AddDays(1)));
+        host.Clock.SetUtcNow(InstantFor(DayTwo.AddDays(2)));
+        await SyncAsync(host, connectionId);
+
+        host.Clock.SetUtcNow(InstantFor(DayTwo.AddDays(3)));
+        await SyncAsync(host, connectionId);
+    }
+
+    private async Task RewriteExpectationToBankAmountAsync(SchedulerTestHost host, string accountKey, DateOnly snapshotDate)
+    {
+        await using var connection = new NpgsqlConnection(fixture.AdminConnectionStringFor(host.DatabaseName));
+        await connection.OpenAsync(TestContext.Current.CancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE public.balance_snapshots s SET expected_amount = s.amount
+            FROM public.accounts a
+            WHERE a.id = s.account_id AND a.account_key = @accountKey AND s.snapshot_date = @snapshotDate
+            """;
+        command.Parameters.AddWithValue("accountKey", accountKey);
+        command.Parameters.AddWithValue("snapshotDate", snapshotDate);
+
+        (await command.ExecuteNonQueryAsync(TestContext.Current.CancellationToken)).Should().Be(1);
     }
 
     private static (SyntheticBankScenario Scenario, SyntheticAccount Account) ScenarioWithUndatedBalance(decimal expected)

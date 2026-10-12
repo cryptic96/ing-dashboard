@@ -35,7 +35,33 @@ public class BalanceStore(LedgerDbContext dbContext) : IBalanceStore
                 snapshot.ReferenceDate,
                 snapshot.SnapshotDate,
                 snapshot.CreatedAt,
-                snapshot.ExpectedAmount))
+                snapshot.PendingAmount))
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<BalanceSnapshotState?> GetBaselineBeforeAsync(
+        Guid accountId,
+        BalanceKind kind,
+        DateOnly localDate,
+        CancellationToken cancellationToken)
+    {
+        return await dbContext.BalanceSnapshots
+            .AsNoTracking()
+            .Where(snapshot => snapshot.AccountId == accountId
+                && snapshot.Kind == kind
+                && snapshot.SnapshotDate < localDate
+                && snapshot.ExpectedAmount == null)
+            .OrderByDescending(snapshot => snapshot.SnapshotDate)
+            .ThenByDescending(snapshot => snapshot.CreatedAt)
+            .Select(snapshot => new BalanceSnapshotState(
+                snapshot.Kind,
+                snapshot.Amount,
+                snapshot.Currency,
+                snapshot.ReferenceDate,
+                snapshot.SnapshotDate,
+                snapshot.CreatedAt,
+                snapshot.PendingAmount))
             .FirstOrDefaultAsync(cancellationToken);
     }
 
@@ -99,13 +125,14 @@ public class BalanceStore(LedgerDbContext dbContext) : IBalanceStore
         IReadOnlyList<ProviderBalance> balances,
         BalanceKind? reconciledKind,
         BalanceCheck? check,
+        decimal pendingAmount,
         DateTimeOffset createdAt,
         CancellationToken cancellationToken)
     {
         var entities = balances
             .GroupBy(balance => balance.Kind)
             .Select(group => group.First())
-            .Select(balance => ToEntity(balance, accountId, syncRunId, localDate, reconciledKind, check, createdAt))
+            .Select(balance => ToEntity(balance, accountId, syncRunId, localDate, reconciledKind, check, pendingAmount, createdAt))
             .ToList();
 
         if (entities.Count == 0)
@@ -135,6 +162,7 @@ public class BalanceStore(LedgerDbContext dbContext) : IBalanceStore
         DateOnly localDate,
         BalanceKind? reconciledKind,
         BalanceCheck? check,
+        decimal pendingAmount,
         DateTimeOffset createdAt)
     {
         var verdict = reconciledKind == balance.Kind ? check : null;
@@ -152,6 +180,7 @@ public class BalanceStore(LedgerDbContext dbContext) : IBalanceStore
             ExpectedAmount = verdict?.Expected,
             DriftAmount = verdict?.Drift,
             Reconciled = verdict?.Reconciled,
+            PendingAmount = pendingAmount,
             SyncRunId = syncRunId,
             CreatedAt = createdAt
         };

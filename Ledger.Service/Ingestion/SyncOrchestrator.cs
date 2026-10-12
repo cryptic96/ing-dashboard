@@ -173,13 +173,14 @@ public class SyncOrchestrator(
         progress.CallsMade++;
 
         var fetchedAt = timeProvider.GetUtcNow();
+        var pendingSum = await balanceStore.SumPendingAtAsync(account.AccountId, fetchedAt, cancellationToken);
         var reconcilable = BalanceReconciler.SelectReconcilable(
             balances,
             settings.ReconcileBalanceKinds,
             settings.ReconcileUndatedBalances);
         var check = reconcilable is null
             ? null
-            : await CheckBalanceAsync(account.AccountId, reconcilable, localDate, fetchedAt, cancellationToken);
+            : await CheckBalanceAsync(account.AccountId, reconcilable, localDate, fetchedAt, pendingSum, cancellationToken);
 
         await balanceStore.SaveAsync(
             account.AccountId,
@@ -188,6 +189,7 @@ public class SyncOrchestrator(
             balances,
             reconcilable?.Kind,
             check,
+            pendingSum,
             fetchedAt,
             cancellationToken);
 
@@ -199,12 +201,12 @@ public class SyncOrchestrator(
         ProviderBalance balance,
         DateOnly localDate,
         DateTimeOffset fetchedAt,
+        decimal pendingSum,
         CancellationToken cancellationToken)
     {
-        var previous = await balanceStore.GetLatestBeforeAsync(accountId, balance.Kind, localDate, cancellationToken);
-
         if (balance.ReferenceDate is { } referenceDate)
         {
+            var previous = await balanceStore.GetLatestBeforeAsync(accountId, balance.Kind, localDate, cancellationToken);
             var bookedSum = previous?.ReferenceDate is { } previousDate
                 ? await balanceStore.SumBookedAsync(accountId, previousDate, referenceDate, cancellationToken)
                 : 0m;
@@ -212,19 +214,18 @@ public class SyncOrchestrator(
             return BalanceReconciler.Check(previous, balance, bookedSum);
         }
 
-        var sinceSum = previous?.FetchedAt is { } previousFetchedAt
-            ? await balanceStore.SumBookedSinceAsync(accountId, previousFetchedAt, fetchedAt, cancellationToken)
-            : 0m;
+        var baseline = await balanceStore.GetBaselineBeforeAsync(accountId, balance.Kind, localDate, cancellationToken);
 
-        var pendingSum = previous is { ExpectedAmount: null, FetchedAt: { } baselineFetchedAt }
-            ? await balanceStore.SumPendingAtAsync(accountId, baselineFetchedAt, cancellationToken)
-            : 0m;
+        if (baseline?.FetchedAt is not { } baselineFetchedAt)
+        {
+            return BalanceReconciler.CheckUndated(baseline, balance, 0m);
+        }
 
-        var currentPendingSum = previous is null
-            ? 0m
-            : await balanceStore.SumPendingAtAsync(accountId, fetchedAt, cancellationToken);
+        var sinceSum = await balanceStore.SumBookedSinceAsync(accountId, baselineFetchedAt, fetchedAt, cancellationToken);
+        var baselinePendingSum = baseline.PendingAmount
+            ?? await balanceStore.SumPendingAtAsync(accountId, baselineFetchedAt, cancellationToken);
 
-        return BalanceReconciler.CheckUndated(previous, balance, sinceSum, pendingSum, currentPendingSum);
+        return BalanceReconciler.CheckUndated(baseline, balance, sinceSum, baselinePendingSum, pendingSum);
     }
 
     private static TransactionQuery ChooseQuery(SyncTrigger trigger, FetchWindow window, int overlapDays)

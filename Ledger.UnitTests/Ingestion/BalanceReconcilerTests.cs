@@ -167,46 +167,46 @@ public class BalanceReconcilerTests
     }
 
     [Fact]
-    public void Undated_balances_reconcile_exactly_on_the_sum_since_the_previous_fetch()
+    public void Undated_balances_reconcile_exactly_on_the_sum_booked_since_the_baseline_fetch()
     {
-        var previous = UndatedPrevious(1000.00m);
+        var baseline = UndatedBaseline(1000.00m);
 
-        var matching = BalanceReconciler.CheckUndated(previous, Undated(1150.11m), 250.10m - 99.99m);
+        var matching = BalanceReconciler.CheckUndated(baseline, Undated(1150.11m), 250.10m - 99.99m);
 
         matching.Reconciled.Should().BeTrue();
         matching.Expected.Should().Be(1150.11m);
         matching.Drift.Should().Be(0m);
 
-        var off = BalanceReconciler.CheckUndated(previous, Undated(1150.12m), 250.10m - 99.99m);
+        var off = BalanceReconciler.CheckUndated(baseline, Undated(1150.12m), 250.10m - 99.99m);
 
         off.Reconciled.Should().BeFalse();
         off.Drift.Should().Be(0.01m);
     }
 
     [Fact]
-    public void An_undated_check_without_a_comparable_previous_balance_is_unknown()
+    public void An_undated_check_without_a_comparable_baseline_is_unknown()
     {
         var unknown = new BalanceCheck(null, null, null);
 
         BalanceReconciler.CheckUndated(null, Undated(10m), 0m).Should().Be(unknown);
-        BalanceReconciler.CheckUndated(UndatedPrevious(10m) with { FetchedAt = null }, Undated(10m), 0m).Should().Be(unknown);
-        BalanceReconciler.CheckUndated(UndatedPrevious(10m) with { ReferenceDate = DayOne }, Undated(10m), 0m).Should().Be(unknown);
-        BalanceReconciler.CheckUndated(UndatedPrevious(10m) with { Currency = "USD" }, Undated(10m), 0m).Should().Be(unknown);
-        BalanceReconciler.CheckUndated(UndatedPrevious(10m), Undated(10m) with { ReferenceDate = DayTwo }, 0m).Should().Be(unknown);
+        BalanceReconciler.CheckUndated(UndatedBaseline(10m) with { FetchedAt = null }, Undated(10m), 0m).Should().Be(unknown);
+        BalanceReconciler.CheckUndated(UndatedBaseline(10m) with { ReferenceDate = DayOne }, Undated(10m), 0m).Should().Be(unknown);
+        BalanceReconciler.CheckUndated(UndatedBaseline(10m) with { Currency = "USD" }, Undated(10m), 0m).Should().Be(unknown);
+        BalanceReconciler.CheckUndated(UndatedBaseline(10m), Undated(10m) with { ReferenceDate = DayTwo }, 0m).Should().Be(unknown);
     }
 
     [Fact]
-    public void An_undated_check_carries_the_ledger_expectation_forward_so_a_gap_persists_and_a_booked_reservation_resolves()
+    public void An_undated_check_keeps_its_baseline_so_a_gap_persists_and_a_booked_reservation_resolves()
     {
-        var checkedPrevious = UndatedPrevious(950.00m) with { ExpectedAmount = 1000.00m };
+        var baseline = UndatedBaseline(1000.00m);
 
-        var persistentGap = BalanceReconciler.CheckUndated(checkedPrevious, Undated(950.00m), 0m);
+        var persistentGap = BalanceReconciler.CheckUndated(baseline, Undated(950.00m), 0m);
 
         persistentGap.Reconciled.Should().BeFalse();
         persistentGap.Expected.Should().Be(1000.00m);
         persistentGap.Drift.Should().Be(-50.00m);
 
-        var bookedReservation = BalanceReconciler.CheckUndated(checkedPrevious, Undated(950.00m), -50.00m);
+        var bookedReservation = BalanceReconciler.CheckUndated(baseline, Undated(950.00m), -50.00m);
 
         bookedReservation.Reconciled.Should().BeTrue();
         bookedReservation.Drift.Should().Be(0m);
@@ -215,15 +215,15 @@ public class BalanceReconcilerTests
     [Fact]
     public void A_baseline_that_still_contained_a_pending_item_reconciles_once_that_item_has_booked()
     {
-        var baseline = UndatedPrevious(990.00m);
+        var baseline = UndatedBaseline(990.00m);
 
-        var bookedNextDay = BalanceReconciler.CheckUndated(baseline, Undated(990.00m), -10.00m, pendingSumAtPrevious: -10.00m);
+        var bookedNextDay = BalanceReconciler.CheckUndated(baseline, Undated(990.00m), -10.00m, pendingSumAtBaseline: -10.00m);
 
         bookedNextDay.Reconciled.Should().BeTrue();
         bookedNextDay.Expected.Should().Be(990.00m);
         bookedNextDay.Drift.Should().Be(0m);
 
-        var droppedNextDay = BalanceReconciler.CheckUndated(baseline, Undated(1000.00m), 0m, pendingSumAtPrevious: -10.00m);
+        var droppedNextDay = BalanceReconciler.CheckUndated(baseline, Undated(1000.00m), 0m, pendingSumAtBaseline: -10.00m);
 
         droppedNextDay.Reconciled.Should().BeTrue();
         droppedNextDay.Expected.Should().Be(1000.00m);
@@ -232,38 +232,39 @@ public class BalanceReconcilerTests
     [Fact]
     public void A_pending_item_the_bank_exposes_never_causes_drift_however_long_it_stays_pending_and_counts_once_when_it_books()
     {
-        var baseline = UndatedPrevious(990.00m);
+        var baseline = UndatedBaseline(990.00m);
 
-        var dayTwo = BalanceReconciler.CheckUndated(baseline, Undated(990.00m), 0m, -10.00m, -10.00m);
-        var dayThree = BalanceReconciler.CheckUndated(
-            UndatedPrevious(990.00m) with { ExpectedAmount = dayTwo.Expected },
-            Undated(990.00m),
-            0m,
-            -10.00m,
-            -10.00m);
-        var dayFour = BalanceReconciler.CheckUndated(
-            UndatedPrevious(990.00m) with { ExpectedAmount = dayThree.Expected },
-            Undated(990.00m),
-            0m,
-            -10.00m,
-            -10.00m);
-        var booked = BalanceReconciler.CheckUndated(
-            UndatedPrevious(990.00m) with { ExpectedAmount = dayFour.Expected },
-            Undated(990.00m),
-            -10.00m,
-            -10.00m,
-            0m);
+        var stillPending = Enumerable.Range(0, 3)
+            .Select(_ => BalanceReconciler.CheckUndated(baseline, Undated(990.00m), 0m, -10.00m, -10.00m))
+            .ToList();
+        var booked = BalanceReconciler.CheckUndated(baseline, Undated(990.00m), -10.00m, -10.00m, 0m);
 
-        new[] { dayTwo, dayThree, dayFour, booked }.Should().OnlyContain(check => check.Reconciled == true && check.Drift == 0m);
+        stillPending.Should().OnlyContain(check => check.Reconciled == true && check.Drift == 0m && check.Expected == 1000.00m);
+        booked.Reconciled.Should().BeTrue();
+        booked.Drift.Should().Be(0m);
         booked.Expected.Should().Be(990.00m);
     }
 
     [Fact]
-    public void A_pending_item_that_appears_after_the_previous_fetch_and_is_still_pending_causes_no_drift()
+    public void Items_pending_at_the_baseline_that_book_on_a_later_day_are_counted_once_on_every_later_day()
     {
-        var previous = UndatedPrevious(1000.00m) with { ExpectedAmount = 1000.00m };
+        var baseline = UndatedBaseline(950.00m);
 
-        var check = BalanceReconciler.CheckUndated(previous, Undated(990.00m), 0m, 0m, -10.00m);
+        var stillPending = BalanceReconciler.CheckUndated(baseline, Undated(950.00m), 0m, -50.00m, -50.00m);
+        var bookedWithANewPendingItem = BalanceReconciler.CheckUndated(baseline, Undated(935.00m), -50.00m, -50.00m, -15.00m);
+        var everythingBooked = BalanceReconciler.CheckUndated(baseline, Undated(935.00m), -65.00m, -50.00m, 0m);
+
+        new[] { stillPending, bookedWithANewPendingItem, everythingBooked }
+            .Should().OnlyContain(check => check.Reconciled == true && check.Drift == 0m);
+        everythingBooked.Expected.Should().Be(935.00m);
+    }
+
+    [Fact]
+    public void A_pending_item_that_appears_after_the_baseline_fetch_and_is_still_pending_causes_no_drift()
+    {
+        var baseline = UndatedBaseline(1000.00m);
+
+        var check = BalanceReconciler.CheckUndated(baseline, Undated(990.00m), 0m, 0m, -10.00m);
 
         check.Reconciled.Should().BeTrue();
         check.Expected.Should().Be(1000.00m);
@@ -272,19 +273,14 @@ public class BalanceReconcilerTests
     [Fact]
     public void A_reservation_the_bank_deducts_without_a_pending_item_gives_one_mismatch_and_matches_after_it_books()
     {
-        var previous = UndatedPrevious(1000.00m) with { ExpectedAmount = 1000.00m };
+        var baseline = UndatedBaseline(1000.00m);
 
-        var deducted = BalanceReconciler.CheckUndated(previous, Undated(950.00m), 0m, 0m, 0m);
+        var deducted = BalanceReconciler.CheckUndated(baseline, Undated(950.00m), 0m, 0m, 0m);
 
         deducted.Reconciled.Should().BeFalse();
         deducted.Drift.Should().Be(-50.00m);
 
-        var booked = BalanceReconciler.CheckUndated(
-            UndatedPrevious(950.00m) with { ExpectedAmount = deducted.Expected },
-            Undated(950.00m),
-            -50.00m,
-            0m,
-            0m);
+        var booked = BalanceReconciler.CheckUndated(baseline, Undated(950.00m), -50.00m, 0m, 0m);
 
         booked.Reconciled.Should().BeTrue();
         booked.Drift.Should().Be(0m);
@@ -293,26 +289,15 @@ public class BalanceReconcilerTests
     [Fact]
     public void An_unexplained_cent_keeps_mismatching_with_pending_items_taken_out_on_both_sides()
     {
-        var previous = UndatedPrevious(990.00m) with { ExpectedAmount = 1000.00m };
+        var baseline = UndatedBaseline(990.00m);
 
-        var check = BalanceReconciler.CheckUndated(previous, Undated(990.01m), 0m, -10.00m, -10.00m);
+        var check = BalanceReconciler.CheckUndated(baseline, Undated(990.01m), 0m, -10.00m, -10.00m);
 
         check.Reconciled.Should().BeFalse();
         check.Drift.Should().Be(0.01m);
     }
 
-    [Fact]
-    public void The_pending_sum_at_the_previous_fetch_is_ignored_once_the_previous_snapshot_carries_its_own_expectation()
-    {
-        var checkedPrevious = UndatedPrevious(950.00m) with { ExpectedAmount = 1000.00m };
-
-        var result = BalanceReconciler.CheckUndated(checkedPrevious, Undated(950.00m), -50.00m, pendingSumAtPrevious: -999.00m);
-
-        result.Reconciled.Should().BeTrue();
-        result.Expected.Should().Be(950.00m);
-    }
-
-    private static BalanceSnapshotState UndatedPrevious(decimal amount)
+    private static BalanceSnapshotState UndatedBaseline(decimal amount)
     {
         return new BalanceSnapshotState(BalanceKind.Expected, amount, "EUR", null, DayOne, FetchedDayOne);
     }

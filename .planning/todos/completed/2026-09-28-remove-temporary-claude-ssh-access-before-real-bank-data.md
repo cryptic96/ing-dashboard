@@ -41,3 +41,13 @@ The exact accounts, paths and removal commands are in the operator's local, unco
 ## Update (2026-10-07)
 
 The operator decided on 2026-09-29 to keep the access through the bank-sync phase, with two mitigations: the key now has a passphrase and is loaded through ssh-agent (stripping the passphrase fails), and the hard removal point is before /mcp goes public. Real bank data has been on the host since 2026-10-06. Remove both logins and the key before the public MCP endpoint is exposed.
+
+## Resolution
+
+Done on 2026-10-08, as the first step of the go-live plan and before any public route existed:
+
+- Ledger host: Claude's login deleted (`userdel -r`) and its sudoers drop-in removed.
+- Reverse proxy: the two route files the login had written were handed to root, its ACLs on the configuration directories removed, then the login deleted.
+- Workstation: the key unloaded from the agent and both key files deleted.
+
+Evidence: from the workstation, SSH as Claude's login to both hosts answers "Permission denied"; the key files are gone and the agent holds no entry for them; `ledger-selfcheck --grafana-admin` on the ledger host reported 0 FAIL lines, including the sudo-capable-login check. Every later host step is the operator's; Claude verifies from the workstation only.
