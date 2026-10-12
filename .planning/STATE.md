@@ -76,12 +76,15 @@ Recent decisions affecting current work:
 
 - [major] Connect the hosted Claude clients (claude.ai web, mobile, Desktop chats) once a household subscription allows custom connectors — `.planning/todos/pending/2026-10-08-connect-hosted-claude-clients.md`
 - [minor] Encrypt the reverse-proxy-to-Grafana hop like the application hop — `.planning/todos/pending/2026-10-08-encrypt-the-proxy-to-grafana-hop.md`
-- [minor] Confirm the first real pending payments book as single rows — `.planning/todos/pending/2026-10-07-confirm-pending-payments-book-as-single-rows.md` (a balance-reconciliation alert fired 2026-10-09 06:34 Amsterdam time; investigate)
+- [minor] Confirm the first real pending payments book as single rows — `.planning/todos/pending/2026-10-07-confirm-pending-payments-book-as-single-rows.md` (confirmed on the host during the balance-drift debug: all pending items booked in place, no duplicates)
+- [minor] A doubtful pending→booked match counts the payment twice for one snapshot — `.planning/todos/pending/2026-10-12-doubtful-booking-match-counts-twice-for-one-snapshot.md` (red test parked; needs an ingestion design decision)
+- [minor] Internal version endpoint to confirm deploys from the workstation — `.planning/todos/pending/2026-10-12-internal-version-endpoint.md`
 - [minor] Confirm the first real household alert email — `.planning/todos/pending/2026-10-07-confirm-first-real-alert-email.md`
 - [minor] Confirm the first consent renewal keeps history — `.planning/todos/pending/2026-10-07-confirm-first-consent-renewal-keeps-history.md`
 
 ### Blockers/Concerns
 
+- Balance drift on one joint account (alert since 2026-10-08): root cause found and fixed in v0.3.1 (deployed 2026-10-12); awaiting the post-release host check after the next 06:30 sync (`.planning/debug/balance-drift-after-booking.md`, script in artifacts/host-checks).
 - Phase 3 follow-up: claude.ai web/mobile/Desktop chats need a household Claude subscription with custom connectors (work-organisation account disables them); public route stays closed until then (see hosted-clients todo).
 - Phase 6: The research summary favoured the app calling the Messages API for reviews. The household decided on Claude-side scheduling (PROJECT.md), and that decision stands. Phase research should only pick the Claude-side scheduler.
 
