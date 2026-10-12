@@ -16,6 +16,17 @@ public interface IBalanceStore
         CancellationToken cancellationToken);
 
     /// <summary>
+    /// Returns the account's most recent snapshot of the given kind, taken before the given local date, that has no expectation
+    /// of its own, or null when there is none. Every check of a balance without a reference date starts from this baseline:
+    /// the first snapshot of an account, and any snapshot whose check gave no verdict, start the timeline again.
+    /// </summary>
+    Task<BalanceSnapshotState?> GetBaselineBeforeAsync(
+        Guid accountId,
+        BalanceKind kind,
+        DateOnly localDate,
+        CancellationToken cancellationToken);
+
+    /// <summary>
     /// Sums the signed amounts of the account's booked transactions whose booking date is after the first date and on or before
     /// the second. Pending and dropped transactions never count. Returns zero when there are none.
     /// </summary>
@@ -41,7 +52,8 @@ public interface IBalanceStore
 
     /// <summary>
     /// Saves one snapshot row per returned balance kind for the local date. The check is attached to the row of the reconciled
-    /// kind only; every other row records an unknown result.
+    /// kind only; every other row records an unknown result. Every row records the signed sum of the pending rows live at the
+    /// fetch, so a later check that starts from the snapshot uses the amounts as they stood then.
     /// </summary>
     Task SaveAsync(
         Guid accountId,
@@ -50,6 +62,7 @@ public interface IBalanceStore
         IReadOnlyList<ProviderBalance> balances,
         BalanceKind? reconciledKind,
         BalanceCheck? check,
+        decimal pendingAmount,
         DateTimeOffset createdAt,
         CancellationToken cancellationToken);
 }

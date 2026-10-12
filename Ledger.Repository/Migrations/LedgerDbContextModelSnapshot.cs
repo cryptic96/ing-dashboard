@@ -108,6 +108,10 @@ namespace Ledger.Repository.Migrations
                         .HasColumnType("text")
                         .HasColumnName("balance_kind");
 
+                    b.Property<decimal?>("PendingAmount")
+                        .HasColumnType("numeric(19,4)")
+                        .HasColumnName("pending_amount");
+
                     b.Property<string>("ProviderType")
                         .IsRequired()
                         .HasColumnType("text")

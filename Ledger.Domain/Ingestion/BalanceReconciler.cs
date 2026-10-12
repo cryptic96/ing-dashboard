@@ -3,9 +3,10 @@ using Ledger.Domain.Banking;
 namespace Ledger.Domain.Ingestion;
 
 /// <summary>
-/// A balance the ledger stored on an earlier day, as the next day's reconciliation needs it. The fetch time is when the ledger
-/// read the balance from the bank, which is the reference point of a balance that carries no reference date of its own.
-/// The expected amount is what the ledger expected that balance to be, when it was checked.
+/// A balance the ledger stored on an earlier day, as a later reconciliation needs it. The fetch time is when the ledger read the
+/// balance from the bank, which is the reference point of a balance that carries no reference date of its own. The pending
+/// amount is the signed sum of the ledger's pending rows live at that fetch, as recorded then, or null when the snapshot was
+/// stored before that sum was recorded.
 /// </summary>
 public record BalanceSnapshotState(
     BalanceKind Kind,
@@ -14,7 +15,7 @@ public record BalanceSnapshotState(
     DateOnly? ReferenceDate,
     DateOnly SnapshotDate,
     DateTimeOffset? FetchedAt = null,
-    decimal? ExpectedAmount = null);
+    decimal? PendingAmount = null);
 
 /// <summary>
 /// The outcome of checking a bank balance against the ledger: reconciled is null when the inputs do not allow a verdict,
@@ -100,36 +101,37 @@ public static class BalanceReconciler
     /// Checks a balance that carries no reference date, comparing booked amounts with booked amounts. The bank's expected
     /// balance includes the pending items it exposes, while the ledger counts a row only once it books, so the pending items
     /// live at each fetch are taken out on both sides: the bank's booked balance is its amount minus the signed sum of the
-    /// pending rows live when the ledger fetched it, and the ledger's expectation is the previous booked figure plus the booked
-    /// transactions the ledger first saw as booked between the two fetches. The window is supplied by the caller. The previous
-    /// booked figure is the previous snapshot's own expectation when it was checked, and its bank amount minus the pending rows
-    /// live at its fetch when it was only a baseline. A pending item the bank exposes therefore never causes drift however long
-    /// it stays pending, counts exactly once when it books, and leaves no trace when it is dropped. Carrying the ledger's
-    /// expectation forward is what lets a reservation the bank deducts without exposing it as a pending item show up once and
-    /// then resolve when it books, while a transaction the ledger never received keeps showing as drift. The recorded expected
-    /// amount is the booked-only expectation and the drift is the bank's booked balance minus it. The result is unknown when
-    /// there is no previous balance, when the kinds or currencies differ, or when the previous balance was dated or has no
-    /// recorded fetch time, because then the two do not describe the same timeline. Every comparison is exact.
+    /// pending rows live when the ledger fetched it, and the ledger's expectation is the baseline's amount minus the pending rows
+    /// live at the baseline's fetch, plus every transaction the ledger first saw as booked since that fetch. The baseline is the
+    /// latest earlier snapshot that has no expectation of its own, and the caller supplies it with both sums. The expectation is
+    /// derived afresh from the baseline on every check and never read back from an earlier check, so a figure an earlier check
+    /// recorded, under whatever rules applied then, cannot shift a later verdict. A pending item the bank exposes therefore never
+    /// causes drift however long it stays pending, counts exactly once when it books, and leaves no trace when it is dropped.
+    /// Keeping the baseline instead of starting again from each day's bank amount is what lets a reservation the bank deducts
+    /// without exposing it as a pending item show up once and then resolve when it books, while a transaction the ledger never
+    /// received keeps showing as drift. The recorded expected amount is the booked-only expectation and the drift is the bank's
+    /// booked balance minus it. The result is unknown when there is no baseline, when the kinds or currencies differ, or when
+    /// the baseline was dated or has no recorded fetch time, because then the two do not describe the same timeline. Every
+    /// comparison is exact.
     /// </summary>
     public static BalanceCheck CheckUndated(
-        BalanceSnapshotState? previous,
+        BalanceSnapshotState? baseline,
         ProviderBalance current,
-        decimal bookedSumSincePrevious,
-        decimal pendingSumAtPrevious = 0m,
+        decimal bookedSumSinceBaseline,
+        decimal pendingSumAtBaseline = 0m,
         decimal pendingSumAtCurrent = 0m)
     {
-        if (previous is null
-            || previous.Kind != current.Kind
-            || !string.Equals(previous.Currency, current.Currency, StringComparison.Ordinal)
-            || previous.ReferenceDate is not null
-            || previous.FetchedAt is null
+        if (baseline is null
+            || baseline.Kind != current.Kind
+            || !string.Equals(baseline.Currency, current.Currency, StringComparison.Ordinal)
+            || baseline.ReferenceDate is not null
+            || baseline.FetchedAt is null
             || current.ReferenceDate is not null)
         {
             return new BalanceCheck(null, null, null);
         }
 
-        var start = previous.ExpectedAmount ?? previous.Amount - pendingSumAtPrevious;
-        var expected = start + bookedSumSincePrevious;
+        var expected = baseline.Amount - pendingSumAtBaseline + bookedSumSinceBaseline;
         var drift = current.Amount - pendingSumAtCurrent - expected;
 
         return new BalanceCheck(drift == 0m, expected, drift);
