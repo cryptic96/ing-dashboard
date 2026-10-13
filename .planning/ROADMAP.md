@@ -195,7 +195,111 @@ Plans:
   4. Every change made through MCP or REST appears in an audit log (what changed, before and after, when, which client) and can be reverted. Bank-sourced text reaches Claude marked as untrusted, and a test transaction whose description contains an instruction triggers no write. Bulk writes require an explicit confirmation step, and writes are rate-limited.
   5. Both partners can drill into any category and period in Grafana and see trends over time. Both Grafana and Claude compare spending month over month and year over year against the household's own history.
 
-**Plans**: TBD
+**Plans**: 0/43 plans executed
+
+Plans:
+**Wave 1**
+
+- [ ] 04-01-PLAN.md — Tracer: category tree with starter seed and assignments with provenance, shown by search_transactions and reporting.transactions
+- [ ] 04-02-PLAN.md — Real savings-transfer shape recorded as yes/no answers (operator), and the synthetic categorisation scenario every categorisation test uses
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 04-03-PLAN.md — Audited write pipeline: audit operations and items, append-only grants, the store with per-object handlers, category store
+- [ ] 04-04-PLAN.md — CategoryTree and CategoryKeys: lookup, ancestors, descendants at any depth, removal check, immutable keys (test first)
+- [ ] 04-05-PLAN.md — RuleMatcher: explicit criteria, most specific wins, conflicts and intermediaries to the queue, no regular expressions (test first)
+- [ ] 04-06-PLAN.md — UntrustedText and InstructionTextDetector: cleaning, masking, caps and instruction-like text in English and Dutch (test first)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 04-07-PLAN.md — Claude recategorises one transaction through change_ledger as one audited operation naming the client; layering test
+- [ ] 04-08-PLAN.md — ComparisonCalculator: three baselines, like for like, netting, roll-up and reliability (test first)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 04-09-PLAN.md — ledger.write scope: read-only connections neither see nor call write tools; consent page names write access
+- [ ] 04-10-PLAN.md — Synced-account transfers assigned to the Transfers band at every sync, failures counted and never fatal
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [ ] 04-11-PLAN.md — recent_changes read tool and the shared expected-tools list
+- [ ] 04-12-PLAN.md — Totals exclude transfers by category kind; the upgrade backfills existing transfers so every total stays the same
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [ ] 04-13-PLAN.md — Whole-operation undo through change_ledger, skipping anything changed since
+- [ ] 04-14-PLAN.md — Change sets stored server-side, fingerprinted and redeemable once
+- [ ] 04-15-PLAN.md — Bank text wrapped as untrusted_bank_text in every read tool; instructions and descriptions say it is data
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
+- [ ] 04-16-PLAN.md — Multi-transaction changes confirmed in the client's dialog through apply_changes
+- [ ] 04-17-PLAN.md — Rule, own-account and intermediary tables; stored rules categorise new transactions at every sync
+- [ ] 04-18-PLAN.md — money_totals and search_transactions filter by category at any depth and by uncategorised
+
+**Wave 8** *(blocked on Wave 7 completion)*
+
+- [ ] 04-19-PLAN.md — Single-use token path for clients without a dialog; forgery, replay, expiry and race refused; multi-item undo confirmed
+- [ ] 04-20-PLAN.md — Instruction-like bank text flagged at sync and counted; reading it through any tool writes nothing
+- [ ] 04-21-PLAN.md — compare_spending: three like-for-like baselines with reliability, computed on the server
+
+**Wave 9** *(blocked on Wave 8 completion)*
+
+- [ ] 04-22-PLAN.md — Write limits per connection and per confirmed step, refusal and confirmation metrics, operator write docs
+
+**Wave 10** *(blocked on Wave 9 completion)*
+
+- [ ] 04-23-PLAN.md — Household notes through change_ledger: audited, undoable, cleaned and refused when instruction-like
+- [ ] 04-24-PLAN.md — category_overview: the whole tree with both names and counts
+
+**Wave 11** *(blocked on Wave 10 completion)*
+
+- [ ] 04-25-PLAN.md — Search rows show the suspicious flag and the household note apart from bank text
+- [ ] 04-26-PLAN.md — Claude adds and renames categories with both names, audited and undoable
+
+**Wave 12** *(blocked on Wave 11 completion)*
+
+- [ ] 04-27-PLAN.md — Own accounts proposed by Claude and confirmed by the user; account numbers stay on the server
+- [ ] 04-28-PLAN.md — review_queue lists what waits and why
+
+**Wave 13** *(blocked on Wave 12 completion)*
+
+- [ ] 04-29-PLAN.md — money_totals grouped by category with Uncategorised; instructions and docs for a ledger with categories
+- [ ] 04-30-PLAN.md — Intermediaries proposed by Claude and confirmed by the user; overview lists them as untrusted names
+
+**Wave 14** *(blocked on Wave 13 completion)*
+
+- [ ] 04-31-PLAN.md — Claude's proposals stored with reason and confidence, never counted until confirmed
+
+**Wave 15** *(blocked on Wave 14 completion)*
+
+- [ ] 04-32-PLAN.md — Proposals confirmed in batches or rejected; backlog by counterparty; reading the queue writes nothing
+- [ ] 04-33-PLAN.md — Reporting views for the Spending dashboard: category roll-ups, review status, recent changes
+
+**Wave 16** *(blocked on Wave 15 completion)*
+
+- [ ] 04-34-PLAN.md — Corrections become narrow rules; history previewed exactly and applied only after confirmation
+- [ ] 04-35-PLAN.md — Spending dashboard (EN/NL) drill-down core: category selector, breadcrumb, children at any depth
+- [ ] 04-36-PLAN.md — Review-queue and proposal gauges; write-limit, suspicious-text and categorisation-failure alerts
+
+**Wave 17** *(blocked on Wave 16 completion)*
+
+- [ ] 04-37-PLAN.md — Remove or merge a category with everything beneath it, confirmed and undoable; overview lists rules
+- [ ] 04-38-PLAN.md — Children bar chart with Uncategorised, monthly trend with last year, transactions beneath
+- [ ] 04-39-PLAN.md — Operator REST list and undo of changes with a dry run
+
+**Wave 18** *(blocked on Wave 17 completion)*
+
+- [ ] 04-40-PLAN.md — Rule guards, transfer-kind rules as structural writes, rule removal, rounds, explicit-parameter schema test
+- [ ] 04-41-PLAN.md — Spending dashboard comparison table proven equal to compare_spending
+
+**Wave 19** *(blocked on Wave 18 completion)*
+
+- [ ] 04-42-PLAN.md — Top row, status row and recent changes on the Spending dashboard; household guide
+
+**Wave 20** *(blocked on Wave 19 completion)*
+
+- [ ] 04-43-PLAN.md — Release candidate and pull request; operator release, write-access re-approval and human-only checks
 **UI hint**: yes
 **Notes**: This phase sets up the audited write-tool pattern (a domain service writes the audit entry; the tool never writes directly), and every later write tool reuses it. Transaction annotations naturally fit here.
 

@@ -822,31 +822,42 @@ All claims tagged `[ASSUMED]` in this research. The planner and discuss-phase sh
 | A12 | Grafana month figures count booked transactions only, with pending beside | Grafana | Medium: the user may expect the current month to include pending (Open Question 5) |
 | A13 | The real shape of savings-account transfers is unknown to this research | Open Question 7 | Medium: the design handles both an IBAN and description text, so the risk is rule content, not structure |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Add a `ledger.write` OAuth scope?**
+1. **Add a `ledger.write` OAuth scope?** RESOLVED (adopted recommendation, recorded as a flagged assumption in plan 04-09).
    - What we know: the policy requires only `ledger.read`; the SDK can hide tools per policy; the consent page grants a fixed scope list.
    - What is unclear: whether the household wants a second consent for write access.
    - Recommendation: add it. A read-only token cannot write, and the existing Claude Code grant stays read-only until re-approved. Cost: one consent-page and seeder change plus a re-approval.
-2. **What source does a confirmed Claude proposal carry?**
+   - Resolution: plan 04-09 adds `ledger.write`, the `mcp-write` policy and the consent sentence; the operator re-approves Claude Code at go-live (plan 04-43, with the remove-and-re-add fallback).
+2. **What source does a confirmed Claude proposal carry?** RESOLVED (adopted recommendation, recorded as a flagged assumption in plans 04-01 and 04-32).
    - The decision text says an assignment the user confirmed is user-sourced and certain; the requirement lists Claude as a source.
    - Recommendation: `user` with `proposal_id` retained, and `claude` kept in the CHECK for future use. Confirm that is the intended reading.
-3. **Does the validated access-token principal expose the client id?**
+   - Resolution: this follows D-09's own wording ("an assignment the user made or confirmed is recorded as user-sourced and certain"); `via_proposal` keeps "Claude proposed, the user confirmed" visible, and `claude` stays an allowed source value.
+3. **Does the validated access-token principal expose the client id?** RESOLVED (adopted plan, recorded as a flagged assumption in plan 04-07).
    - Plan: an integration test connects with each registered client id and asserts the audit row carries it. Fallback: authorization id to application lookup.
-4. **A rule application larger than the per-step cap.**
+   - Resolution: plan 04-07 reads the client id from `GetPresenters()` with the authorization-to-application lookup as fallback, and its Audit tests assert both registered client ids.
+4. **A rule application larger than the per-step cap.** RESOLVED (adopted recommendation, recorded as a flagged assumption in plan 04-40).
    - The decisions say one confirmed bulk operation and at most about 500 transactions per confirmed step.
    - Recommendation: the preview states the number of rounds; each round is a separate audited operation sharing the rule id. Confirm this reading, or raise the cap for rule applications.
-5. **Do Grafana month figures include pending transactions?**
+   - Resolution: plan 04-40 previews round 1 of N, each confirmed round is its own audited operation with the same rule id, and the cap stays 500 (D-22).
+5. **Do Grafana month figures include pending transactions?** RESOLVED (adopted recommendation, recorded as a flagged assumption in plans 04-08, 04-21, 04-33 and 04-38).
    - Recommendation: booked only, pending shown as its own figure, so the dashboard and Claude's totals agree.
-6. **Should creating a rule that targets an income or transfer category need confirmation?**
+   - Resolution: comparisons and dashboard figures count booked transactions; pending ones are shown beside the current window and listed with their status in the transactions table.
+6. **Should creating a rule that targets an income or transfer category need confirmation?** RESOLVED (decided within the plans' existing assumption, recorded as a flagged assumption in plan 04-40).
    - The decisions gate applying a rule to history, not creating one. Creating such a rule changes how future transactions are counted. Residual risk of an injected rule; mitigations are audit, undo, rate limit and the recent-changes panel. The user can accept this or tighten it.
-7. **Real shape of the savings-account transfers.**
+   - Resolution: a rule that targets a transfer-kind category is a confirmed structural write (it hides money from spending and income, like marking an own account); every other new rule, income-kind included, affects only future syncs and stays unconfirmed but audited, rate-limited, undoable and visible in recent_changes and on the dashboard. The residual risk is accepted in the threat models of plans 04-34 and 04-40.
+7. **Real shape of the savings-account transfers.** RESOLVED (captured by the operator checkpoint in plan 04-02, Task 1).
    - The context says to confirm against the live ledger. This research could not: the operator revoked Claude's access to the ledger host and no MCP session was available. The execution plan needs an operator-assisted step (search the live ledger through MCP, note only the shape, never copy real text into fixtures) before the savings rule is designed.
-8. **What does "N suspicious texts" count on the dashboard?**
+   - Resolution: plan 04-02 Task 1 is a blocking operator checkpoint in which the operator answers eight yes/no questions in their own session; only the answers are recorded. Stop condition: if neither own-account marking (plan 04-27) nor a description-words rule into Savings (plan 04-40) fits the recorded shape, execution stops and reports to the operator instead of inventing a new matcher.
+8. **What does "N suspicious texts" count on the dashboard?** RESOLVED (adopted recommendation, recorded as a flagged assumption in plan 04-33).
    - A count that never falls becomes noise. Recommendation: rows flagged in the last 90 days, with an optional `acknowledged_at` later.
-9. **REST undo confirmation.**
+   - Resolution: `reporting.review_status.suspicious_90d` counts rows flagged in the last 90 days; no acknowledgement column is built in this phase.
+9. **REST undo confirmation.** RESOLVED (adopted recommendation, recorded as a flagged assumption in plan 04-39).
    - The operator calls it with an API key, so the human gate is the operator's explicit call. Recommendation: `POST /api/v1/changes/{id}/undo` accepts `dryRun` to show the revert and skip counts first; no token. It still counts against the write guard and is audited with the API key name as client.
-10. **Tool-count budget.** Six new tools leaves about five for later work. If that proves tight, `recent_changes` can fold into `category_overview`.
+   - Resolution: plan 04-39 implements exactly this.
+10. **Tool-count budget.** RESOLVED (adopted recommendation, recorded as a flagged assumption in plan 04-11).
+    - Six new tools leaves about five for later work. If that proves tight, `recent_changes` can fold into `category_overview`.
+    - Resolution: the phase adds six tools (change_ledger, apply_changes, recent_changes, category_overview, review_queue, compare_spending); recent_changes stays its own tool.
 
 ## Environment Availability
 

@@ -1,0 +1,1 @@
+No external API integration: this phase extends the app's own MCP server, REST API, database and generated Grafana dashboards with the already-pinned MCP C# SDK and adds no package and no outbound call (the bank provider is untouched and no model API is ever called).
