@@ -1,0 +1,18 @@
+# GSD Debug Knowledge Base
+
+Resolved debug sessions. Used by `gsd-debugger` to surface known-pattern hypotheses at the start of new investigations.
+
+---
+
+## balance-drift-after-booking — stored derived value carried across a release that changed its meaning (balance never reconciles again)
+- **Date:** 2026-10-13
+- **Pattern:** carrying a stored derived value forward across a release that changed its meaning, without migrating or re-anchoring the stored rows. Rows written by the old release keep the old meaning; the new code reads them back as if they had the new meaning, and because the value is carried, the error persists forever instead of healing.
+- **Error patterns:** Account balance does not reconcile, ledger_balance_reconciliation_drift, reconciled false, constant drift, drift equals minus pending items, pending to booked, expected_amount, carried expectation, undated balance check, XPCD, one account drifts other clean, release boundary, mixed-version history
+- **Root cause(s):** the undated balance check carried the previous snapshot's stored expected_amount forward; a release redefined that column (pending items excluded instead of included) without migrating stored rows, so the first new-rules check carried an old-rules expectation that still contained items pending at that time and added them again when they booked: drift = minus the pending sum, constant; an account with nothing pending at its last old-rules check stayed clean (AND-gate: semantic change deployed between two checks; items pending at the last old-rules check that booked under the new rules)
+- **Fix:** derive the expectation on every check from the baseline snapshot (amount minus pending at its fetch plus booked since), never read a stored expectation back; record the pending sum live at each fetch (pending_amount) for future baselines. Healed the host at the first snapshot after the release with no host-side write.
+- **Files changed:** Ledger.Domain/Ingestion/BalanceReconciler.cs, Ledger.Domain/Ingestion/IBalanceStore.cs, Ledger.Repository/Entities/BalanceSnapshotEntity.cs, Ledger.Repository/LedgerDbContext.cs, Ledger.Repository/Migrations/20261012200324_RecordPendingSumOnBalanceSnapshots.cs, Ledger.Repository/Stores/BalanceStore.cs, Ledger.Service/Ingestion/SyncOrchestrator.cs, Ledger.UnitTests/Ingestion/BalanceReconcilerTests.cs, Ledger.IntegrationTests/Ingestion/BalanceSnapshotTests.cs
+- **Why not caught:** none (no gate existed for this class) — every test drove one code version from a fresh link, so nothing covered a stored value written by one release and read by the next; review of the redefining change checked the formula, not previously stored rows
+- **Recurrence guard:** expectation re-derived from the baseline on every check (no stored expectation is read back); pending_amount recorded per snapshot; regression test Ledger.IntegrationTests/Ingestion/BalanceSnapshotTests.cs:A_stored_expectation_that_still_contains_the_pending_items_live_at_its_fetch_never_counts_them_twice_once_they_book (plus Future_dated_debits_pending_at_the_baseline_that_book_a_day_later_never_cause_drift and A_pending_item_inside_the_baseline_balance_that_books_in_place_at_another_amount_reconciles_on_the_booked_amount); this KB pattern — when a change redefines a persisted derived value, check for code that reads stored rows back and migrate or re-anchor them
+- **Related, not fixed here:** a doubtful pending-to-booked match double counts the payment for one snapshot (separate mechanism, self-heals); tracked in .planning/todos/pending/2026-10-12-doubtful-booking-match-counts-twice-for-one-snapshot.md
+---
+
